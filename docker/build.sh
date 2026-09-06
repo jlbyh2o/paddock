@@ -23,9 +23,18 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$PUSH" = 1 ] && [ -z "${DOCKER_NAMESPACE:-}" ]; then
-  echo "DOCKER_NAMESPACE must be set to push (your Docker Hub account name)." >&2
-  exit 2
+# Both checks run before the build, not before the push: a missing login should cost a
+# second, not a full rebuild and a multi-minute scan.
+if [ "$PUSH" = 1 ]; then
+  if [ -z "${DOCKER_NAMESPACE:-}" ]; then
+    echo "DOCKER_NAMESPACE must be set to push (your Docker Hub account name)." >&2
+    exit 2
+  fi
+  if ! docker system info 2>/dev/null | grep -q "^ Username:"; then
+    echo "Not logged in to Docker Hub. Run: docker login -u ${DOCKER_NAMESPACE}" >&2
+    echo "Use a Personal Access Token as the password, not your account password." >&2
+    exit 2
+  fi
 fi
 
 STAGING="${IMAGE_NAME}:building"
@@ -78,6 +87,7 @@ MSG
 fi
 
 REMOTE="${DOCKER_NAMESPACE}/${IMAGE_NAME}"
+
 echo "==> pushing $REMOTE:$TAG and :latest"
 docker tag "$LOCAL" "${REMOTE}:${TAG}"
 docker tag "$LOCAL" "${REMOTE}:latest"
@@ -89,9 +99,9 @@ cat <<MSG
 Pushed ${REMOTE}:${TAG}
 
 On Vast, rent a host with driver r580+ (CUDA 13), then:
-  image        ${REMOTE}:${TAG}
-  launch mode  SSH
-  on-start     bash /opt/ft/onstart.sh
-  ports        none - ft serve has NO auth; reach it with ssh -L 1919:127.0.0.1:1919
-  env          HF_TOKEN=<token>   (only for gated or private repos)
+  image          ${REMOTE}:${TAG}
+  launch mode    Entrypoint   (NOT ssh - that skips the portal and this image's setup)
+  PORTAL_CONFIG  append  localhost:18919:1919:/:FreeToken API
+  ports          do NOT map 1919 - ft serve has no auth; Caddy publishes it on 18919
+  env            HF_TOKEN=<token>   (only for gated or private repos)
 MSG
