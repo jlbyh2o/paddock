@@ -109,10 +109,16 @@ fn job_rows<'a>(app: &App, idx: usize, is_sel: bool, width: usize) -> Vec<Line<'
 
     let bar_w = width.saturating_sub(38).clamp(8, 40);
     let detail = match (&job.status, job.progress.ratio()) {
-        (JobStatus::Failed(why), _) => Line::from(vec![
-            Span::raw("           "),
-            Span::styled(truncate(why, width.saturating_sub(12)), Style::default().fg(t.bad)),
-        ]),
+        (JobStatus::Failed(why), _) => {
+            let reason = job.failure_reason().unwrap_or_else(|| why.clone());
+            Line::from(vec![
+                Span::raw("           "),
+                Span::styled(
+                    truncate(&reason, width.saturating_sub(12)),
+                    Style::default().fg(t.bad),
+                ),
+            ])
+        }
         (_, Some(r)) => Line::from(vec![
             Span::raw("           "),
             Span::styled("▕", t.muted()),
@@ -140,10 +146,24 @@ fn job_rows<'a>(app: &App, idx: usize, is_sel: bool, width: usize) -> Vec<Line<'
 fn progress_detail(job: &crate::ft::Job) -> String {
     let p = &job.progress;
     if p.bytes {
+        // The converter reports no total for its dense phase, so there is no bar and no
+        // ETA. A live rate is what distinguishes "working" from "wedged", and its
+        // absence is why a running conversion can read as frozen.
+        let speed = job.rate.get();
+        let moving = job.is_running() && speed > 1.0;
         if p.total > 0 {
-            format!("{} / {}  ({})", bytes(p.done), bytes(p.total), p.phase)
+            let base = format!("{} / {}  ({})", bytes(p.done), bytes(p.total), p.phase);
+            if moving {
+                format!("{base}  {}", rate(speed))
+            } else {
+                base
+            }
         } else if p.done > 0 {
-            format!("{} written  ({})", bytes(p.done), p.phase)
+            if moving {
+                format!("{} written  {}  ({})", bytes(p.done), rate(speed), p.phase)
+            } else {
+                format!("{} written  ({})", bytes(p.done), p.phase)
+            }
         } else {
             p.phase.clone()
         }

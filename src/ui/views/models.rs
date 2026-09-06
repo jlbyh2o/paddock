@@ -88,6 +88,7 @@ fn list(f: &mut Frame, app: &mut App, area: Rect) {
             Format::Ftw => t.good,
             Format::Hf => t.accent,
             Format::Gguf => t.warn,
+            Format::PartialFtw => t.bad,
         };
         let marker = if m.converted_to.is_some() { "→" } else { " " };
         lines.push(Line::from(vec![
@@ -221,6 +222,7 @@ fn format_description(m: &Model) -> String {
         Format::Ftw => "FTW — FreeToken fast-load".into(),
         Format::Hf => "Hugging Face safetensors".into(),
         Format::Gguf => "GGUF".into(),
+        Format::PartialFtw => "incomplete FTW conversion".into(),
     }
 }
 
@@ -236,6 +238,16 @@ fn guidance<'a>(app: &App, m: &Model, w: usize) -> Vec<Line<'a>> {
             Style::default().fg(color),
         )));
     };
+
+    if m.is_partial() {
+        note(
+            "A conversion died before writing its index, so these shards are unusable. \
+             Delete it with D to reclaim the space and free the name for a retry."
+                .into(),
+            t.bad,
+        );
+        return out;
+    }
 
     if m.converted_to.is_some() {
         note("An FTW build already exists; serving that one loads faster.".into(), t.good);

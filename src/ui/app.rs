@@ -863,7 +863,7 @@ impl App {
         match e {
             JobEvent::Progress(id, p) => {
                 if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
-                    j.progress = p;
+                    j.observe(p);
                 }
             }
             JobEvent::Line => {}
@@ -893,7 +893,9 @@ impl App {
                         }
                     }
                     JobStatus::Failed(why) => {
-                        self.error(format!("{} failed ({why}): {title}", kind.label()))
+                        // Prefer what the process actually said over its exit code.
+                        let reason = j.failure_reason().unwrap_or(why);
+                        self.error(format!("{} failed: {title} — {reason}", kind.label()))
                     }
                     JobStatus::Canceled => self.warn(format!("{} canceled: {title}", kind.label())),
                     JobStatus::Running => {}

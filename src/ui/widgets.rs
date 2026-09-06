@@ -315,6 +315,8 @@ pub enum ConfirmAction {
     /// Restore a model's own template.
     RevertTemplate(std::path::PathBuf),
     DeleteTemplate(String),
+    /// Delete a failed conversion's leftovers, then convert `source` again.
+    ReconvertModel(std::path::PathBuf),
 }
 
 impl Confirm {

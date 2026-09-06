@@ -20,6 +20,10 @@ pub enum Format {
     Ftw,
     /// A GGUF file or a directory containing one (Gemma-4 loads these natively).
     Gguf,
+    /// Shard files but no index: a conversion that died partway. Useless to serve and
+    /// potentially enormous, so it is listed rather than hidden — an unlisted directory
+    /// is one nothing can delete.
+    PartialFtw,
 }
 
 impl Format {
@@ -28,6 +32,7 @@ impl Format {
             Format::Hf => "HF",
             Format::Ftw => "FTW",
             Format::Gguf => "GGUF",
+            Format::PartialFtw => "PART",
         }
     }
 }
@@ -61,6 +66,9 @@ pub struct Model {
 impl Model {
     /// Short one-line description used in list rows.
     pub fn summary(&self) -> String {
+        if self.is_partial() {
+            return "incomplete conversion — safe to delete".into();
+        }
         let mut parts: Vec<String> = Vec::new();
         if let Some(a) = &self.arch {
             parts.push(a.clone());
@@ -83,6 +91,11 @@ impl Model {
     /// Whether converting this checkpoint to FTW is a sensible next action.
     pub fn convertible(&self) -> bool {
         self.format == Format::Hf
+    }
+
+    /// True when this is the wreckage of a failed conversion.
+    pub fn is_partial(&self) -> bool {
+        self.format == Format::PartialFtw
     }
 }
 
@@ -182,6 +195,26 @@ pub fn inspect(dir: &Path) -> Option<Model> {
                 .and_then(|i| i.get("fingerprint"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            converted_to: None,
+            modified,
+        });
+    }
+
+    // Shards with no index means `ft checkpoint` never reached its finalize step.
+    if has_any_extension(dir, &["ftw"]) {
+        return Some(Model {
+            name,
+            path: dir.to_path_buf(),
+            format: Format::PartialFtw,
+            size_bytes: weight_bytes(dir, &["ftw"]),
+            arch: None,
+            model_type: None,
+            is_moe: false,
+            num_experts: None,
+            num_layers: None,
+            quant: None,
+            max_position: None,
+            ftw_fingerprint: None,
             converted_to: None,
             modified,
         });
@@ -467,6 +500,52 @@ mod tests {
         let models = scan(std::slice::from_ref(&dir));
         let hf = models.iter().find(|m| m.format == Format::Hf).unwrap();
         assert_eq!(hf.converted_to.as_deref(), Some(ftw.as_path()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_conversion_that_died_before_its_index_is_listed_as_partial() {
+        let dir = tmpdir("partial");
+        let out = dir.join("Model-ftw");
+        std::fs::create_dir_all(&out).unwrap();
+        // Shards written, but `ft checkpoint` never reached its finalize step.
+        std::fs::write(out.join("freetoken-00000.ftw"), vec![0u8; 8192]).unwrap();
+
+        let m = inspect(&out).expect("leftovers must be visible, or nothing can delete them");
+        assert_eq!(m.format, Format::PartialFtw);
+        assert!(m.is_partial());
+        assert!(!m.convertible());
+        assert_eq!(m.size_bytes, 8192);
+        assert!(m.summary().contains("safe to delete"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_partial_is_not_mistaken_for_a_models_completed_conversion() {
+        let dir = tmpdir("partiallink");
+        let src = dir.join("Model");
+        let out = dir.join("Model-ftw");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(src.join("config.json"), r#"{"model_type":"llama"}"#).unwrap();
+        std::fs::write(src.join("model.safetensors"), b"x").unwrap();
+        std::fs::write(out.join("freetoken-00000.ftw"), b"x").unwrap();
+
+        let models = scan(std::slice::from_ref(&dir));
+        let hf = models.iter().find(|m| m.format == Format::Hf).unwrap();
+        assert_eq!(hf.converted_to, None, "a half-written build is not a conversion");
+        assert!(models.iter().any(|m| m.is_partial()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_finished_conversion_still_wins_over_the_partial_check() {
+        let dir = tmpdir("complete");
+        let out = dir.join("Model-ftw");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("freetoken-00000.ftw"), b"x").unwrap();
+        std::fs::write(out.join(crate::ft::proc::FTW_INDEX), r#"{"quant_format":"bf16"}"#).unwrap();
+        assert_eq!(inspect(&out).unwrap().format, Format::Ftw);
         std::fs::remove_dir_all(&dir).ok();
     }
 

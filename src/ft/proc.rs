@@ -256,8 +256,6 @@ impl Engine {
         let display = shell_words::join(
             std::iter::once(ft.display_program().as_str()).chain(argv.iter().map(String::as_str)),
         );
-        self.log.push(format!("[ft-man] $ {display}"), false);
-        self.log.push(format!("[ft-man] pid {pid}, logging to {}", log_path.display()), false);
 
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -265,6 +263,16 @@ impl Engine {
             .open(&log_path)
             .ok()
             .map(|f| Arc::new(Mutex::new(f)));
+
+        // The header goes into the file too. A log that does not say which command wrote
+        // it is far less useful hours later, when the question is which model failed.
+        for line in [
+            format!("[ft-man] $ {display}"),
+            format!("[ft-man] pid {pid}, logging to {}", log_path.display()),
+        ] {
+            write_line(&file, &line);
+            self.log.push(line, false);
+        }
 
         if let Some(out) = child.stdout.take() {
             spawn_reader(out, self.log.clone(), file.clone(), false);
@@ -421,6 +429,17 @@ fn next_stop_signal(stage: u8, elapsed: Duration) -> Option<(u8, i32, String)> {
     }
 }
 
+/// Append one line to an open log file. Failures are ignored: a log that cannot be
+/// written must not take the run down with it.
+fn write_line(file: &Option<Arc<Mutex<std::fs::File>>>, line: &str) {
+    use std::io::Write;
+    if let Some(f) = file {
+        if let Ok(mut f) = f.lock() {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 fn spawn_reader<R>(reader: R, ring: LogRing, file: Option<Arc<Mutex<std::fs::File>>>, err: bool)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -428,12 +447,7 @@ where
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(f) = &file {
-                use std::io::Write;
-                if let Ok(mut f) = f.lock() {
-                    let _ = writeln!(f, "{line}");
-                }
-            }
+            write_line(&file, &line);
             ring.push(line, err);
         }
     });
@@ -555,6 +569,9 @@ pub struct Job {
     pub finished_at: Option<chrono::DateTime<chrono::Local>>,
     /// Where a bench run wrote its profile, once it says so.
     pub output_path: Option<PathBuf>,
+    /// Smoothed write rate, for phases that report no total.
+    pub rate: crate::util::Ema,
+    last_sample: Option<(std::time::Instant, u64)>,
     pid: Option<u32>,
 }
 
@@ -566,6 +583,50 @@ impl Job {
 
     pub fn is_running(&self) -> bool {
         self.status == JobStatus::Running
+    }
+
+    /// Fold a progress report in, updating the smoothed write rate.
+    pub fn observe(&mut self, progress: JobProgress) {
+        if progress.bytes {
+            let now = std::time::Instant::now();
+            match self.last_sample {
+                Some((then, bytes)) => {
+                    let dt = now.duration_since(then).as_secs_f64();
+                    if dt >= 0.5 {
+                        let delta = progress.done.saturating_sub(bytes) as f64;
+                        self.rate.push(delta / dt);
+                        self.last_sample = Some((now, progress.done));
+                    }
+                }
+                None => self.last_sample = Some((now, progress.done)),
+            }
+        }
+        self.progress = progress;
+    }
+
+    /// The most informative line the job printed before failing.
+    ///
+    /// `describe_exit` can only say "with status 1", which is true and useless. A Python
+    /// traceback's last line is the thing worth reading, and leaving it buried in the
+    /// output pane made a perfectly diagnosable failure look like a mystery.
+    pub fn failure_reason(&self) -> Option<String> {
+        let interesting = |l: &str| {
+            !l.is_empty()
+                && !l.starts_with("[ft-man]")
+                && !l.starts_with("File \"")
+                && !l.starts_with('^')
+                && !l.starts_with('~')
+                && !l.starts_with("Traceback")
+                && !l.starts_with("During handling")
+                && !l.starts_with("The above exception")
+        };
+        self.log
+            .snapshot()
+            .iter()
+            .rev()
+            .map(|l| l.text.trim().to_string())
+            .find(|l| interesting(l))
+            .map(|l| l.chars().take(300).collect())
     }
 
     pub fn cancel(&mut self) {
@@ -598,6 +659,8 @@ impl Job {
             started_at: chrono::Local::now(),
             finished_at: None,
             output_path: None,
+            rate: crate::util::Ema::new(0.3),
+            last_sample: None,
             pid: None,
         }
     }
@@ -663,7 +726,6 @@ pub fn spawn_job(
         std::iter::once(ft.display_program().as_str()).chain(argv.iter().map(String::as_str)),
     );
     let log = LogRing::new(log_capacity);
-    log.push(format!("[ft-man] $ {display}"), false);
 
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -672,6 +734,10 @@ pub fn spawn_job(
         .ok()
         .map(|f| Arc::new(Mutex::new(f)));
 
+    let header = format!("[ft-man] $ {display}");
+    write_line(&file, &header);
+    log.push(header, false);
+
     if let Some(out) = child.stdout.take() {
         spawn_job_reader(id, kind, out, log.clone(), file.clone(), false, events.clone());
     }
@@ -679,6 +745,7 @@ pub fn spawn_job(
         spawn_job_reader(id, kind, err, log.clone(), file.clone(), true, events.clone());
     }
 
+    let outcome_file = file.clone();
     tokio::spawn(async move {
         let status = match child.wait().await {
             Ok(s) => {
@@ -692,6 +759,7 @@ pub fn spawn_job(
             }
             Err(e) => JobStatus::Failed(e.to_string()),
         };
+        write_line(&outcome_file, &format!("[ft-man] finished: {status:?}"));
         let _ = events.send(JobEvent::Finished(id, status));
     });
 
@@ -707,6 +775,8 @@ pub fn spawn_job(
         started_at: chrono::Local::now(),
         finished_at: None,
         output_path: None,
+        rate: crate::util::Ema::new(0.3),
+        last_sample: None,
         pid,
     })
 }
@@ -725,12 +795,7 @@ fn spawn_job_reader<R>(
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(f) = &file {
-                use std::io::Write;
-                if let Ok(mut f) = f.lock() {
-                    let _ = writeln!(f, "{line}");
-                }
-            }
+            write_line(&file, &line);
             if let Some(path) = line.strip_prefix("FTBENCH_OUT ") {
                 let _ = events.send(JobEvent::Output(id, PathBuf::from(path.trim())));
                 continue;
@@ -799,6 +864,55 @@ mod tests {
     fn ordinary_output_is_not_mistaken_for_progress() {
         assert!(parse_progress(JobKind::Convert, "Converting dense weights: 12%").is_none());
         assert!(parse_progress(JobKind::Bench, "FTBENCHX 1 2 x").is_none());
+    }
+
+    #[test]
+    fn a_failure_reason_is_the_error_not_the_traceback_scaffolding() {
+        let job = Job::fake(JobKind::Convert, "t", JobStatus::Running, JobProgress::default());
+        job.log.clear();
+        for line in [
+            "[ft-man] $ ft checkpoint --model /models/x",
+            "Converting dense weights: 40%",
+            "Traceback (most recent call last):",
+            "  File \"/x/convert.py\", line 288, in load_moe_expert_sources",
+            "    return stream_moe_expert_sources(",
+            "    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+            "ValueError: Missing MoE expert source layers: {'gate_up': [0, 1]}",
+        ] {
+            job.log.push(line.into(), false);
+        }
+        assert_eq!(
+            job.failure_reason().as_deref(),
+            Some("ValueError: Missing MoE expert source layers: {'gate_up': [0, 1]}")
+        );
+    }
+
+    #[test]
+    fn a_job_that_printed_nothing_useful_has_no_reason_to_offer() {
+        let job = Job::fake(JobKind::Bench, "t", JobStatus::Running, JobProgress::default());
+        job.log.clear();
+        job.log.push("[ft-man] $ ft bench bw".into(), false);
+        job.log.push("   ".into(), false);
+        assert_eq!(job.failure_reason(), None, "our own header is not a failure reason");
+    }
+
+    #[test]
+    fn byte_progress_builds_a_rate_and_step_progress_does_not() {
+        let mut job = Job::fake(JobKind::Convert, "t", JobStatus::Running, JobProgress::default());
+        job.observe(JobProgress { phase: "dense".into(), done: 0, total: 0, bytes: true });
+        // Two samples less than the sampling interval apart: not enough to rate yet.
+        job.observe(JobProgress { phase: "dense".into(), done: 1 << 20, total: 0, bytes: true });
+        assert_eq!(job.rate.get(), 0.0);
+        assert_eq!(job.progress.done, 1 << 20);
+
+        std::thread::sleep(Duration::from_millis(600));
+        job.observe(JobProgress { phase: "dense".into(), done: 3 << 20, total: 0, bytes: true });
+        assert!(job.rate.get() > 0.0, "a byte phase should report throughput");
+
+        // A step-counted phase (the bench) has no bytes to rate.
+        let mut bench = Job::fake(JobKind::Bench, "t", JobStatus::Running, JobProgress::default());
+        bench.observe(JobProgress { phase: "nvfp4".into(), done: 1, total: 6, bytes: false });
+        assert_eq!(bench.rate.get(), 0.0);
     }
 
     #[test]

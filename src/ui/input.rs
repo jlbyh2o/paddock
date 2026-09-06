@@ -131,6 +131,19 @@ fn run_action(app: &mut App, action: ConfirmAction) {
         ConfirmAction::ApplyCacheRebuild => apply_cache_rebuild(app),
         ConfirmAction::ApplyTemplate { template, model } => write_template(app, &template, &model),
         ConfirmAction::RevertTemplate(model) => revert_template(app, &model),
+        ConfirmAction::ReconvertModel(source) => {
+            let out = crate::models::ftw_output_path(&source);
+            if let Err(e) = std::fs::remove_dir_all(&out) {
+                app.error(format!("could not remove {}: {e}", out.display()));
+                return;
+            }
+            app.info(format!("removed the incomplete {}", out.display()));
+            if let Some(i) = app.models.iter().position(|m| m.path == source) {
+                app.models_view.sel.index = i;
+            }
+            start_conversion(app, &source);
+            app.request_scan();
+        }
         ConfirmAction::DeleteTemplate(name) => match crate::templates::remove(&name) {
             Ok(()) => {
                 app.reload_templates();
@@ -426,6 +439,13 @@ fn models_key(app: &mut App, key: KeyEvent) {
 /// Load the highlighted model into the Serve configuration, optionally starting it.
 fn use_selected_model(app: &mut App, and_serve: bool) {
     let Some(model) = app.selected_model() else { return };
+    if model.is_partial() {
+        app.warn(format!(
+            "{} is an incomplete conversion and cannot be served; delete it with D",
+            model.name
+        ));
+        return;
+    }
     // An FTW build loads meaningfully faster, so prefer it when one exists.
     let (path, note) = match &model.converted_to {
         Some(ftw) => (ftw.clone(), Some(format!("using the FTW build at {}", ftw.display()))),
@@ -458,18 +478,59 @@ fn convert_selected(app: &mut App) {
         app.warn(format!("cannot convert: {reason}"));
         return;
     }
+
+    let source = model.path.clone();
+    let name = model.name.clone();
+    let out = crate::models::ftw_output_path(&source);
+
+    if out.exists() {
+        // A finished build is a real artifact; the leftovers of a failed run are not, and
+        // refusing to touch either left a retry with nowhere to go and tens of gigabytes
+        // stranded in a directory the Models list did not even show.
+        let leftovers = crate::models::inspect(&out).is_some_and(|m| m.is_partial());
+        if leftovers {
+            let size = crate::models::dir_size(&out);
+            ask(
+                app,
+                Confirm::new(
+                    "Retry conversion",
+                    vec![
+                        format!("{} has leftovers from a conversion that failed.", name),
+                        String::new(),
+                        out.display().to_string(),
+                        format!(
+                            "Delete those {} and convert again? They hold no index and \
+                             cannot be served.",
+                            crate::util::bytes(size)
+                        ),
+                    ],
+                    ConfirmAction::ReconvertModel(source),
+                    true,
+                ),
+            );
+        } else {
+            app.warn(format!(
+                "{} already exists; delete it from the Models tab to reconvert",
+                out.display()
+            ));
+        }
+        return;
+    }
+
+    start_conversion(app, &source);
+}
+
+/// Spawn `ft checkpoint` for a checkpoint that has been cleared to convert.
+fn start_conversion(app: &mut App, source: &std::path::Path) {
     let Some(ft) = app.ft.clone() else {
         app.error("the FreeToken CLI was not found");
         return;
     };
-
-    let source = model.path.clone();
-    let out = crate::models::ftw_output_path(&source);
-    let name = model.name.clone();
-    if out.exists() {
-        app.warn(format!("{} already exists; delete it to reconvert", out.display()));
-        return;
-    }
+    let out = crate::models::ftw_output_path(source);
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.display().to_string());
 
     // `offload` packs experts into banks, which is what every offload-family backend
     // wants; `triton` keeps them dense for resident serving. Match the MoE backend the
