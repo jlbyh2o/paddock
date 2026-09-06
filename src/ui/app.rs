@@ -32,6 +32,7 @@ pub enum Tab {
     Dashboard,
     Models,
     Hub,
+    Templates,
     Serve,
     Cache,
     Jobs,
@@ -40,10 +41,11 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 8] = [
+    pub const ALL: [Tab; 9] = [
         Tab::Dashboard,
         Tab::Models,
         Tab::Hub,
+        Tab::Templates,
         Tab::Serve,
         Tab::Cache,
         Tab::Jobs,
@@ -56,6 +58,7 @@ impl Tab {
             Tab::Dashboard => "Dashboard",
             Tab::Models => "Models",
             Tab::Hub => "Hub",
+            Tab::Templates => "Templates",
             Tab::Serve => "Serve",
             Tab::Cache => "Cache",
             Tab::Jobs => "Jobs",
@@ -94,6 +97,14 @@ pub struct Telemetry {
     pub at: Option<Instant>,
 }
 
+/// The chat templates a repo holds, at the revision the listing resolved to.
+#[derive(Debug)]
+pub struct TemplateListing {
+    pub repo: String,
+    pub revision: String,
+    pub files: Vec<crate::hub::Sibling>,
+}
+
 #[derive(Debug)]
 pub enum Message {
     Telemetry(Box<Telemetry>),
@@ -117,6 +128,12 @@ pub enum Message {
         entries: Vec<RequestRecord>,
         next_cursor: u64,
     },
+    /// The `.jinja` listing for a template repo.
+    TemplateRepo(Box<Result<TemplateListing, String>>),
+    /// A template was fetched and saved into the store.
+    TemplateFetched(Result<String, String>),
+    /// A render preflight finished: (template name, result).
+    TemplatePreflight(String, Result<String, String>),
     /// A cache rebuild finished.
     CacheRebuilt(Result<String, String>),
     /// The `/generate` smoke test finished.
@@ -232,6 +249,37 @@ impl CacheView {
     }
 }
 
+/// Which pane of the Templates view has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TemplatePane {
+    /// The templates already fetched into the store.
+    #[default]
+    Store,
+    /// The `.jinja` files in the repo being browsed.
+    Remote,
+}
+
+#[derive(Default)]
+pub struct TemplatesView {
+    pub sel: Selection,
+    pub pane: TemplatePane,
+    /// Templates in the local store, refreshed from disk.
+    pub stored: Vec<crate::templates::StoredTemplate>,
+    /// The repo currently being browsed, and its `.jinja` files.
+    pub repo: TextInput,
+    pub editing_repo: bool,
+    pub remote: Vec<crate::hub::Sibling>,
+    pub remote_sel: Selection,
+    pub remote_repo: Option<String>,
+    pub remote_revision: Option<String>,
+    pub loading: bool,
+    /// A preview of the highlighted template's first lines.
+    pub preview: Option<(String, String)>,
+    /// Result of the last render preflight, shown beside the template it checked.
+    pub preflight: Option<(String, Result<String, String>)>,
+    pub checking: bool,
+}
+
 #[derive(Default)]
 pub struct JobsView {
     pub sel: Selection,
@@ -318,6 +366,7 @@ pub struct App {
     pub serve: ServeConfig,
     pub models_view: ModelsView,
     pub hub_view: HubView,
+    pub templates_view: TemplatesView,
     pub serve_view: ServeView,
     pub cache_view: CacheView,
     pub jobs_view: JobsView,
@@ -435,6 +484,7 @@ impl App {
             serve,
             models_view: ModelsView::default(),
             hub_view: HubView { revision: "main".into(), ..Default::default() },
+            templates_view: TemplatesView::default(),
             serve_view: ServeView::default(),
             cache_view: CacheView::default(),
             jobs_view: JobsView::default(),
@@ -451,6 +501,10 @@ impl App {
             crate::models::expand_tilde(&app.config.library.download_dir).display().to_string(),
         );
         app.reload_bench_profile();
+        app.templates_view
+            .repo
+            .set(app.config.templates.sources.first().cloned().unwrap_or_default());
+        app.reload_templates();
         Ok(app)
     }
 
@@ -589,6 +643,38 @@ impl App {
         None
     }
 
+    /// Re-read the template store from disk and keep the cursor and preview in step.
+    pub fn reload_templates(&mut self) {
+        self.templates_view.stored = crate::templates::list();
+        self.templates_view.sel.clamp(self.templates_view.stored.len());
+        self.refresh_template_preview();
+    }
+
+    /// The template highlighted in the store pane, if any.
+    pub fn selected_template(&self) -> Option<&crate::templates::StoredTemplate> {
+        self.templates_view.stored.get(self.templates_view.sel.index)
+    }
+
+    /// Load the head of the selected template for the preview pane. Cached by name so a
+    /// 30 KiB file is not re-read on every one of the five frames a second.
+    pub fn refresh_template_preview(&mut self) {
+        let Some(t) = self.selected_template() else {
+            self.templates_view.preview = None;
+            return;
+        };
+        if self.templates_view.preview.as_ref().is_some_and(|(n, _)| *n == t.name) {
+            return;
+        }
+        let name = t.name.clone();
+        let text = t.read().unwrap_or_else(|e| format!("could not read it: {e:#}"));
+        self.templates_view.preview = Some((name, text));
+    }
+
+    /// Chat template status for a checkpoint, used by the Models detail pane.
+    pub fn template_status(&self, model: &Model) -> crate::templates::Status {
+        crate::templates::status(&model.path)
+    }
+
     pub fn reload_bench_profile(&mut self) {
         self.bench_profile = load_bench_profile(
             self.gpus.first().and_then(|g| (!g.uuid.is_empty()).then(|| g.uuid.clone())),
@@ -668,6 +754,46 @@ impl App {
                 if following {
                     crate::ui::views::requests::follow_tail(self);
                 }
+            }
+            Message::TemplateRepo(res) => {
+                self.templates_view.loading = false;
+                match *res {
+                    Ok(listing) => {
+                        if listing.files.is_empty() {
+                            self.warn(format!("{} holds no .jinja files", listing.repo));
+                        }
+                        self.templates_view.remote = listing.files;
+                        self.templates_view.remote_repo = Some(listing.repo);
+                        self.templates_view.remote_revision = Some(listing.revision);
+                        self.templates_view.remote_sel = Selection::default();
+                        self.templates_view.pane = TemplatePane::Remote;
+                    }
+                    Err(e) => self.error(format!("could not list that repo: {e}")),
+                }
+            }
+            Message::TemplateFetched(res) => {
+                self.templates_view.loading = false;
+                match res {
+                    Ok(name) => {
+                        self.reload_templates();
+                        self.templates_view.pane = TemplatePane::Store;
+                        if let Some(i) =
+                            self.templates_view.stored.iter().position(|t| t.name == name)
+                        {
+                            self.templates_view.sel.index = i;
+                        }
+                        self.success(format!("saved template '{name}'"));
+                    }
+                    Err(e) => self.error(format!("could not fetch that template: {e}")),
+                }
+            }
+            Message::TemplatePreflight(name, res) => {
+                self.templates_view.checking = false;
+                match &res {
+                    Ok(detail) => self.success(format!("{name} renders: {detail}")),
+                    Err(e) => self.error(format!("{name} failed to render: {e}")),
+                }
+                self.templates_view.preflight = Some((name, res));
             }
             Message::CacheRebuilt(res) => {
                 self.cache_view.applying = false;
@@ -923,8 +1049,9 @@ mod tests {
     #[test]
     fn digits_map_to_tabs_one_based() {
         assert_eq!(Tab::from_digit(1), Some(Tab::Dashboard));
-        assert_eq!(Tab::from_digit(8), Some(Tab::Logs));
-        assert_eq!(Tab::from_digit(9), None);
+        assert_eq!(Tab::from_digit(4), Some(Tab::Templates));
+        assert_eq!(Tab::from_digit(Tab::ALL.len() as u32), Some(Tab::Logs));
+        assert_eq!(Tab::from_digit(Tab::ALL.len() as u32 + 1), None);
         assert_eq!(Tab::from_digit(0), None);
     }
 

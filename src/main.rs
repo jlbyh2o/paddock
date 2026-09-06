@@ -11,6 +11,7 @@ mod hub;
 mod knobs;
 mod models;
 mod probe;
+mod templates;
 mod ui;
 mod util;
 

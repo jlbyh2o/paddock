@@ -302,6 +302,33 @@ fn populate(app: &mut App) {
     }];
     app.profiles.last_used = Some("qwen-hybrid".into());
 
+    app.templates_view.stored = vec![crate::templates::StoredTemplate {
+        name: "Qwen-Sharp-Chat-Templates".into(),
+        path: "/state/templates/Qwen-Sharp-Chat-Templates.jinja".into(),
+        meta: crate::templates::TemplateMeta {
+            source: Some("peculiar-ragdoll/Qwen-Sharp-Chat-Templates".into()),
+            revision: Some("5cb86e230acb03ffd992b841ecb12318a518e374".into()),
+            repo_path: Some("chat_template.jinja".into()),
+            fetched_at: Some("2026-09-05T21:00:00+00:00".into()),
+            version: Some("qwen3.8-froggeric-v22.4.1".into()),
+        },
+        size: 29_686,
+    }];
+    app.templates_view.remote = vec![
+        crate::hub::Sibling { path: "chat_template.jinja".into(), size: Some(29_686) },
+        crate::hub::Sibling {
+            path: "archive/v22.3.2-sharp/chat_template.jinja".into(),
+            size: Some(28_577),
+        },
+    ];
+    app.templates_view.remote_repo = Some("peculiar-ragdoll/Qwen-Sharp-Chat-Templates".into());
+    app.templates_view.remote_revision = Some("5cb86e230acb".into());
+    app.templates_view.repo.set("peculiar-ragdoll/Qwen-Sharp-Chat-Templates");
+    app.templates_view.preview = Some((
+        "Qwen-Sharp-Chat-Templates".into(),
+        "{%- set template_version = \"qwen3.8-froggeric-v22.4.1\" %}\n{{ messages }}".into(),
+    ));
+
     app.serve.set("model", "/models/Qwen3.6-35B-A3B-ftw");
     app.serve.set("moe_backend", "hybrid");
     app.serve.set("memory_ratio", "0.92");
@@ -355,6 +382,9 @@ async fn overlays_and_secondary_panes_render() {
     a.logs_view.errors_only = true;
     a.hub_view.in_files = true;
     a.jobs_view.in_output = true;
+    a.templates_view.pane = crate::ui::app::TemplatePane::Remote;
+    a.templates_view.preflight =
+        Some(("Qwen-Sharp-Chat-Templates".into(), Ok("4210 chars, 980 tokens".into())));
     a.cache_view.set_pending(Pool::Moe, Some(1024));
     a.cache_view.set_pending(Pool::Kv, Some(65_536));
     draw_all(&mut a);
@@ -368,6 +398,16 @@ async fn overlays_and_secondary_panes_render() {
         draw_all(&mut a);
     }
 
+    // A failed render check must render as legibly as a passing one.
+    a.templates_view.preflight = Some((
+        "Qwen-Sharp-Chat-Templates".into(),
+        Err("TemplateError: 'dict object' has no attribute 'reasoning_content'".into()),
+    ));
+    a.templates_view.checking = true;
+    draw_all(&mut a);
+    a.templates_view.checking = false;
+
+    a.templates_view.editing_repo = true;
     a.serve_view.naming = true;
     a.models_view.filtering = true;
     a.logs_view.filtering = true;
@@ -430,6 +470,8 @@ async fn selection_stays_in_range_when_lists_shrink() {
     a.serve_view.sel.index = 999;
     a.serve_view.profile_sel.index = 999;
     a.cache_view.sel.index = 999;
+    a.templates_view.sel.index = 999;
+    a.templates_view.remote_sel.index = 999;
     a.jobs_view.sel.index = 999;
     a.requests_view.sel.index = 999;
     draw_all(&mut a);
@@ -443,6 +485,9 @@ async fn selection_stays_in_range_when_lists_shrink() {
     a.downloads.clear();
     a.requests_view.entries.clear();
     a.profiles.items.clear();
+    a.templates_view.stored.clear();
+    a.templates_view.remote.clear();
+    a.templates_view.preview = None;
     draw_all(&mut a);
 }
 
@@ -829,4 +874,181 @@ async fn the_download_client_uses_the_apps_token() {
         source: "hub.token in the config",
     });
     assert!(super::input::hub_client_for_tests(&a).unwrap().has_token());
+}
+
+// ---------------------------------------------------------------- templates
+
+/// Build a scratch checkpoint on disk and point the app's library at it, so the template
+/// actions operate on a real directory rather than a fabricated path.
+fn with_checkpoint(a: &mut App, tag: &str, with_own_template: bool) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "ft-man-tpl-ui-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.json"), r#"{"model_type":"qwen3_moe"}"#).unwrap();
+    std::fs::write(dir.join("model.safetensors"), b"x").unwrap();
+    if with_own_template {
+        std::fs::write(dir.join(crate::templates::TEMPLATE_FILE), "ORIGINAL {{ x }}").unwrap();
+    }
+    a.models = vec![crate::models::inspect(&dir).expect("scratch checkpoint should be recognized")];
+    a.models_view.sel.index = 0;
+    dir
+}
+
+/// Put one template into the real store the app reads, and select it.
+fn with_stored_template(a: &mut App, name: &str, jinja: &str) {
+    crate::templates::save(name, jinja, crate::templates::TemplateMeta::default()).unwrap();
+    a.reload_templates();
+    a.templates_view.sel.index =
+        a.templates_view.stored.iter().position(|t| t.name == name).unwrap();
+}
+
+const SHARP: &str = "{%- set template_version = \"qwen3.8-froggeric-v22.4.1\" %}\n{{ messages }}";
+
+#[tokio::test]
+async fn applying_a_template_asks_first_and_names_every_directory_it_writes() {
+    let mut a = app().await;
+    a.config.templates.preflight = false;
+    let dir = with_checkpoint(&mut a, "ask", true);
+    with_stored_template(&mut a, "sharp-ask", SHARP);
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('a'));
+    let confirm = a.confirm.as_ref().expect("applying must be confirmed");
+    let body = confirm.body.join("\n");
+    assert!(body.contains("chat_template.jinja"), "it should say what it writes:\n{body}");
+    assert!(body.contains(&dir.display().to_string()), "it should name the directory:\n{body}");
+    assert!(!confirm.accepted(), "the safe option must be preselected");
+
+    // Declining changes nothing on disk.
+    press(&mut a, KeyCode::Esc);
+    assert!(matches!(crate::templates::status(&dir), crate::templates::Status::Foreign));
+    assert_eq!(
+        std::fs::read_to_string(dir.join(crate::templates::TEMPLATE_FILE)).unwrap(),
+        "ORIGINAL {{ x }}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+    crate::templates::remove("sharp-ask").ok();
+}
+
+#[tokio::test]
+async fn accepting_applies_the_template_and_u_puts_the_original_back() {
+    let mut a = app().await;
+    a.config.templates.preflight = false;
+    let dir = with_checkpoint(&mut a, "roundtrip", true);
+    with_stored_template(&mut a, "sharp-roundtrip", SHARP);
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('a'));
+    press(&mut a, KeyCode::Right);
+    press(&mut a, KeyCode::Enter);
+
+    assert_eq!(std::fs::read_to_string(dir.join(crate::templates::TEMPLATE_FILE)).unwrap(), SHARP);
+    let status = crate::templates::status(&dir);
+    assert!(status.is_overridden());
+    assert!(status.label().contains("qwen3.8-froggeric-v22.4.1"), "{}", status.label());
+
+    // And the Models tab reports the override rather than "built-in".
+    let screen = render_text(&mut a, Tab::Models, 110, 30);
+    assert!(screen.contains("Chat template"), "{screen}");
+    assert!(screen.contains("sharp-roundtrip"), "the detail pane should name it:\n{screen}");
+
+    a.tab = Tab::Templates;
+    press(&mut a, KeyCode::Char('u'));
+    press(&mut a, KeyCode::Right);
+    press(&mut a, KeyCode::Enter);
+    assert_eq!(
+        std::fs::read_to_string(dir.join(crate::templates::TEMPLATE_FILE)).unwrap(),
+        "ORIGINAL {{ x }}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+    crate::templates::remove("sharp-roundtrip").ok();
+}
+
+#[tokio::test]
+async fn a_template_is_applied_to_the_ftw_build_as_well() {
+    let mut a = app().await;
+    a.config.templates.preflight = false;
+    let dir = with_checkpoint(&mut a, "ftw", false);
+    let ftw = dir.with_file_name(format!("{}-ftw", dir.file_name().unwrap().to_string_lossy()));
+    std::fs::create_dir_all(&ftw).unwrap();
+    std::fs::write(ftw.join(crate::ft::proc::FTW_INDEX), r#"{"quant_format":"nvfp4"}"#).unwrap();
+    a.models[0].converted_to = Some(ftw.clone());
+    with_stored_template(&mut a, "sharp-ftw", SHARP);
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('a'));
+    press(&mut a, KeyCode::Right);
+    press(&mut a, KeyCode::Enter);
+
+    // Serving either directory must get the same template.
+    assert_eq!(std::fs::read_to_string(dir.join(crate::templates::TEMPLATE_FILE)).unwrap(), SHARP);
+    assert_eq!(std::fs::read_to_string(ftw.join(crate::templates::TEMPLATE_FILE)).unwrap(), SHARP);
+
+    press(&mut a, KeyCode::Char('u'));
+    press(&mut a, KeyCode::Right);
+    press(&mut a, KeyCode::Enter);
+    assert!(!dir.join(crate::templates::TEMPLATE_FILE).exists());
+    assert!(!ftw.join(crate::templates::TEMPLATE_FILE).exists());
+
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&ftw).ok();
+    crate::templates::remove("sharp-ftw").ok();
+}
+
+#[tokio::test]
+async fn reverting_a_model_with_no_override_is_refused_not_silently_ignored() {
+    let mut a = app().await;
+    let dir = with_checkpoint(&mut a, "norevert", true);
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('u'));
+    assert!(a.confirm.is_none(), "there is nothing to confirm");
+    assert!(
+        a.toasts.iter().any(|t| t.text.contains("not using an ft-man template override")),
+        "the user should be told why nothing happened"
+    );
+    // The hand-placed template is untouched.
+    assert_eq!(
+        std::fs::read_to_string(dir.join(crate::templates::TEMPLATE_FILE)).unwrap(),
+        "ORIGINAL {{ x }}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn applying_with_no_model_selected_explains_rather_than_failing() {
+    let mut a = app().await;
+    with_stored_template(&mut a, "sharp-nomodel", SHARP);
+    a.models.clear();
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('a'));
+    assert!(a.confirm.is_none());
+    assert!(a.toasts.iter().any(|t| t.text.contains("no model selected")));
+
+    crate::templates::remove("sharp-nomodel").ok();
+}
+
+#[tokio::test]
+async fn the_templates_view_warns_that_a_running_engine_needs_a_restart() {
+    let mut a = app().await;
+    a.config.templates.preflight = false;
+    let dir = with_checkpoint(&mut a, "restart", false);
+    with_stored_template(&mut a, "sharp-restart", SHARP);
+    a.engine.state = crate::ft::EngineState::Running;
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('a'));
+    let body = a.confirm.as_ref().unwrap().body.join("\n");
+    assert!(body.contains("restart"), "a loaded engine already read its template; say so:\n{body}");
+
+    std::fs::remove_dir_all(&dir).ok();
+    crate::templates::remove("sharp-restart").ok();
 }

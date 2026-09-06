@@ -10,3 +10,4 @@ pub mod logs;
 pub mod models;
 pub mod requests;
 pub mod serve;
+pub mod templates;

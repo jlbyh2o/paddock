@@ -7,7 +7,7 @@ retune its cache pools without a restart, and watch throughput, requests and log
 one screen.
 
 ```
- ft-man  1 Dashboard  2 Models  3 Hub  4 Serve  5 Cache  6 Jobs  7 Requests  8 Logs   ● serving · Qwen3.6-35B-A3B
+ ft-man  1 Dashboard  2 Models  3 Hub  4 Templates  5 Serve  6 Cache  7 Jobs  8 Requests  9 Logs   ● serving · Qwen3.6-35B
 ╭ Engine ───────────────────────────────────╮╭ GPU (NVML) ───────────────────────────────╮
 │Status            ● serving                ││0 NVIDIA GeForce RTX 5090   ← engine       │
 │Model             Qwen3.6-35B-A3B          ││  VRAM    ▕██████████████████▉··▏  87%     │
@@ -77,6 +77,7 @@ $EDITOR ~/.config/ft-man/config.toml
 | **Dashboard** | Engine state, throughput, cache pools, GPU and host telemetry. The screen you leave open. |
 | **Models** | Your local checkpoint library. Recognizes HF, FTW and GGUF, pairs a checkpoint with its FTW build, and says what to do with each. |
 | **Hub** | Search Hugging Face, pick files, download. Resumable, parallel, and it skips duplicate weight formats by default. |
+| **Templates** | Override a checkpoint's chat template with one fetched from a Hugging Face repo, and put the original back. |
 | **Serve** | Every `ft serve` flag, grouped, with its domain and help text. Save configurations as named profiles. |
 | **Cache** | Resize the MoE, KV, GDN and SWA pools on the running engine, with the VRAM cost of each change shown before you apply it. |
 | **Jobs** | FTW conversions, bandwidth benchmarks and downloads, with real progress bars and live output. |
@@ -101,6 +102,17 @@ totals.
 **The knob table is the documentation.** Every flag carries its type, range, default,
 help text and mutual exclusions in one schema. Setting `--moe-cache-size` clears
 `--moe-cache-rate` for you, because the engine would reject the pair.
+
+**Chat templates are a file operation, and it says so.** FreeToken has no
+`--chat-template` flag — it loads the template through
+`AutoTokenizer.from_pretrained(model_path)` — so overriding one means writing
+`chat_template.jinja` into the checkpoint directory, where it takes precedence over the
+`chat_template` key in `tokenizer_config.json`. ft-man never overwrites: the checkpoint's
+own template is moved aside, a marker records what was applied and from where, and `u`
+restores the original exactly (removing the file outright when the checkpoint never had
+one). A checkpoint and its FTW build are written together, because each carries its own
+tokenizer files and an override applied to only one would silently miss whichever you
+serve.
 
 **It polls where the engine will actually be.** If a profile pins port 1920, `ft-man`
 polls 1920. A bind address of `0.0.0.0` is polled over loopback, because a wildcard is not
@@ -139,6 +151,12 @@ endpoint = "https://huggingface.co"
 concurrency = 4
 ignore = ["*.bin", "*.pth", "*.msgpack", "*.h5", "*.onnx"]
 
+[templates]
+# Repos offered when fetching chat templates. Any repo holding .jinja files works.
+sources = ["peculiar-ragdoll/Qwen-Sharp-Chat-Templates"]
+# Render the template against the model's real tokenizer before writing it in.
+preflight = true
+
 [ui]
 theme = "auto"                # auto | dark | light | mono
 tick_ms = 200
@@ -172,10 +190,36 @@ CLI flags override the config file for that run and are not written back.
 6. **Cache** → once it is serving, trade KV capacity against resident experts and apply
    without a restart.
 
+## Using a different chat template
+
+The **Templates** tab (`4`) fetches `.jinja` templates from any Hugging Face repo and
+applies them to a checkpoint:
+
+1. `r` → enter a repo (`peculiar-ragdoll/Qwen-Sharp-Chat-Templates` is the shipped
+   default) → Enter to list its templates.
+2. `f` on one to fetch it into the local store under `~/.local/state/ft-man/templates`.
+3. Select the model on the **Models** tab, come back, and press `a`. The confirmation
+   names every directory that will be written.
+4. `v` renders the template against that model's real tokenizer — with a system prompt, a
+   tool definition and a tool result — and reports the failure if it does not. This runs
+   automatically before an apply unless you turn `templates.preflight` off; a template
+   that fails to render breaks every request the engine serves, so it is worth the few
+   seconds.
+5. `u` restores the checkpoint's own template.
+
+Because the engine reads its template when the model loads, **restart the engine** for a
+change to take effect. The Models tab shows each checkpoint's current template, so an
+override is never invisible.
+
+Templates that take `chat_template_kwargs` (the Qwen-Sharp ones accept
+`enable_thinking`, `tool_call_format`, `max_tool_arg_chars` and others) read them from
+the request body — FreeToken passes `chat_template_kwargs` straight through from the
+OpenAI and Anthropic APIs.
+
 ## Development
 
 ```bash
-cargo test        # 74 tests, including render and input sweeps across five terminal sizes
+cargo test        # 103 tests, including render and input sweeps across five terminal sizes
 cargo clippy --all-targets
 cargo fmt
 ```

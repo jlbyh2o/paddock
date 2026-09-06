@@ -56,6 +56,7 @@ pub struct Config {
     pub server: ServerCfg,
     pub library: LibraryCfg,
     pub hub: HubCfg,
+    pub templates: TemplatesCfg,
     pub ui: UiCfg,
 }
 
@@ -179,6 +180,25 @@ impl HubCfg {
         let t = raw.trim();
         (!t.is_empty())
             .then(|| HubToken { value: t.to_string(), source: "the token cached by the hf CLI" })
+    }
+}
+
+/// Chat template overrides. FreeToken has no flag for this, so a template is applied by
+/// writing `chat_template.jinja` into the checkpoint directory; see `crate::templates`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TemplatesCfg {
+    /// Hugging Face repos offered when fetching templates. Any repo holding `.jinja`
+    /// files works; these are just the ones listed first.
+    pub sources: Vec<String>,
+    /// Run a real `apply_chat_template` render through FreeToken's Python before writing
+    /// a template into a checkpoint. Catches the failures a text check cannot.
+    pub preflight: bool,
+}
+
+impl Default for TemplatesCfg {
+    fn default() -> Self {
+        Self { sources: vec!["peculiar-ragdoll/Qwen-Sharp-Chat-Templates".into()], preflight: true }
     }
 }
 

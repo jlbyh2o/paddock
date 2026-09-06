@@ -55,6 +55,19 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Templates",
+        &[
+            ("r", "set the repo to browse"),
+            ("Enter", "list that repo's templates"),
+            ("Tab", "move between stored and remote"),
+            ("f", "fetch the highlighted template"),
+            ("a", "apply to the model selected on the Models tab"),
+            ("u", "restore the model's built-in template"),
+            ("v", "check that it renders"),
+            ("D", "delete a stored template"),
+        ],
+    ),
+    (
         "Serve",
         &[
             ("↑ ↓", "move between knobs"),

@@ -82,6 +82,15 @@ pub struct Sibling {
     pub size: Option<u64>,
 }
 
+/// The `.jinja` files in a repo listing, which is what a chat-template repo holds.
+pub fn jinja_files(siblings: &[Sibling]) -> Vec<Sibling> {
+    let mut out: Vec<Sibling> =
+        siblings.iter().filter(|s| s.path.ends_with(".jinja")).cloned().collect();
+    // Repo-root templates first: that is the current one, with archives beneath it.
+    out.sort_by_key(|s| (s.path.contains('/'), s.path.clone()));
+    out
+}
+
 /// A file resolved for download: path within the repo plus its size.
 #[derive(Debug, Clone)]
 pub struct RepoFile {
@@ -149,6 +158,30 @@ impl Hub {
 
     fn resolve_url(&self, repo: &str, revision: &str, path: &str) -> String {
         format!("{}/{}/resolve/{}/{}", self.endpoint, repo, urlencode(revision), path)
+    }
+
+    /// Download one small file straight into memory. Templates are tens of kilobytes,
+    /// so they need none of the resumable, chunked machinery the weight files do.
+    pub async fn fetch_text(&self, repo: &str, revision: &str, path: &str) -> Result<String> {
+        let url = self.resolve_url(repo, revision, path);
+        let resp = self
+            .authed(self.http.get(&url))
+            .send()
+            .await
+            .with_context(|| format!("fetching {path}"))?;
+        let status = resp.status();
+        let text = resp.text().await.with_context(|| format!("reading {path}"))?;
+        if !status.is_success() {
+            anyhow::bail!("{path}: HTTP {status}");
+        }
+        // A repo can be large; a template that arrives as tens of megabytes is a sign
+        // something other than a template was requested.
+        anyhow::ensure!(
+            text.len() <= 4 << 20,
+            "{path} is {} — too large to be a chat template",
+            crate::util::bytes(text.len() as u64)
+        );
+        Ok(text)
     }
 
     /// HEAD a file to learn its size when the listing did not carry one.

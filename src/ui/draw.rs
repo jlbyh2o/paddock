@@ -47,6 +47,8 @@ fn tab_bar(f: &mut Frame, app: &App, area: Rect) {
                 (n > 0).then(|| format!("{n}"))
             }
             Tab::Models => (!app.models.is_empty()).then(|| app.models.len().to_string()),
+            Tab::Templates => (!app.templates_view.stored.is_empty())
+                .then(|| app.templates_view.stored.len().to_string()),
             _ => None,
         };
         if let Some(b) = badge {
@@ -92,6 +94,7 @@ fn content(f: &mut Frame, app: &mut App, area: Rect) {
         Tab::Dashboard => views::dashboard::render(f, app, area),
         Tab::Models => views::models::render(f, app, area),
         Tab::Hub => views::hub::render(f, app, area),
+        Tab::Templates => views::templates::render(f, app, area),
         Tab::Serve => views::serve::render(f, app, area),
         Tab::Cache => views::cache::render(f, app, area),
         Tab::Jobs => views::jobs::render(f, app, area),
@@ -126,6 +129,15 @@ fn hints(app: &App) -> &'static [(&'static str, &'static str)] {
             ("Enter", "files"),
             ("Space", "toggle"),
             ("d", "download"),
+            ("?", "keys"),
+        ],
+        Tab::Templates => &[
+            ("r", "repo"),
+            ("Enter", "list"),
+            ("f", "fetch"),
+            ("a", "apply"),
+            ("u", "revert"),
+            ("v", "verify"),
             ("?", "keys"),
         ],
         Tab::Serve => &[

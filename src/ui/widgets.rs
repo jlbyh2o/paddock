@@ -298,13 +298,23 @@ pub struct Confirm {
 /// routed by the app rather than by a boxed callback that would tangle borrowing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmAction {
-    StopEngine { force: bool },
+    StopEngine {
+        force: bool,
+    },
     DeleteModel(std::path::PathBuf),
     CancelJob(u64),
     CancelDownload(u64),
     DeleteProfile(String),
     Quit,
     ApplyCacheRebuild,
+    /// Write a stored template into a model's directories.
+    ApplyTemplate {
+        template: String,
+        model: std::path::PathBuf,
+    },
+    /// Restore a model's own template.
+    RevertTemplate(std::path::PathBuf),
+    DeleteTemplate(String),
 }
 
 impl Confirm {

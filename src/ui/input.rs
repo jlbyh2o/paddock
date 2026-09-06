@@ -11,7 +11,7 @@ use crate::ft::proc::{spawn_job, JobKind, JobSpec};
 use crate::hub::{start_download, Hub};
 use crate::knobs::{knobs_in, Kind, Knob};
 use crate::models::Format;
-use crate::ui::app::{rebuild_from_pending, App, Message, Pool, Tab, Telemetry};
+use crate::ui::app::{rebuild_from_pending, App, Message, Pool, Tab, Telemetry, TemplatePane};
 use crate::ui::views;
 use crate::ui::widgets::{Confirm, ConfirmAction, ToastKind};
 
@@ -55,6 +55,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Tab::Dashboard => dashboard_key(app, key),
         Tab::Models => models_key(app, key),
         Tab::Hub => hub_key(app, key),
+        Tab::Templates => templates_key(app, key),
         Tab::Serve => serve_key(app, key),
         Tab::Cache => cache_key(app, key),
         Tab::Jobs => jobs_key(app, key),
@@ -128,6 +129,15 @@ fn run_action(app: &mut App, action: ConfirmAction) {
             }
         }
         ConfirmAction::ApplyCacheRebuild => apply_cache_rebuild(app),
+        ConfirmAction::ApplyTemplate { template, model } => write_template(app, &template, &model),
+        ConfirmAction::RevertTemplate(model) => revert_template(app, &model),
+        ConfirmAction::DeleteTemplate(name) => match crate::templates::remove(&name) {
+            Ok(()) => {
+                app.reload_templates();
+                app.success(format!("deleted template '{name}'"));
+            }
+            Err(e) => app.error(format!("could not delete it: {e:#}")),
+        },
     }
 }
 
@@ -164,6 +174,7 @@ fn text_entry(app: &mut App, key: KeyEvent) -> Option<bool> {
         Field::ServeValue => &mut app.serve_view.editor,
         Field::ProfileName => &mut app.serve_view.profile_name,
         Field::LogFilter => &mut app.logs_view.filter,
+        Field::TemplateRepo => &mut app.templates_view.repo,
     };
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -208,6 +219,7 @@ enum Field {
     ServeValue,
     ProfileName,
     LogFilter,
+    TemplateRepo,
 }
 
 fn active_field(app: &App) -> Option<Field> {
@@ -225,6 +237,9 @@ fn active_field(app: &App) -> Option<Field> {
     }
     if app.logs_view.filtering {
         return Some(Field::LogFilter);
+    }
+    if app.templates_view.editing_repo {
+        return Some(Field::TemplateRepo);
     }
     None
 }
@@ -260,6 +275,12 @@ fn close_field(app: &mut App, commit: bool) {
             app.logs_view.filtering = false;
             if !commit {
                 app.logs_view.filter.clear();
+            }
+        }
+        Some(Field::TemplateRepo) => {
+            app.templates_view.editing_repo = false;
+            if commit {
+                list_template_repo(app);
             }
         }
         None => {}
@@ -304,7 +325,7 @@ fn global_key(app: &mut App, key: KeyEvent) -> bool {
             app.tab = app.tab.prev();
             true
         }
-        KeyCode::Char(c @ '1'..='8') => {
+        KeyCode::Char(c @ '1'..='9') => {
             if let Some(t) = Tab::from_digit(c.to_digit(10).unwrap()) {
                 app.tab = t;
             }
@@ -316,7 +337,7 @@ fn global_key(app: &mut App, key: KeyEvent) -> bool {
 
 /// Tabs where `Tab` moves focus within the view instead of switching views.
 fn tab_is_local(app: &App) -> bool {
-    matches!(app.tab, Tab::Hub | Tab::Serve | Tab::Jobs)
+    matches!(app.tab, Tab::Hub | Tab::Templates | Tab::Serve | Tab::Jobs)
 }
 
 // ---------------------------------------------------------------- dashboard
@@ -675,6 +696,368 @@ fn begin_download(app: &mut App) {
                 )));
             }
         }
+    });
+}
+
+// ---------------------------------------------------------------- templates
+
+fn templates_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('r') => app.templates_view.editing_repo = true,
+        KeyCode::Tab => {
+            app.templates_view.pane = match app.templates_view.pane {
+                TemplatePane::Store => TemplatePane::Remote,
+                TemplatePane::Remote => TemplatePane::Store,
+            };
+        }
+        KeyCode::Char('a') => apply_template(app),
+        KeyCode::Char('u') => request_revert_template(app),
+        KeyCode::Char('v') => verify_template(app),
+        _ if app.templates_view.pane == TemplatePane::Remote => remote_templates_key(app, key),
+        _ => stored_templates_key(app, key),
+    }
+}
+
+fn stored_templates_key(app: &mut App, key: KeyEvent) {
+    let len = app.templates_view.stored.len();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.templates_view.sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.templates_view.sel.down(len),
+        KeyCode::PageUp => app.templates_view.sel.page_up(5),
+        KeyCode::PageDown => app.templates_view.sel.page_down(len, 5),
+        KeyCode::Home => app.templates_view.sel.first(),
+        KeyCode::End => app.templates_view.sel.last(len),
+        KeyCode::Char('D') => {
+            let Some(t) = app.selected_template() else { return };
+            let name = t.name.clone();
+            ask(
+                app,
+                Confirm::new(
+                    "Delete template",
+                    vec![
+                        format!("Remove '{name}' from the template store?"),
+                        String::new(),
+                        "Checkpoints it was already applied to keep using it; this only \
+                         removes the stored copy."
+                            .into(),
+                    ],
+                    ConfirmAction::DeleteTemplate(name),
+                    true,
+                ),
+            );
+            return;
+        }
+        _ => return,
+    }
+    // The preview follows the cursor.
+    app.refresh_template_preview();
+}
+
+fn remote_templates_key(app: &mut App, key: KeyEvent) {
+    let len = app.templates_view.remote.len();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.templates_view.remote_sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.templates_view.remote_sel.down(len),
+        KeyCode::PageUp => app.templates_view.remote_sel.page_up(10),
+        KeyCode::PageDown => app.templates_view.remote_sel.page_down(len, 10),
+        KeyCode::Home => app.templates_view.remote_sel.first(),
+        KeyCode::End => app.templates_view.remote_sel.last(len),
+        KeyCode::Enter | KeyCode::Char('f') => fetch_template(app),
+        _ => {}
+    }
+}
+
+/// List the `.jinja` files in the repo named in the repo field.
+fn list_template_repo(app: &mut App) {
+    let repo = app.templates_view.repo.value.trim().to_string();
+    if repo.is_empty() {
+        app.warn("enter a Hugging Face repo id first");
+        return;
+    }
+    let hub = match hub_client(app) {
+        Ok(h) => h,
+        Err(e) => {
+            app.error(e);
+            return;
+        }
+    };
+    app.templates_view.loading = true;
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let res = hub
+            .info(&repo, "main")
+            .await
+            .map(|info| crate::ui::app::TemplateListing {
+                files: crate::hub::jinja_files(&info.siblings),
+                revision: info.sha.unwrap_or_else(|| "main".into()),
+                repo: info.id,
+            })
+            .map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::TemplateRepo(Box::new(res)));
+    });
+}
+
+/// Download the highlighted repo file into the local store.
+fn fetch_template(app: &mut App) {
+    let Some(file) = app.templates_view.remote.get(app.templates_view.remote_sel.index).cloned()
+    else {
+        return;
+    };
+    let (Some(repo), Some(revision)) =
+        (app.templates_view.remote_repo.clone(), app.templates_view.remote_revision.clone())
+    else {
+        return;
+    };
+    let hub = match hub_client(app) {
+        Ok(h) => h,
+        Err(e) => {
+            app.error(e);
+            return;
+        }
+    };
+    let name = crate::templates::name_for(&repo, &file.path);
+    app.templates_view.loading = true;
+    app.info(format!("fetching {}", file.path));
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let res = async {
+            let jinja =
+                hub.fetch_text(&repo, &revision, &file.path).await.map_err(|e| format!("{e:#}"))?;
+            let meta = crate::templates::TemplateMeta {
+                source: Some(repo.clone()),
+                revision: Some(revision.clone()),
+                repo_path: Some(file.path.clone()),
+                ..Default::default()
+            };
+            crate::templates::save(&name, &jinja, meta)
+                .map(|t| t.name)
+                .map_err(|e| format!("{e:#}"))
+        }
+        .await;
+        let _ = tx.send(Message::TemplateFetched(res));
+    });
+}
+
+/// Ask before writing a template into a checkpoint directory.
+fn apply_template(app: &mut App) {
+    let Some(template) = app.selected_template() else {
+        app.warn("no template selected");
+        return;
+    };
+    let name = template.name.clone();
+    let version = template.meta.version.clone();
+
+    let Some(model) = app.selected_model() else {
+        app.warn("no model selected — pick one on the Models tab first");
+        return;
+    };
+    let model_name = model.name.clone();
+    let model_path = model.path.clone();
+    let targets = crate::templates::targets(model);
+    let status = app.template_status(model);
+
+    let mut body = vec![
+        match &version {
+            Some(v) => format!("Apply '{name}' ({v}) to {model_name}?"),
+            None => format!("Apply '{name}' to {model_name}?"),
+        },
+        String::new(),
+        "FreeToken reads the chat template from the checkpoint, so this writes          chat_template.jinja into:"
+            .into(),
+    ];
+    for t in &targets {
+        body.push(format!("    {}", t.display()));
+    }
+    body.push(String::new());
+    body.push(match &status {
+        crate::templates::Status::BuiltIn => {
+            "The checkpoint's own template is preserved and can be restored with u.".into()
+        }
+        crate::templates::Status::Foreign => {
+            "There is already a chat_template.jinja here that ft-man did not write; it              will be backed up, not lost."
+                .to_string()
+        }
+        crate::templates::Status::Overridden(a) => {
+            format!("This replaces the override '{}'. The checkpoint's original stays backed up.", a.name)
+        }
+    });
+    if app.engine.is_live() {
+        body.push(String::new());
+        body.push(
+            "The engine is running and read its template at load time, so restart it for              this to take effect."
+                .into(),
+        );
+    }
+
+    ask(
+        app,
+        Confirm::new(
+            "Apply chat template",
+            body,
+            ConfirmAction::ApplyTemplate { template: name, model: model_path },
+            false,
+        ),
+    );
+}
+
+/// Write the template, optionally after a real render check.
+fn write_template(app: &mut App, template_name: &str, model_path: &std::path::Path) {
+    let Some(template) = crate::templates::get(template_name) else {
+        app.error(format!("template '{template_name}' is no longer in the store"));
+        return;
+    };
+    let jinja = match template.read() {
+        Ok(j) => j,
+        Err(e) => {
+            app.error(format!("could not read the template: {e:#}"));
+            return;
+        }
+    };
+    let Some(model) = app.models.iter().find(|m| m.path == model_path).cloned() else {
+        app.error("that model is no longer in the library");
+        return;
+    };
+
+    let mut written = Vec::new();
+    for dir in crate::templates::targets(&model) {
+        match crate::templates::apply(&dir, &template, &jinja) {
+            Ok(()) => written.push(dir),
+            Err(e) => {
+                app.error(format!("could not apply to {}: {e:#}", dir.display()));
+                return;
+            }
+        }
+    }
+    app.success(format!(
+        "applied '{}' to {} director{}",
+        template.name,
+        written.len(),
+        if written.len() == 1 { "y" } else { "ies" }
+    ));
+    if app.engine.is_live() {
+        app.warn("restart the engine for the new template to take effect");
+    }
+    // Verify against the real tokenizer now that it is in place.
+    if app.config.templates.preflight {
+        run_preflight(app, &template.name, &written[0], &template.path);
+    }
+}
+
+fn request_revert_template(app: &mut App) {
+    let Some(model) = app.selected_model() else {
+        app.warn("no model selected");
+        return;
+    };
+    let status = app.template_status(model);
+    if !status.is_overridden() {
+        app.warn(format!("{} is not using an ft-man template override", model.name));
+        return;
+    }
+    let name = model.name.clone();
+    let path = model.path.clone();
+    let targets = crate::templates::targets(model);
+    let mut body = vec![
+        format!("Restore {name}'s own chat template?"),
+        String::new(),
+        "This reverses the override in:".into(),
+    ];
+    for t in &targets {
+        body.push(format!("    {}", t.display()));
+    }
+    ask(
+        app,
+        Confirm::new("Restore built-in template", body, ConfirmAction::RevertTemplate(path), false),
+    );
+}
+
+fn revert_template(app: &mut App, model_path: &std::path::Path) {
+    let Some(model) = app.models.iter().find(|m| m.path == model_path).cloned() else {
+        app.error("that model is no longer in the library");
+        return;
+    };
+    let mut reverted = 0usize;
+    for dir in crate::templates::targets(&model) {
+        // The FTW build may never have had one applied; that is not an error.
+        if !crate::templates::status(&dir).is_overridden() {
+            continue;
+        }
+        match crate::templates::revert(&dir) {
+            Ok(()) => reverted += 1,
+            Err(e) => {
+                app.error(format!("could not revert {}: {e:#}", dir.display()));
+                return;
+            }
+        }
+    }
+    app.templates_view.preflight = None;
+    app.success(format!("restored the built-in template in {reverted} director(ies)"));
+    if app.engine.is_live() {
+        app.warn("restart the engine for the change to take effect");
+    }
+}
+
+/// Render the selected template against the selected model's real tokenizer.
+fn verify_template(app: &mut App) {
+    let Some(template) = app.selected_template() else {
+        app.warn("no template selected");
+        return;
+    };
+    let (name, path) = (template.name.clone(), template.path.clone());
+    let Some(model) = app.selected_model() else {
+        app.warn("no model selected — the check needs a tokenizer to render against");
+        return;
+    };
+    let model_path = model.path.clone();
+    run_preflight(app, &name, &model_path, &path);
+}
+
+/// Spawn the render check. It needs FreeToken's Python (for transformers), so it is a
+/// no-op with a clear message when that is not available.
+fn run_preflight(app: &mut App, name: &str, model_dir: &std::path::Path, jinja: &std::path::Path) {
+    let Some(ft) = app.ft.clone() else {
+        app.warn("cannot verify the template without the FreeToken CLI");
+        return;
+    };
+    let Some(argv) = crate::templates::preflight_command(&ft, model_dir, jinja) else {
+        app.warn("cannot verify the template: no Python found beside the FreeToken CLI");
+        return;
+    };
+
+    app.templates_view.checking = true;
+    app.templates_view.preflight = None;
+    app.info(format!("checking that '{name}' renders…"));
+
+    let name = name.to_string();
+    let env = app.config.freetoken.env.clone();
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let mut cmd = tokio::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..]);
+        for (k, v) in &env {
+            cmd.env(k, v);
+        }
+        let result = match cmd.output().await {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                match line.strip_prefix("OK ") {
+                    Some(detail) => Ok(detail.to_string()),
+                    None => {
+                        Err(line.strip_prefix("FAIL ").map(str::to_string).unwrap_or_else(|| {
+                            let err = String::from_utf8_lossy(&out.stderr);
+                            err.lines()
+                                .rev()
+                                .find(|l| !l.trim().is_empty())
+                                .unwrap_or("the check produced no output")
+                                .trim()
+                                .to_string()
+                        }))
+                    }
+                }
+            }
+            Err(e) => Err(format!("could not run the check: {e}")),
+        };
+        let _ = tx.send(Message::TemplatePreflight(name, result));
     });
 }
 

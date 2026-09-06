@@ -186,6 +186,21 @@ fn detail(f: &mut Frame, app: &App, area: Rect) {
     if let Some(fp) = &m.ftw_fingerprint {
         lines.push(t.field("Fingerprint", truncate(fp, w.saturating_sub(18))));
     }
+    let template = app.template_status(m);
+    match &template {
+        crate::templates::Status::BuiltIn => lines.push(t.field("Chat template", "built-in")),
+        crate::templates::Status::Foreign => lines.push(t.field_colored(
+            "Chat template",
+            "custom file, not applied by ft-man",
+            t.warn,
+        )),
+        crate::templates::Status::Overridden(_) => lines.push(t.field_colored(
+            "Chat template",
+            truncate(&template.label(), w.saturating_sub(18)),
+            t.accent,
+        )),
+    }
+
     if let Some(dest) = &m.converted_to {
         lines.push(Line::from(""));
         lines.push(t.field_colored(
