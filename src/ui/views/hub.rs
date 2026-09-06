@@ -201,10 +201,11 @@ fn files(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn target(f: &mut Frame, app: &App, area: Rect) {
     let t = &app.theme;
-    let (title, focused) = match &app.hub_view.compat {
-        Some(r) => (format!("Compatibility — {}", r.verdict().label()), false),
-        None if app.hub_view.checking_compat => ("Compatibility — checking…".to_string(), false),
-        None => ("Download to".to_string(), false),
+    let (title, focused) = match (&app.hub_view.compat, &app.hub_view.compat_error) {
+        (Some(r), _) => (format!("Compatibility — {}", r.verdict().label()), false),
+        _ if app.hub_view.checking_compat => ("Compatibility — checking…".to_string(), false),
+        (None, Some(_)) => ("Compatibility — could not check".to_string(), false),
+        (None, None) => ("Download to".to_string(), false),
     };
     let block = t.pane(title, focused);
     let inner = block.inner(area);
@@ -251,6 +252,19 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
                 t.muted(),
             )));
         }
+        lines.push(Line::from(""));
+    }
+
+    if let Some(err) = &app.hub_view.compat_error {
+        lines.push(Line::from(Span::styled(
+            format!("Could not read this repo's config.json: {err}"),
+            Style::default().fg(t.warn),
+        )));
+        lines.push(Line::from(Span::styled(
+            "A repo with no config.json (a GGUF-only build, for instance) cannot be judged \
+             this way.",
+            t.muted(),
+        )));
         lines.push(Line::from(""));
     }
 

@@ -779,6 +779,7 @@ fn load_repo_files(app: &mut App) {
     app.hub_view.loading_info = true;
     app.hub_view.in_files = true;
     app.hub_view.compat = None;
+    app.hub_view.compat_error = None;
     let tx = app.tx.clone();
     let repo_for_info = repo_id.clone();
     let rev_for_info = revision.clone();

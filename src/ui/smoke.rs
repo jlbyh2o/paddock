@@ -1200,3 +1200,56 @@ async fn an_unreadable_registry_leaves_the_verdict_honest_rather_than_wrong() {
     assert!(screen.contains("unverified"), "say it could not check:\n{screen}");
     assert!(!screen.contains("not in FreeToken"), "and do not claim it is unsupported");
 }
+
+/// Regression: one Enter fires two requests — the repo file listing and the
+/// config.json compatibility check — and either can land first. `HubInfo` used to clear
+/// the verdict unconditionally, so whenever the small config fetch won the race (which
+/// is most of the time) the result was wiped the instant it arrived and the pane showed
+/// nothing at all.
+#[tokio::test]
+async fn a_compatibility_verdict_survives_the_file_listing_landing_after_it() {
+    for compat_first in [true, false] {
+        let mut a = app().await;
+        a.tab = Tab::Hub;
+
+        let report = crate::compat::evaluate(
+            &serde_json::json!({"architectures": ["Qwen3MoeForCausalLM"], "num_experts": 128}),
+            1 << 30,
+            Some(&["Qwen3MoeForCausalLM".to_string()]),
+            crate::compat::Hardware::default(),
+        );
+        let info = Ok(RepoInfo {
+            id: "Qwen/Qwen3.6-35B-A3B".into(),
+            sha: Some("abc123".into()),
+            gated: serde_json::Value::Bool(false),
+            siblings: vec![crate::hub::Sibling { path: "config.json".into(), size: Some(1400) }],
+        });
+
+        if compat_first {
+            a.handle(Message::Compatibility(Box::new(Ok(report))));
+            a.handle(Message::HubInfo(Box::new(info)));
+        } else {
+            a.handle(Message::HubInfo(Box::new(info)));
+            a.handle(Message::Compatibility(Box::new(Ok(report))));
+        }
+
+        assert!(
+            a.hub_view.compat.is_some(),
+            "the verdict must survive regardless of arrival order (compat_first={compat_first})"
+        );
+        let screen = render_text(&mut a, Tab::Hub, 130, 34);
+        assert!(screen.contains("Compatibility"), "compat_first={compat_first}:\n{screen}");
+    }
+}
+
+#[tokio::test]
+async fn a_check_that_could_not_run_says_so_instead_of_looking_unchecked() {
+    let mut a = app().await;
+    a.tab = Tab::Hub;
+    a.handle(Message::Compatibility(Box::new(Err("config.json: HTTP 404 Not Found".into()))));
+
+    assert!(a.hub_view.compat.is_none());
+    let screen = render_text(&mut a, Tab::Hub, 130, 34);
+    assert!(screen.contains("could not check"), "the title should say so:\n{screen}");
+    assert!(screen.contains("404"), "and quote the reason:\n{screen}");
+}

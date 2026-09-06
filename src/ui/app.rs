@@ -174,6 +174,8 @@ pub struct HubView {
     pub target: TextInput,
     /// Compatibility verdict for the repo whose files are listed.
     pub compat: Option<crate::compat::Report>,
+    /// Why the verdict is missing, when the check could not be made.
+    pub compat_error: Option<String>,
     pub checking_compat: bool,
 }
 
@@ -746,7 +748,10 @@ impl App {
                     Ok(info) => {
                         self.hub_view.files =
                             crate::hub::select_files(&info.siblings, &self.config.hub.ignore);
-                        self.hub_view.compat = None;
+                        // Do NOT clear the compatibility verdict here. Both responses
+                        // arrive from one keypress and either can land first; clearing a
+                        // stale verdict belongs where the request is made, which is
+                        // synchronous and cannot race.
                         self.hub_view.file_sel = Selection::default();
                         let target =
                             crate::hub::default_target(&self.config.library.download_dir, &info.id);
@@ -780,10 +785,14 @@ impl App {
             Message::Compatibility(res) => {
                 self.hub_view.checking_compat = false;
                 match *res {
-                    Ok(report) => self.hub_view.compat = Some(report),
+                    Ok(report) => {
+                        self.hub_view.compat = Some(report);
+                        self.hub_view.compat_error = None;
+                    }
                     Err(e) => {
                         self.hub_view.compat = None;
                         tracing::warn!("compatibility check failed: {e}");
+                        self.hub_view.compat_error = Some(e);
                     }
                 }
             }
