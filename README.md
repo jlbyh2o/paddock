@@ -153,7 +153,7 @@ venv = "/home/you/FreeToken/.venv"
 # env = [["CUDA_HOME", "/usr/local/cuda"]]
 
 [server]
-host = "127.0.0.1"     # also the default `ft serve --host`
+host = "0.0.0.0"       # also the default `ft serve --host`
 port = 1919            # also the default `ft serve --port`
 poll_ms = 1000
 timeout_ms = 4000

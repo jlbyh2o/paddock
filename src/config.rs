@@ -78,7 +78,8 @@ pub struct FreetokenCfg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerCfg {
-    /// Host ft-man polls for engine telemetry. Also the default `ft serve --host`.
+    /// Bind address ft-man defaults `ft serve --host` to. Also what ft-man polls for
+    /// engine telemetry, by way of [`poll_host`] — a wildcard bind is not a destination.
     pub host: String,
     /// Port ft-man polls. Also the default `ft serve --port`.
     pub port: u16,
@@ -90,13 +91,23 @@ pub struct ServerCfg {
 
 impl Default for ServerCfg {
     fn default() -> Self {
-        Self { host: "127.0.0.1".into(), port: 1919, poll_ms: 1000, timeout_ms: 4000 }
+        Self { host: "0.0.0.0".into(), port: 1919, poll_ms: 1000, timeout_ms: 4000 }
     }
 }
 
 impl ServerCfg {
     pub fn base_url(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+        format!("http://{}:{}", poll_host(&self.host), self.port)
+    }
+}
+
+/// The address to talk to an engine bound to `host`. A bind address of 0.0.0.0 means
+/// "every interface", which is not itself a usable destination, so reach such an engine
+/// over the loopback it is also listening on.
+pub fn poll_host(host: &str) -> &str {
+    match host.trim() {
+        "0.0.0.0" | "::" | "*" => "127.0.0.1",
+        h => h,
     }
 }
 
