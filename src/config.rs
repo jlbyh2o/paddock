@@ -146,24 +146,39 @@ impl Default for HubCfg {
     }
 }
 
+/// A Hugging Face token plus where it came from. Resolved once at startup and passed
+/// around, so every part of the UI agrees about whether there is a token — the message
+/// on the Hub tab and the client that does the downloading must never disagree.
+#[derive(Debug, Clone)]
+pub struct HubToken {
+    pub value: String,
+    /// Human-readable provenance, e.g. `the HF_TOKEN environment variable`.
+    pub source: &'static str,
+}
+
 impl HubCfg {
-    /// The effective token: `HF_TOKEN`, then `HUGGING_FACE_HUB_TOKEN`, then config, then
-    /// the token the `hf` CLI writes.
-    pub fn effective_token(&self) -> Option<String> {
-        for var in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"] {
+    /// The effective token: `HF_TOKEN`, then `HUGGING_FACE_HUB_TOKEN`, then `hub.token`
+    /// in the config, then the token the `hf` CLI caches.
+    pub fn resolve_token(&self) -> Option<HubToken> {
+        for (var, source) in [
+            ("HF_TOKEN", "the HF_TOKEN environment variable"),
+            ("HUGGING_FACE_HUB_TOKEN", "the HUGGING_FACE_HUB_TOKEN environment variable"),
+        ] {
             if let Ok(v) = std::env::var(var) {
-                if !v.trim().is_empty() {
-                    return Some(v.trim().to_string());
+                let v = v.trim();
+                if !v.is_empty() {
+                    return Some(HubToken { value: v.to_string(), source });
                 }
             }
         }
-        if let Some(t) = self.token.as_ref().filter(|t| !t.trim().is_empty()) {
-            return Some(t.trim().to_string());
+        if let Some(t) = self.token.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            return Some(HubToken { value: t.to_string(), source: "hub.token in the config" });
         }
-        let path = dirs::home_dir()?.join(".cache/huggingface/token");
-        let raw = std::fs::read_to_string(path).ok()?;
-        let t = raw.trim().to_string();
-        (!t.is_empty()).then_some(t)
+        let raw =
+            std::fs::read_to_string(dirs::home_dir()?.join(".cache/huggingface/token")).ok()?;
+        let t = raw.trim();
+        (!t.is_empty())
+            .then(|| HubToken { value: t.to_string(), source: "the token cached by the hf CLI" })
     }
 }
 
@@ -278,6 +293,19 @@ pub fn isolate_paths_for_tests() {
     });
 }
 
+/// Serialize tests that touch the serve state file.
+///
+/// There is exactly one `serve.json` per state root and the root is process-global, so
+/// tests that write it — and `App::new`, which reads it to re-adopt an engine — must not
+/// run concurrently or they clobber each other's records. The guard is held across
+/// awaits while a test drives a child process, so this is tokio's mutex rather than the
+/// standard one.
+#[cfg(test)]
+pub async fn lock_serve_state() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    LOCK.lock().await
+}
+
 /// Write via a temp file in the same directory, then rename — so an interrupted save
 /// never leaves a half-written config behind.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -289,4 +317,67 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     std::fs::write(&tmp, contents).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `resolve_token` reads process-global environment, so these cases run under one
+    /// lock and one test rather than racing each other.
+    #[test]
+    fn hub_token_resolution_prefers_env_then_config() {
+        // Start from a known state: neither variable set.
+        std::env::remove_var("HF_TOKEN");
+        std::env::remove_var("HUGGING_FACE_HUB_TOKEN");
+
+        // A token in the config file is honored. This is the case that regressed: the
+        // Hub view used to consult a freshly defaulted Config, so a configured token
+        // read as "no token found".
+        let mut cfg = HubCfg { token: Some("hf_from_config".into()), ..Default::default() };
+        let resolved = cfg.resolve_token().expect("a configured token must be found");
+        assert_eq!(resolved.value, "hf_from_config");
+        assert_eq!(resolved.source, "hub.token in the config");
+
+        // Whitespace around a pasted token is stripped, not treated as part of it.
+        cfg.token = Some("  hf_padded\n".into());
+        assert_eq!(cfg.resolve_token().unwrap().value, "hf_padded");
+
+        // A blank entry is the same as no entry, and must not shadow the other sources.
+        cfg.token = Some("   ".into());
+        std::env::set_var("HF_TOKEN", "hf_from_env");
+        assert_eq!(cfg.resolve_token().unwrap().value, "hf_from_env");
+
+        // The environment wins over the config file.
+        cfg.token = Some("hf_from_config".into());
+        let resolved = cfg.resolve_token().unwrap();
+        assert_eq!(resolved.value, "hf_from_env");
+        assert_eq!(resolved.source, "the HF_TOKEN environment variable");
+
+        // An empty variable is ignored rather than treated as a token.
+        std::env::set_var("HF_TOKEN", "");
+        assert_eq!(cfg.resolve_token().unwrap().value, "hf_from_config");
+
+        std::env::remove_var("HF_TOKEN");
+    }
+
+    #[test]
+    fn a_config_round_trips_through_toml() {
+        let mut cfg = Config::default();
+        cfg.hub.token = Some("hf_secret".into());
+        cfg.server.port = 1920;
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.hub.token.as_deref(), Some("hf_secret"));
+        assert_eq!(back.server.port, 1920);
+    }
+
+    /// The config rejects unknown keys, so a token written under the wrong section fails
+    /// loudly at startup instead of being silently dropped.
+    #[test]
+    fn a_misplaced_token_key_is_a_hard_error() {
+        let err = toml::from_str::<Config>("[hub]\ntoken = \"x\"\nhf_token = \"y\"\n")
+            .expect_err("an unknown key must not be ignored");
+        assert!(err.to_string().contains("hf_token"), "{err}");
+    }
 }

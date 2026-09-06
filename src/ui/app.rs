@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-use crate::config::{Config, Profile, Profiles};
+use crate::config::{Config, HubToken, Profile, Profiles};
 use crate::ft::proc::{JobKind, JobProgress, JobStatus};
 use crate::ft::{
     api::CacheRebuild, types::*, Client, Engine, EngineEvent, EngineState, Freetoken, Job, JobEvent,
@@ -308,6 +308,8 @@ pub struct App {
     pub series: Series,
     pub gpu_source: &'static str,
 
+    /// The Hugging Face token, resolved once at startup. `None` means none was found.
+    pub hub_token: Option<HubToken>,
     pub models: Vec<Model>,
     pub jobs: Vec<Job>,
     pub downloads: Vec<Download>,
@@ -403,6 +405,7 @@ impl App {
 
         let probe = Probe::new();
         let gpu_source = probe.gpu_source;
+        let config_hub_token = config.hub.resolve_token();
         let endpoint = endpoint_for(&config, &serve);
         let client = Client::new(&endpoint, Duration::from_millis(config.server.timeout_ms))?;
         let (endpoint_tx, _) = tokio::sync::watch::channel(endpoint);
@@ -424,6 +427,7 @@ impl App {
             host: Host::default(),
             series: Series::default(),
             gpu_source,
+            hub_token: config_hub_token,
             models: Vec::new(),
             jobs: Vec::new(),
             downloads: Vec::new(),

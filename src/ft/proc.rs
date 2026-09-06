@@ -844,6 +844,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_engine_starts_captures_output_and_stops() {
         crate::config::isolate_paths_for_tests();
+        let _guard = crate::config::lock_serve_state().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut engine = Engine::new(64, tx);
         let ft = fake_cli("echo hello-from-engine; echo oops >&2; sleep 30");
@@ -889,6 +890,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_engine_that_exits_on_its_own_is_reaped_with_its_status() {
         crate::config::isolate_paths_for_tests();
+        let _guard = crate::config::lock_serve_state().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut engine = Engine::new(16, tx);
 
@@ -905,6 +907,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_second_start_is_refused_while_one_is_running() {
         crate::config::isolate_paths_for_tests();
+        let _guard = crate::config::lock_serve_state().await;
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut engine = Engine::new(16, tx);
         let ft = fake_cli("sleep 30");
@@ -919,6 +922,7 @@ mod tests {
     #[tokio::test]
     async fn a_stale_state_file_is_not_adopted() {
         crate::config::isolate_paths_for_tests();
+        let _guard = crate::config::lock_serve_state().await;
         // PID 2^22 is above the default pid_max on Linux, so nothing can own it.
         ServeState {
             pid: 4_194_303,

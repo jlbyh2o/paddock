@@ -41,7 +41,7 @@ fn search_bar(f: &mut Frame, app: &App, area: Rect) {
     let t = &app.theme;
     let title = if app.hub_view.searching {
         "Search Hugging Face (searching…)".to_string()
-    } else if app.config.hub.effective_token().is_some() {
+    } else if app.hub_token.is_some() {
         "Search Hugging Face (authenticated)".to_string()
     } else {
         "Search Hugging Face".to_string()
@@ -74,13 +74,17 @@ fn results(f: &mut Frame, app: &mut App, area: Rect) {
              gpt-oss-120b, Gemma-4 and DeepSeek-V4-Flash.",
             t.muted(),
         )));
-        if crate::config::Config::default().hub.effective_token().is_none() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "No Hugging Face token found — gated repos will not be downloadable. \
-                 Set HF_TOKEN or hub.token in the config.",
+        lines.push(Line::from(""));
+        match &app.hub_token {
+            Some(token) => lines.push(Line::from(Span::styled(
+                format!("Authenticated with {}.", token.source),
+                Style::default().fg(t.good),
+            ))),
+            None => lines.push(Line::from(Span::styled(
+                "No Hugging Face token found — gated repos will not be downloadable. Set \
+                 hub.token in the config file, or the HF_TOKEN environment variable.",
                 Style::default().fg(t.warn),
-            )));
+            ))),
         }
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         return;

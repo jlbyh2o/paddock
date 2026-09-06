@@ -167,11 +167,14 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
     }
     println!();
 
-    println!(
-        "Hugging Face   {} (token: {})",
-        config.hub.endpoint,
-        if config.hub.effective_token().is_some() { "yes" } else { "no" }
-    );
+    println!("Hugging Face   {}", config.hub.endpoint);
+    match config.hub.resolve_token() {
+        Some(t) => println!("  token        found via {}", t.source),
+        None => println!(
+            "  token        NOT FOUND (checked HF_TOKEN, HUGGING_FACE_HUB_TOKEN, hub.token in \
+             the config, and ~/.cache/huggingface/token)"
+        ),
+    }
 
     let probe = probe::Probe::new();
     println!("GPU source     {}", probe.gpu_source);

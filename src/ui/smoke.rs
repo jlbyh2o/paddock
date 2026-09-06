@@ -26,8 +26,11 @@ use crate::ui::widgets::{Confirm, ConfirmAction, ToastKind};
 /// underflows.
 const SIZES: &[(u16, u16)] = &[(40, 12), (60, 20), (80, 24), (120, 40), (200, 60)];
 
-fn app() -> App {
+async fn app() -> App {
     crate::config::isolate_paths_for_tests();
+    // App::new reads the serve state file to re-adopt a running engine, so it must not
+    // race the supervision tests that write it.
+    let _guard = crate::config::lock_serve_state().await;
     let (tx, _rx) = mpsc::unbounded_channel::<Message>();
     let mut config = Config::default();
     config.ui.theme = "dark".into();
@@ -307,20 +310,20 @@ fn populate(app: &mut App) {
 
 #[tokio::test]
 async fn every_view_renders_when_nothing_is_running() {
-    let mut a = app();
+    let mut a = app().await;
     draw_all(&mut a);
 }
 
 #[tokio::test]
 async fn every_view_renders_with_a_live_engine() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     draw_all(&mut a);
 }
 
 #[tokio::test]
 async fn overlays_and_secondary_panes_render() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
 
     a.show_help = true;
@@ -374,7 +377,7 @@ async fn overlays_and_secondary_panes_render() {
 
 #[tokio::test]
 async fn a_loading_engine_and_an_unreachable_server_both_render() {
-    let mut a = app();
+    let mut a = app().await;
 
     a.telemetry.health = Some(Health {
         status: "loading".into(),
@@ -407,7 +410,7 @@ async fn a_loading_engine_and_an_unreachable_server_both_render() {
 #[tokio::test]
 async fn each_theme_renders() {
     for name in ["dark", "light", "mono", "auto"] {
-        let mut a = app();
+        let mut a = app().await;
         a.theme = crate::ui::theme::Theme::from_name(name);
         populate(&mut a);
         draw_all(&mut a);
@@ -416,7 +419,7 @@ async fn each_theme_renders() {
 
 #[tokio::test]
 async fn selection_stays_in_range_when_lists_shrink() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
 
     // Point every cursor past the end, then redraw: the window logic must clamp rather
@@ -461,7 +464,7 @@ fn press_with(app: &mut App, code: KeyCode, mods: KeyModifiers) {
 #[tokio::test]
 async fn no_key_on_any_tab_panics() {
     for populated in [false, true] {
-        let mut a = app();
+        let mut a = app().await;
         if populated {
             populate(&mut a);
         }
@@ -512,7 +515,7 @@ fn printable_keys() -> Vec<KeyCode> {
 
 #[tokio::test]
 async fn digits_and_tab_switch_views() {
-    let mut a = app();
+    let mut a = app().await;
     press(&mut a, KeyCode::Char('3'));
     assert_eq!(a.tab, Tab::Hub);
     // Tab is local to the Hub view, so it must not move to the next tab there.
@@ -529,7 +532,7 @@ async fn digits_and_tab_switch_views() {
 
 #[tokio::test]
 async fn ctrl_c_quits_immediately_even_with_an_engine_running() {
-    let mut a = app();
+    let mut a = app().await;
     a.engine.state = crate::ft::EngineState::Running;
     press_with(&mut a, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(a.should_quit);
@@ -538,7 +541,7 @@ async fn ctrl_c_quits_immediately_even_with_an_engine_running() {
 
 #[tokio::test]
 async fn quitting_with_a_managed_engine_asks_first() {
-    let mut a = app();
+    let mut a = app().await;
     a.engine.state = crate::ft::EngineState::Running;
     press(&mut a, KeyCode::Char('q'));
     assert!(!a.should_quit, "q must not quit outright while an engine is up");
@@ -557,14 +560,14 @@ async fn quitting_with_a_managed_engine_asks_first() {
 
 #[tokio::test]
 async fn quitting_with_no_engine_needs_no_confirmation() {
-    let mut a = app();
+    let mut a = app().await;
     press(&mut a, KeyCode::Char('q'));
     assert!(a.should_quit);
 }
 
 #[tokio::test]
 async fn typing_in_the_model_filter_narrows_the_list() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Models;
     assert_eq!(a.filtered_models().len(), 2);
@@ -585,7 +588,7 @@ async fn typing_in_the_model_filter_narrows_the_list() {
 
 #[tokio::test]
 async fn editing_a_knob_validates_before_it_commits() {
-    let mut a = app();
+    let mut a = app().await;
     a.tab = Tab::Serve;
     a.serve_view.group = crate::knobs::Group::Memory;
     // memory_ratio is the first knob in that group.
@@ -613,7 +616,7 @@ async fn editing_a_knob_validates_before_it_commits() {
 
 #[tokio::test]
 async fn cycling_a_choice_knob_wraps_through_unset() {
-    let mut a = app();
+    let mut a = app().await;
     a.tab = Tab::Serve;
     a.serve_view.group = crate::knobs::Group::Moe;
     a.serve_view.sel.index = 0; // moe_backend
@@ -629,7 +632,7 @@ async fn cycling_a_choice_knob_wraps_through_unset() {
 
 #[tokio::test]
 async fn a_flag_knob_toggles_on_enter() {
-    let mut a = app();
+    let mut a = app().await;
     a.tab = Tab::Serve;
     a.serve_view.group = crate::knobs::Group::Api;
     let idx = crate::knobs::knobs_in(crate::knobs::Group::Api)
@@ -646,7 +649,7 @@ async fn a_flag_knob_toggles_on_enter() {
 
 #[tokio::test]
 async fn adjusting_a_cache_pool_stages_a_change_and_resets_cleanly() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Cache;
     a.cache_view.sel.index = 0; // MoE
@@ -669,7 +672,7 @@ async fn adjusting_a_cache_pool_stages_a_change_and_resets_cleanly() {
 
 #[tokio::test]
 async fn applying_a_cache_rebuild_asks_first() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Cache;
     a.cache_view.set_pending(Pool::Kv, Some(65_536));
@@ -682,7 +685,7 @@ async fn applying_a_cache_rebuild_asks_first() {
 
 #[tokio::test]
 async fn toggling_hub_files_updates_the_selection() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Hub;
     a.hub_view.in_files = true;
@@ -702,7 +705,7 @@ async fn toggling_hub_files_updates_the_selection() {
 
 #[tokio::test]
 async fn deleting_a_model_is_confirmed_and_names_the_path() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Models;
     a.models_view.sel.index = 0;
@@ -716,7 +719,7 @@ async fn deleting_a_model_is_confirmed_and_names_the_path() {
 
 #[tokio::test]
 async fn selecting_a_model_prefers_its_ftw_build() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Models;
     a.models_view.sel.index = 0; // the HF checkpoint, which has a converted sibling
@@ -728,7 +731,7 @@ async fn selecting_a_model_prefers_its_ftw_build() {
 
 #[tokio::test]
 async fn log_scrolling_detaches_and_reattaches_the_tail() {
-    let mut a = app();
+    let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Logs;
     assert!(a.logs_view.follow);
@@ -744,7 +747,7 @@ async fn log_scrolling_detaches_and_reattaches_the_tail() {
 
 #[tokio::test]
 async fn saving_and_loading_a_profile_round_trips_the_configuration() {
-    let mut a = app();
+    let mut a = app().await;
     a.tab = Tab::Serve;
     a.serve.set("model", "/models/test");
     a.serve.set("moe_backend", "cpu");
@@ -764,4 +767,66 @@ async fn saving_and_loading_a_profile_round_trips_the_configuration() {
     press(&mut a, KeyCode::Char('P'));
     assert_eq!(a.serve.get("moe_backend"), Some("cpu"));
     assert_eq!(a.serve.get("model"), Some("/models/test"));
+}
+
+/// Render one tab and return everything visible, as text. Lets a test assert on what a
+/// user would actually read, which is the only way to catch a view consulting the wrong
+/// state — the data can be perfectly correct and still never reach the screen.
+fn render_text(app: &mut App, tab: Tab, w: u16, h: u16) -> String {
+    app.tab = tab;
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+    terminal.draw(|f| super::draw::draw(f, app)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    (0..h)
+        .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Regression: the Hub view built a fresh `Config::default()` to decide whether a token
+/// existed, so a token set in the user's config file was never seen and the view claimed
+/// there was none — while the download client, reading the real config, was authenticated.
+#[tokio::test]
+async fn the_hub_view_reports_the_token_the_app_actually_holds() {
+    let mut a = app().await;
+    // Set this explicitly: the developer's machine may well have a real token cached at
+    // ~/.cache/huggingface/token, and a test must not depend on whether it does.
+    a.hub_token = None;
+
+    let screen = render_text(&mut a, Tab::Hub, 110, 30);
+    assert!(
+        screen.contains("No Hugging Face token found"),
+        "with no token the view should say so:\n{screen}"
+    );
+
+    a.hub_token = Some(crate::config::HubToken {
+        value: "hf_secret".into(),
+        source: "hub.token in the config",
+    });
+    let screen = render_text(&mut a, Tab::Hub, 110, 30);
+    assert!(
+        !screen.contains("No Hugging Face token found"),
+        "a configured token must not be reported as missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("hub.token in the config"),
+        "the view should name where the token came from:\n{screen}"
+    );
+    // And the secret itself never reaches the screen.
+    assert!(!screen.contains("hf_secret"), "the token value must not be displayed");
+}
+
+/// The client that performs downloads must use the same token the view reports, or the
+/// two can disagree in either direction.
+#[tokio::test]
+async fn the_download_client_uses_the_apps_token() {
+    let mut a = app().await;
+    a.hub_token = None;
+    assert!(!super::input::hub_client_for_tests(&a).unwrap().has_token());
+
+    a.hub_token = Some(crate::config::HubToken {
+        value: "hf_secret".into(),
+        source: "hub.token in the config",
+    });
+    assert!(super::input::hub_client_for_tests(&a).unwrap().has_token());
 }

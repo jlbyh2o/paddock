@@ -567,8 +567,13 @@ fn hub_files_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+#[cfg(test)]
+pub fn hub_client_for_tests(app: &App) -> Result<Hub, String> {
+    hub_client(app)
+}
+
 fn hub_client(app: &App) -> Result<Hub, String> {
-    Hub::new(&app.config.hub.endpoint, app.config.hub.effective_token())
+    Hub::new(&app.config.hub.endpoint, app.hub_token.as_ref().map(|t| t.value.clone()))
         .map_err(|e| format!("{e:#}"))
 }
 
