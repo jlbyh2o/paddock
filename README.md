@@ -250,6 +250,12 @@ populated, with each overlay open — and the input tests press every printable 
 navigation key on every tab. A TUI that panics mid-draw corrupts the terminal, so that is
 the failure mode most worth spending tests on.
 
+## Notes
+
+- [docs/freetoken-compressed-tensors-moe.md](docs/freetoken-compressed-tensors-moe.md) —
+  why FreeToken cannot load compressed-tensors NVFP4 MoE checkpoints today, what was
+  verified, and a sketch of the upstream fix.
+
 ## License
 
 Apache-2.0, matching FreeToken.
