@@ -12,8 +12,13 @@
 # the devel image adds, so it starts from runtime and installs the compiler back. Measured:
 # devel is 3.97 GB compressed, runtime 1.65 GB, and the packages added below cost ~0.2 GB.
 ARG CUDA_IMAGE=nvidia/cuda:13.0.3-devel-ubuntu24.04
-ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:13.0.3-runtime-ubuntu24.04
 ARG RUST_IMAGE=rust:1.98.0-slim-bookworm
+# Vast's official base. Larger than a bare CUDA runtime, but Vast hosts keep these layers
+# cached -- observed pulling near-instantly on real rentals -- so the incremental pull is
+# our layers alone. It also brings the Instance Portal, and Caddy in front of the engine
+# with TLS and authentication, which matters because `ft serve` has none of its own.
+# Its CUDA is 13.0.3 and its /usr/bin/python3 is 3.12, matching what the venv was built for.
+ARG VASTAI_IMAGE=vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-08-28
 
 
 # --- ft-man ------------------------------------------------------------------------
@@ -127,49 +132,42 @@ RUN "$VENV/bin/ft" --version && "$VENV/bin/hf" version
 
 
 # --- final -------------------------------------------------------------------------
-FROM ${CUDA_RUNTIME_IMAGE}
+FROM ${VASTAI_IMAGE}
 
-ENV DEBIAN_FRONTEND=noninteractive
-# cuda-nvcc + cuda-cudart-dev restore the JIT fallback that the runtime base lacks, and g++
-# is the host compiler nvcc drives to build the .cu. ninja, which tvm-ffi orchestrates the
-# build with, is already in the venv from the pip install. Verified: a real FreeToken kernel
-# (freetoken__store_1024_128_1_false) compiles in ~3 s on this set, the same as on devel.
+# No ENTRYPOINT and no sshd here. The base image owns both: its entrypoint bootstraps
+# boot_default.sh, which brings up supervisor, sshd, Caddy and the Instance Portal. Setup
+# hooks in as a supervisor program instead (see docker/supervisor/). docker/entrypoint.sh
+# is kept for running this image outside Vast: `--entrypoint /opt/ft/entrypoint.sh`.
 #
-# No sshd here on purpose. Vast's SSH launch mode injects and runs its own, and images
-# that ship a competing one are a known source of failed logins.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      cuda-nvcc-13-0 cuda-cudart-dev-13-0 g++ \
-      ca-certificates curl git jq less nano procps python3 python3-venv tmux \
- && rm -rf /var/lib/apt/lists/*
+# nvcc and g++ are already present -- this base is cudnn-devel -- so the JIT fallback needs
+# nothing installed. Verified: a real FreeToken kernel compiles on it.
 
 COPY --from=freetoken-builder /opt/freetoken /opt/freetoken
 COPY --from=ft-man-builder /build/target/release/ft-man /usr/local/bin/ft-man
 COPY docker/entrypoint.sh docker/onstart.sh /opt/ft/
-RUN chmod 0755 /opt/ft/entrypoint.sh /opt/ft/onstart.sh
+COPY docker/supervisor/freetoken-setup.conf /etc/supervisor/conf.d/freetoken-setup.conf
+COPY docker/supervisor/freetoken-setup.sh /opt/supervisor-scripts/freetoken-setup.sh
+RUN chmod 0755 /opt/ft/entrypoint.sh /opt/ft/onstart.sh /opt/supervisor-scripts/freetoken-setup.sh \
+ && ln -sf /opt/freetoken/venv/bin/ft /usr/local/bin/ft \
+ && ln -sf /opt/freetoken/venv/bin/hf /usr/local/bin/hf
 
-# VIRTUAL_ENV is the first place ft-man looks for a FreeToken install, so it finds this
-# one with no flags and no config. /opt/freetoken is on its search list too, as a backstop
-# for anything that clears the environment.
-ENV VIRTUAL_ENV=/opt/freetoken/venv \
-    CUDA_HOME=/usr/local/cuda \
-    PATH=/opt/freetoken/venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    PYTHONUNBUFFERED=1
-
-# Everything expensive to rebuild is addressed under /workspace, which is where Vast
-# mounts persistent storage. Nothing is assumed to survive; onstart.sh creates what is
-# missing. HF_TOKEN is deliberately absent — it arrives at run time, never in a layer.
-ENV WORKSPACE=/workspace \
-    HF_HOME=/workspace/hf \
+# ft and hf are symlinked onto PATH rather than prepending the venv's bin directory, which
+# would shadow the base image's own `python` and confuse its tooling. VIRTUAL_ENV is left
+# alone for the same reason: ft-man's search list already contains /opt/freetoken/venv, so
+# it resolves the engine with no environment help and no interference with /venv/main.
+ENV HF_HOME=/workspace/hf \
     XDG_CACHE_HOME=/workspace/cache \
     FT_MAN_STATE_DIR=/workspace/state/ft-man \
     FT_MAN_CONFIG_DIR=/workspace/config/ft-man
 
-# Vast maps EXPOSEd ports to port requests automatically. 1919 is the engine's default.
-EXPOSE 1919
+# The engine itself is NOT exposed. It binds loopback inside the container so only Caddy can
+# reach it, and Caddy publishes it on 18919 with the portal's TLS and authentication. Add
+#     localhost:18919:1919:/:FreeToken API
+# to the instance's PORTAL_CONFIG to make it appear in the Instance Portal. PORTAL_CONFIG is
+# deliberately not set here: it comes from the template, and baking a value would silently
+# drop the base image's own entries.
+EXPOSE 18919
 
 LABEL org.opencontainers.image.title="freetoken-ftman" \
       org.opencontainers.image.description="FreeToken MoE serving engine with the ft-man terminal UI, CUDA 13" \
       org.opencontainers.image.licenses="Apache-2.0"
-
-ENTRYPOINT ["/opt/ft/entrypoint.sh"]
-CMD ["sleep", "infinity"]

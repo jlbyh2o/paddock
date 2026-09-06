@@ -92,6 +92,6 @@ On Vast, rent a host with driver r580+ (CUDA 13), then:
   image        ${REMOTE}:${TAG}
   launch mode  SSH
   on-start     bash /opt/ft/onstart.sh
-  ports        -p 1919:1919
+  ports        none - ft serve has NO auth; reach it with ssh -L 1919:127.0.0.1:1919
   env          HF_TOKEN=<token>   (only for gated or private repos)
 MSG

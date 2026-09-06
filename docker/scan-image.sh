@@ -42,7 +42,40 @@ STRONG="$IDENTITY|$CREDENTIAL"
 # Weak: real signals in files we wrote, noise everywhere else.
 WEAK='jeremy|bywater|gmail\.com|github\.com/jlbyh2o'
 # Paths this build authored. Everything else in the image came from upstream.
-AUTHORED='/opt/ft /usr/local/bin/ft-man /etc/profile.d /opt/freetoken/venv/lib/python3.12/site-packages/freetoken'
+AUTHORED='/opt/ft /usr/local/bin/ft-man /etc/profile.d /opt/supervisor-scripts/freetoken-setup.sh /etc/supervisor/conf.d/freetoken-setup.conf /opt/freetoken/venv/lib/python3.12/site-packages/freetoken'
+
+# The base image is not ours. Building on vastai/base-image means inheriting an empty
+# /root/.ssh (Vast fills it at boot), git checkouts of vast-cli and nvm, and CPython's stdlib
+# test certificates -- all of which trip credential and provenance checks and none of which
+# this build introduced. So those two passes are DIFFERENTIAL: the same check runs against the
+# base and only new findings fail. An allowlist would have to be re-audited every time Vast
+# changes their image; a diff cannot rot.
+#
+# Identity scanning is never differential. A username or host path is fatal wherever it is.
+if [ -z "${BASE_IMAGE:-}" ]; then
+  _dockerfile="$(dirname "$0")/Dockerfile"
+  [ -f "$_dockerfile" ] && BASE_IMAGE="$(sed -n 's/^ARG VASTAI_IMAGE=//p' "$_dockerfile" | head -1)"
+fi
+BASE_AVAILABLE=0
+if [ -n "${BASE_IMAGE:-}" ] && docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+  BASE_AVAILABLE=1
+fi
+
+# Run a check inside an image and return a sorted, unique path list.
+in_image() { docker run --rm --entrypoint /bin/bash "$1" -c "$2" 2>/dev/null | sort -u; }
+
+# Findings from $IMAGE minus findings from the base. Fails closed: with no base image to
+# compare against, everything is reported rather than silently passed.
+new_findings() {
+  local check="$1" ours theirs
+  ours="$(in_image "$IMAGE" "$check")"
+  if [ "$BASE_AVAILABLE" = 1 ]; then
+    theirs="$(in_image "$BASE_IMAGE" "$check")"
+    comm -23 <(printf '%s\n' "$ours") <(printf '%s\n' "$theirs")
+  else
+    printf '%s\n' "$ours"
+  fi
+}
 
 printf '\nScanning %s\n\n' "$IMAGE"
 
@@ -89,12 +122,13 @@ fi
 
 # Credentials, everywhere the build could have written. site-packages is excluded for the
 # reason given above; freetoken, the one package this build patches, is added back.
-cred_hits="$(docker run --rm --entrypoint /bin/bash "$IMAGE" -c "
+CRED_CHECK="
   grep -rlIE '$CREDENTIAL' / \
     --exclude-dir=site-packages --exclude-dir=dist-packages \
-    --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev 2>/dev/null | head -20
-  grep -rlIE '$CREDENTIAL' /opt/freetoken/venv/lib/python3.12/site-packages/freetoken 2>/dev/null | head -20
-  true")"
+    --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev 2>/dev/null
+  grep -rlIE '$CREDENTIAL' /opt/freetoken/venv/lib/python3.12/site-packages/freetoken 2>/dev/null
+  true"
+cred_hits="$(new_findings "$CRED_CHECK" | grep -v '^$' | head -20)"
 if [ -n "$cred_hits" ]; then
   bad "credential material outside third-party packages:"
   printf '%s\n' "$cred_hits" | sed 's/^/      /'
@@ -114,19 +148,27 @@ fi
 
 # --- 4. structural -----------------------------------------------------------------
 # Things whose mere presence is the problem, regardless of contents.
-strays="$(docker run --rm --entrypoint /bin/bash "$IMAGE" -c '
-  for p in /root/.ssh /root/.netrc /root/.docker/config.json /root/.gitconfig \
+STRAY_CHECK='
+  for p in /root/.netrc /root/.docker/config.json /root/.gitconfig \
            /root/.cache/huggingface/token /workspace/hf/token /opt/freetoken/.git; do
     [ -e "$p" ] && echo "$p"
   done
-  find / -maxdepth 6 -name .git -type d 2>/dev/null | head -5
-  find / -maxdepth 6 -name authorized_keys 2>/dev/null | head -5
-  true')"
+  # A non-empty /root/.ssh is a finding; the base ships it empty for Vast to fill at boot.
+  find /root/.ssh -mindepth 1 2>/dev/null
+  find / -maxdepth 6 -name .git -type d 2>/dev/null
+  find / -maxdepth 6 -name authorized_keys 2>/dev/null
+  true'
+strays="$(new_findings "$STRAY_CHECK" | grep -v '^$' | head -20)"
 if [ -n "$strays" ]; then
   bad "credential or provenance files are present in the image:"
   printf '%s\n' "$strays" | sed 's/^/      /'
 else
   ok "no stray credential, ssh or git-provenance files"
+fi
+if [ "$BASE_AVAILABLE" = 1 ]; then
+  note "credential and provenance checks were differential against $BASE_IMAGE"
+else
+  note "no base image available to diff against - those checks ran absolute (fail-closed)"
 fi
 
 # --- verdict -----------------------------------------------------------------------

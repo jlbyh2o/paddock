@@ -7,7 +7,7 @@ a rented NVIDIA GPU.
 
 | | |
 |---|---|
-| Base | builders on `nvidia/cuda:13.0.3-devel-ubuntu24.04`; final stage on `13.0.3-runtime-ubuntu24.04` plus `cuda-nvcc`, `cuda-cudart-dev` and `g++`, which restores the JIT fallback at a fraction of devel's size |
+| Base | builders on `nvidia/cuda:13.0.3-devel-ubuntu24.04`; final stage on `vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-08-28`, which already carries `nvcc` and `g++` for the JIT fallback |
 | FreeToken | upstream `FlashML-org/FreeToken` at `af71ba4`, plus `freetoken-nvfp4-moe.patch` |
 | ft-man | built from this repository's working tree |
 | Python | 3.12 (the base image's), venv at `/opt/freetoken/venv` |
@@ -50,17 +50,46 @@ and the failure arrives at weight load rather than at boot. Filter offers on CUD
 | Field | Value |
 |---|---|
 | Image | `<account>/freetoken-ftman:latest` |
-| Launch mode | SSH |
-| On-start script | `bash /opt/ft/onstart.sh` |
-| Ports | `-p 1919:1919` |
+| Launch mode | **Entrypoint** |
+| On-start script | not needed — see below |
+| `PORTAL_CONFIG` | append `localhost:18919:1919:/:FreeToken API` to the template's value |
+| Ports | **do not map 1919** — see below |
 | Environment | `HF_TOKEN=<token>`, only for gated or private repos |
 
-The on-start line is not optional in SSH mode. Vast's SSH and Jupyter launch modes replace
-the image's entrypoint with their own startup, so `entrypoint.sh` never runs and the setup
-it would have done has to be requested explicitly.
+**Use Entrypoint launch mode.** The base image's entrypoint runs `boot_default.sh`, which
+walks `/etc/vast_boot.d/` — propagating your SSH keys, exporting the instance environment,
+generating a TLS certificate, and finally launching supervisor. Supervisor is what starts
+Caddy, the Instance Portal, and this image's own `freetoken-setup` program. SSH and Jupyter
+launch modes replace that entrypoint, which would leave the portal and the setup unstarted.
+If you use one anyway, put `bash /opt/ft/onstart.sh` in the on-start field to get at least
+the workspace layout and the ft-man config.
 
-This image deliberately ships **no sshd**. Vast injects and runs its own, and an image
-that competes with it is a known cause of instances you cannot log into.
+### Do not expose port 1919
+
+`ft serve` has no authentication. There is no `--api-key` flag, and the OpenAI, Anthropic
+and Responses routes are registered with no auth dependency — the only `API_KEY` strings in
+FreeToken are in `launch.py`, for pointing outbound clients at the engine. Mapping 1919 on
+a Vast instance therefore publishes an unauthenticated inference endpoint on a public IP:
+anyone who finds it can spend your rented GPU, read what you send it, and generate whatever
+they like on your bill.
+
+Reach the engine over an SSH tunnel instead, which needs no port mapping at all:
+
+```bash
+ssh -N -L 1919:127.0.0.1:1919 <vast-ssh-target>
+# then, locally
+curl http://127.0.0.1:1919/v1/models
+```
+
+The engine still binds `0.0.0.0` inside the container so the tunnel and ft-man's own polling
+both reach it; what changes is that Vast never publishes the port. On this base you need not tunnel at all: Caddy already fronts the engine. Add
+`localhost:18919:1919:/:FreeToken API` to the instance's `PORTAL_CONFIG` and the API appears
+in the Instance Portal on 18919, behind the portal's TLS and authentication. `PORTAL_CONFIG`
+is deliberately not baked into the image — it comes from the template, and a baked value
+would silently drop the base image's own entries.
+
+This image ships **no sshd of its own** — and neither does the base, which leaves Vast to
+inject one as usual.
 
 Once you are in:
 
@@ -69,16 +98,18 @@ ft-man --doctor     # what it found: the ft binary, the GPU, your checkpoints
 ft-man              # the UI
 ```
 
-### Why the on-start script exists
+### What the setup program does
 
-Beyond creating directories, it bridges the instance environment into your login shell.
-Vast's documentation is explicit that variables you set at instance creation are **not**
-visible inside SSH, tmux or Jupyter sessions. `HF_TOKEN` arrives exactly that way, so
-without the bridge `ft-man` reports no token on an instance you gave one to, and gated
-downloads fail with a 401 and no obvious cause.
+It creates the `/workspace` layout and writes the ft-man config, then bridges the instance
+environment into login shells via `/etc/profile.d/10-freetoken.sh`.
 
-It writes the token to `/etc/profile.d/10-freetoken.sh` inside the running container. That
-is the filesystem of a machine you rented, never a layer of the published image.
+On this base that bridge is belt-and-braces: `10-prep-env.sh` already writes the instance
+environment to `/etc/environment` and `45-user-write-bashrc.sh` sources it from `.bashrc`,
+so `HF_TOKEN` reaches your shell without help. The bridge still earns its keep when the
+image runs outside Vast, where none of that boot sequence exists.
+
+Either way the token is written only to the filesystem of a machine you rented, never into
+a layer of the published image.
 
 ## Weights, on destroy-after-use rentals
 
@@ -119,6 +150,23 @@ mirrored, and cached forever.
    `.git` directories, `authorized_keys`, `.netrc`, `.docker/config.json` and cached
    HF tokens.
 
+Passes 3 and 4 are **differential**: the same checks run against the base image and only
+new findings fail. Set `BASE_IMAGE` to override the base, which is otherwise read from the
+`ARG VASTAI_IMAGE=` line in the Dockerfile. With no base image available locally the checks
+run absolute, which fails closed rather than passing silently.
+
+### Why differential
+
+Building on `vastai/base-image` means inheriting things that look exactly like findings and
+are not: an empty `/root/.ssh` that Vast fills at boot, git checkouts of `vast-cli` and
+`nvm`, and CPython's stdlib test certificates under `/usr/lib/python3.12/test/certdata/`.
+None came from this build. An allowlist would have to be re-audited every time Vast changes
+their image; a diff against the actual base cannot rot.
+
+Detection is unaffected. Verified against a fixture built *on* the real base with a private
+key, an authorized_keys, a token file and a host path planted in it: all five checks still
+fail. A non-empty `/root/.ssh` is a finding precisely because the base ships it empty.
+
 ### Why site-packages is excluded from the credential pass
 
 Upstream packages legitimately ship credential-shaped constants. `cryptography`'s SSH
@@ -153,32 +201,33 @@ On an RTX 4060 Laptop (sm_89, driver 610.57.04), inside the built image:
 | NVFP4 patch (own test suite) | `tests/models/test_qwen3_5_moe_config.py` — 13 passed, run against the patched tree in the builder stage |
 | Env bridge | `HF_TOKEN` recovered in login *and* interactive shells with it absent from the child environment |
 | Scan | clean |
-| Size | 18.4 GB on disk, 6.38 GB compressed |
+| Size | 30.9 GB on disk, 10.14 GB compressed total — **4.46 GB incremental** over the cached base |
 
 Not verified: an actual model load or serve. The local card holds 8 GB, and the target
 checkpoint is 23 GiB, so the first real serve necessarily happens on rented hardware.
 
 ## Known follow-ups
 
-- **Size: done, twice.** 32.91 GB / 9.98 GB compressed at first build, now **18.4 GB /
-  6.38 GB compressed** — a 36% cut in what a Vast host pulls. Two removals, both verified
-  against a real GPU rather than assumed:
+- **Size.** 30.9 GB on disk, 10.14 GB compressed in total, of which 5.68 GB is
+  `vastai/base-image` — leaving **4.46 GB that actually pulls** on a host that already has
+  the base cached, which Vast hosts reliably do.
 
-  | Cut | On disk | Compressed |
-  |---|---|---|
-  | flashinfer cubins (Blackwell datacenter only) | −8.2 GB | −1.52 GB |
-  | devel base → runtime + `cuda-nvcc` | −6.3 GB | −2.08 GB |
+  | Stage | On disk | Compressed | Effective pull |
+  |---|---|---|---|
+  | First build | 32.91 GB | 9.98 GB | 9.98 GB |
+  | Cubins pruned | 24.7 GB | 8.46 GB | 8.46 GB |
+  | Runtime base | 18.4 GB | 6.38 GB | 6.38 GB |
+  | Rebased on vastai | 30.9 GB | 10.14 GB | **4.46 GB** |
 
-  The cubins were exclusively sm100a/sm103a/sm107a/sm100f. Nothing in them served sm_89,
-  sm_120, sm_80 or sm_90a — those come from `flashinfer_jit_cache`, whose 906 `.so` files
-  are fat binaries carrying all six architectures. The cost is the TensorRT-LLM fast paths
-  on B200-class hardware, where flashinfer JITs instead; `--build-arg FLASHINFER_CUBINS=keep`
-  restores them.
+  The rebase makes the image larger and the pull smaller, which is only true because the
+  base is cached. Standalone it would be the worst of the four.
 
-  The devel base carried 2.56 GB of static `.a` libraries nothing links against, plus
-  compute-sanitizer and full headers. A real FreeToken kernel
-  (`freetoken__store_1024_128_1_false`) compiles in ~3 s on either base, so the JIT
-  fallback survived the swap intact.
+  Two cuts still hold inside it. flashinfer's cubins were exclusively sm100a/sm103a/sm107a/
+  sm100f — Blackwell datacenter — while sm_89, sm_120, sm_80 and sm_90a all come from
+  `flashinfer_jit_cache`'s fat binaries; `--build-arg FLASHINFER_CUBINS=keep` restores them
+  for B200 work. The runtime-base experiment is no longer in the tree, but it established
+  that FreeToken's JIT needs only `nvcc`, `cuda-cudart-dev` and `g++` — worth remembering if
+  Vast ever ships a non-devel variant.
 
 - **What is left, and why it was not taken.** `nccl` (209 MB), `cusparselt` (223 MB) and
   `nvshmem` (78 MB) are multi-GPU and sparse libraries that single-GPU MoE inference

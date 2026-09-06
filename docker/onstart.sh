@@ -66,9 +66,11 @@ roots = ["/workspace/models"]
 download_dir = "/workspace/models"
 
 [server]
-# Bind every interface so a mapped port reaches the engine from outside the container.
-# ft-man polls a wildcard bind over loopback, so this stays correct for telemetry.
-host = "0.0.0.0"
+# Loopback, deliberately. `ft serve` has no authentication of any kind, so a wildcard bind
+# plus a mapped port would publish an open inference endpoint on a public IP. Caddy reaches
+# it here and republishes it with the Instance Portal's TLS and auth; ft-man polls it here
+# too. Outside Vast, reach it with `ssh -N -L 1919:127.0.0.1:1919 <host>`.
+host = "127.0.0.1"
 port = 1919
 TOML
   log "wrote $CFG"
