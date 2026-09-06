@@ -1,0 +1,23 @@
+# Allowlist, not a denylist.
+#
+# Everything is excluded first and only what the image build needs is added back, so a
+# new file in this repo cannot leak into a public image by being forgotten here. That
+# matters more than usual: vendor-freetoken/ carries a .git pointing at a personal fork,
+# docs/ contains host paths, and target/ is 40 GB of build artifacts.
+*
+
+!Cargo.toml
+!Cargo.lock
+!src
+!docker
+
+# Re-excluded even inside the allowlist above; last match wins.
+**/.git
+**/.env
+**/*.pem
+**/*.key
+**/id_ecdsa*
+**/id_ed25519*
+**/id_rsa*
+**/.netrc
+**/*.log
