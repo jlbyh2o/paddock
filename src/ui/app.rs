@@ -128,6 +128,10 @@ pub enum Message {
         entries: Vec<RequestRecord>,
         next_cursor: u64,
     },
+    /// FreeToken's model registry, read once at startup.
+    Architectures(Result<Vec<String>, String>),
+    /// A candidate repo's `config.json`, evaluated for compatibility.
+    Compatibility(Box<Result<crate::compat::Report, String>>),
     /// The `.jinja` listing for a template repo.
     TemplateRepo(Box<Result<TemplateListing, String>>),
     /// A template was fetched and saved into the store.
@@ -168,6 +172,9 @@ pub struct HubView {
     pub revision: String,
     pub loading_info: bool,
     pub target: TextInput,
+    /// Compatibility verdict for the repo whose files are listed.
+    pub compat: Option<crate::compat::Report>,
+    pub checking_compat: bool,
 }
 
 pub struct ServeView {
@@ -362,6 +369,8 @@ pub struct App {
     pub hub_token: Option<HubToken>,
     /// The checkpoint whose conversion preflight is in flight, if any.
     pub convert_checking: Option<PathBuf>,
+    /// The architectures FreeToken can load; `None` until the registry has been read.
+    pub supported_archs: Option<Vec<String>>,
     pub models: Vec<Model>,
     pub jobs: Vec<Job>,
     pub downloads: Vec<Download>,
@@ -482,6 +491,7 @@ impl App {
             gpu_source,
             hub_token: config_hub_token,
             convert_checking: None,
+            supported_archs: None,
             models: Vec::new(),
             jobs: Vec::new(),
             downloads: Vec::new(),
@@ -736,6 +746,7 @@ impl App {
                     Ok(info) => {
                         self.hub_view.files =
                             crate::hub::select_files(&info.siblings, &self.config.hub.ignore);
+                        self.hub_view.compat = None;
                         self.hub_view.file_sel = Selection::default();
                         let target =
                             crate::hub::default_target(&self.config.library.download_dir, &info.id);
@@ -758,6 +769,22 @@ impl App {
                 }
                 if following {
                     crate::ui::views::requests::follow_tail(self);
+                }
+            }
+            Message::Architectures(res) => match res {
+                Ok(names) => self.supported_archs = Some(names),
+                // Not fatal: the Hub check then says support is unverified rather than
+                // inventing a verdict.
+                Err(e) => tracing::warn!("could not read FreeToken's model registry: {e}"),
+            },
+            Message::Compatibility(res) => {
+                self.hub_view.checking_compat = false;
+                match *res {
+                    Ok(report) => self.hub_view.compat = Some(report),
+                    Err(e) => {
+                        self.hub_view.compat = None;
+                        tracing::warn!("compatibility check failed: {e}");
+                    }
                 }
             }
             Message::TemplateRepo(res) => {

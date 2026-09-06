@@ -76,7 +76,7 @@ $EDITOR ~/.config/ft-man/config.toml
 |---|---|
 | **Dashboard** | Engine state, throughput, cache pools, GPU and host telemetry. The screen you leave open. |
 | **Models** | Your local checkpoint library. Recognizes HF, FTW and GGUF, pairs a checkpoint with its FTW build, and says what to do with each. |
-| **Hub** | Search Hugging Face, pick files, download. Resumable, parallel, and it skips duplicate weight formats by default. |
+| **Hub** | Search Hugging Face, check a repo against FreeToken *before* downloading it, pick files, download. Resumable and parallel. |
 | **Templates** | Override a checkpoint's chat template with one fetched from a Hugging Face repo, and put the original back. |
 | **Serve** | Every `ft serve` flag, grouped, with its domain and help text. Save configurations as named profiles. |
 | **Cache** | Resize the MoE, KV, GDN and SWA pools on the running engine, with the VRAM cost of each change shown before you apply it. |
@@ -102,6 +102,14 @@ totals.
 **The knob table is the documentation.** Every flag carries its type, range, default,
 help text and mutual exclusions in one schema. Setting `--moe-cache-size` clears
 `--moe-cache-rate` for you, because the engine would reject the pair.
+
+**It says whether a repo can run here before you download it.** Pressing Enter on a Hub
+result fetches only `config.json` — one small request — and reports a verdict. The
+architecture check is definitive: FreeToken's own registry is queried at startup, so it is
+never a stale list baked into ft-man. On top of that it catches the multimodal
+quantization split described below, and weighs the download against this machine's VRAM,
+host RAM and free disk. A clean result is not a promise the model will serve; it means
+none of the known walls are in the way.
 
 **A doomed conversion fails in seconds, not minutes.** Before running `ft checkpoint`,
 ft-man resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
@@ -231,7 +239,7 @@ OpenAI and Anthropic APIs.
 ## Development
 
 ```bash
-cargo test        # 116 tests, including render and input sweeps across five terminal sizes
+cargo test        # 129 tests, including render and input sweeps across five terminal sizes
 cargo clippy --all-targets
 cargo fmt
 ```

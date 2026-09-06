@@ -5,6 +5,7 @@
 //! and watch throughput, requests and logs — all from one screen on the machine the
 //! engine runs on.
 
+mod compat;
 mod config;
 mod ft;
 mod hub;
@@ -243,6 +244,7 @@ async fn run(cli: Cli, config: Config, ft: Result<ft::Freetoken, String>) -> Res
 
     spawn_telemetry(&app, tx.clone());
     spawn_hardware(tx.clone());
+    spawn_architectures(&app, tx.clone());
 
     let mut terminal = ratatui::try_init().context("initializing the terminal")?;
     let result = event_loop(&mut terminal, &mut app, &mut rx).await;
@@ -370,6 +372,26 @@ fn spawn_telemetry(app: &App, tx: mpsc::UnboundedSender<Message>) {
                 break;
             }
         }
+    });
+}
+
+/// Read FreeToken's model registry once, so the Hub can say definitively whether an
+/// architecture is supported instead of guessing from a list baked into ft-man.
+fn spawn_architectures(app: &App, tx: mpsc::UnboundedSender<Message>) {
+    let Some(ft) = app.ft.clone() else { return };
+    let Some(argv) = ft::preflight::architectures_command(&ft) else { return };
+    let env = app.config.freetoken.env.clone();
+    tokio::spawn(async move {
+        let mut cmd = tokio::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..]);
+        for (k, v) in &env {
+            cmd.env(k, v);
+        }
+        let result = match cmd.output().await {
+            Ok(out) => ft::preflight::parse_architectures(&String::from_utf8_lossy(&out.stdout)),
+            Err(e) => Err(e.to_string()),
+        };
+        let _ = tx.send(Message::Architectures(result));
     });
 }
 

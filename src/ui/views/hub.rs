@@ -6,7 +6,7 @@
 //! and only one of them is wanted.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
@@ -31,7 +31,7 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
 
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(4)])
+        .constraints([Constraint::Min(6), Constraint::Length(9)])
         .split(cols[1]);
     files(f, app, right[0]);
     target(f, app, right[1]);
@@ -201,24 +201,78 @@ fn files(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn target(f: &mut Frame, app: &App, area: Rect) {
     let t = &app.theme;
-    let block = t.pane("Download to", false);
+    let (title, focused) = match &app.hub_view.compat {
+        Some(r) => (format!("Compatibility — {}", r.verdict().label()), false),
+        None if app.hub_view.checking_compat => ("Compatibility — checking…".to_string(), false),
+        None => ("Download to".to_string(), false),
+    };
+    let block = t.pane(title, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mut lines = vec![app.hub_view.target.line(t, false, "—")];
+    let w = inner.width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    if let Some(report) = &app.hub_view.compat {
+        let color = match report.verdict() {
+            crate::compat::Verdict::Supported => t.good,
+            crate::compat::Verdict::Caution => t.warn,
+            crate::compat::Verdict::Unsupported => t.bad,
+            crate::compat::Verdict::Unknown => t.dim,
+        };
+        // An explicit separator, not padding: "not supported, with caveats" is longer
+        // than any sensible column width and would otherwise run into the summary.
+        let label = report.verdict().label();
+        let head = vec![
+            Span::styled(
+                label.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ·  ", t.muted()),
+            Span::styled(truncate(&report.summary(), w.saturating_sub(label.len() + 5)), t.muted()),
+        ];
+        lines.push(Line::from(head));
+
+        for (level, note) in report.notes.iter().take(3) {
+            let (mark, color) = match level {
+                crate::compat::Level::Blocker => ("✗ ", t.bad),
+                crate::compat::Level::Caution => ("! ", t.warn),
+                crate::compat::Level::Info => ("· ", t.dim),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(mark, Style::default().fg(color)),
+                Span::styled(note.clone(), Style::default().fg(color)),
+            ]));
+        }
+        if report.notes.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Nothing known stands in the way. Judged from config.json only — a clean \
+                 result is not a guarantee it will serve.",
+                t.muted(),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
     if let Some(info) = &app.hub_view.info {
         let mut meta = format!("{} @ {}", info.id, app.hub_view.revision);
         if let Some(sha) = &info.sha {
             meta.push_str(&format!("  ({})", sha.chars().take(12).collect::<String>()));
         }
-        if info.is_gated() {
-            meta.push_str("  · gated");
-        }
-        lines.push(Line::from(Span::styled(meta, t.muted())));
+        lines.push(Line::from(vec![
+            Span::styled(truncate(&meta, w), t.muted()),
+            Span::styled(
+                if info.is_gated() { "  · gated" } else { "" },
+                Style::default().fg(t.warn),
+            ),
+        ]));
     }
+
+    lines.push(app.hub_view.target.line(t, false, "—"));
+
     let selected: u64 = app.hub_view.files.iter().filter(|x| x.wanted).map(|x| x.size).sum();
     if selected > 0 {
-        let disk = disk_free(&app.hub_view.target.value);
+        let disk = crate::hub::disk_free(&app.hub_view.target.value);
         let mut spans = vec![Span::styled(format!("{} to download", bytes(selected)), t.muted())];
         if let Some(free_disk) = disk {
             let color = if selected > free_disk { t.bad } else { t.dim };
@@ -228,28 +282,12 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
             ));
         }
         lines.push(Line::from(spans));
-    } else {
+    } else if app.hub_view.compat.is_none() {
         lines.push(Line::from(Span::styled(
             "Select files with space, then press d to download.",
             t.muted(),
         )));
     }
 
-    f.render_widget(Paragraph::new(lines), inner);
-}
-
-/// Free bytes on the filesystem holding `path`, walking up to the nearest existing
-/// ancestor so a not-yet-created target directory still reports something useful.
-fn disk_free(path: &str) -> Option<u64> {
-    let mut p = std::path::Path::new(path);
-    loop {
-        if p.exists() {
-            break;
-        }
-        p = p.parent()?;
-    }
-    let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).ok()?;
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    (unsafe { libc::statvfs(c.as_ptr(), &mut stat) } == 0)
-        .then(|| stat.f_bavail as u64 * stat.f_frsize as u64)
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }

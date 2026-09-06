@@ -76,6 +76,12 @@ pub fn convert_command(ft: &Freetoken, model_dir: &Path, moe_backend: &str) -> O
     command(ft, CONVERT_SCRIPT, &[model_dir.display().to_string(), moe_backend.to_string()])
 }
 
+/// List the model architectures FreeToken can load. Needs no checkpoint at all — the
+/// registry is a static map keyed by architecture name.
+pub fn architectures_command(ft: &Freetoken) -> Option<Vec<String>> {
+    command(ft, ARCHITECTURES_SCRIPT, &[])
+}
+
 /// Render a candidate chat template against a checkpoint's real tokenizer.
 pub fn template_command(ft: &Freetoken, model_dir: &Path, jinja: &Path) -> Option<Vec<String>> {
     command(ft, TEMPLATE_SCRIPT, &[model_dir.display().to_string(), jinja.display().to_string()])
@@ -179,6 +185,36 @@ print(line)
 sys.exit(1 if line.startswith("FAIL") else 0)
 "#;
 
+/// Prints FreeToken's registered architectures, one per line, after an `OK` count.
+const ARCHITECTURES_SCRIPT: &str = r#"
+import sys
+try:
+    from freetoken.models.register import _MODEL_REGISTRY as registry
+    names = sorted(registry)
+    if not names:
+        raise RuntimeError("the model registry is empty")
+    print("OK %d" % len(names))
+    for name in names:
+        print(name)
+except Exception as exc:
+    print("FAIL %s: %s" % (type(exc).__name__, exc))
+    sys.exit(1)
+"#;
+
+/// Parse the architecture listing. The verdict line comes first, then one name per line.
+pub fn parse_architectures(stdout: &str) -> Result<Vec<String>, String> {
+    let mut lines = stdout.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.next().unwrap_or("");
+    if !first.starts_with("OK ") {
+        return Err(Outcome::parse(first).detail().to_string());
+    }
+    let names: Vec<String> = lines.map(str::to_string).collect();
+    if names.is_empty() {
+        return Err("the registry listing was empty".into());
+    }
+    Ok(names)
+}
+
 /// Renders a conversation through a candidate template and prints its verdict.
 ///
 /// The shapes are tried in order of coverage because templates disagree about tool
@@ -278,6 +314,18 @@ mod tests {
         assert!(!Outcome::Warn("x".into()).is_clean());
         assert!(!Outcome::Warn("x".into()).is_fail());
         assert!(Outcome::Fail("x".into()).is_fail());
+    }
+
+    #[test]
+    fn the_architecture_listing_is_parsed_or_reported() {
+        let out = "OK 3\nGptOssForCausalLM\nLlamaForCausalLM\nQwen3MoeForCausalLM\n";
+        assert_eq!(
+            parse_architectures(out).unwrap(),
+            vec!["GptOssForCausalLM", "LlamaForCausalLM", "Qwen3MoeForCausalLM"]
+        );
+        assert!(parse_architectures("FAIL ImportError: no freetoken").is_err());
+        assert!(parse_architectures("OK 0\n").is_err(), "a count with no names is not a list");
+        assert!(parse_architectures("").is_err());
     }
 
     #[test]

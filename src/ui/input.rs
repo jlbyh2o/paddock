@@ -778,10 +778,47 @@ fn load_repo_files(app: &mut App) {
     let revision = app.hub_view.revision.clone();
     app.hub_view.loading_info = true;
     app.hub_view.in_files = true;
+    app.hub_view.compat = None;
+    let tx = app.tx.clone();
+    let repo_for_info = repo_id.clone();
+    let rev_for_info = revision.clone();
+    let hub_for_info = hub.clone();
+    tokio::spawn(async move {
+        let res =
+            hub_for_info.info(&repo_for_info, &rev_for_info).await.map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::HubInfo(Box::new(res)));
+    });
+
+    check_compatibility(app, hub, repo_id, revision);
+}
+
+/// Fetch just the repo's `config.json` and judge whether FreeToken could run it.
+///
+/// One small request against a download measured in tens of gigabytes: the whole point
+/// is to answer "can this even work here?" before committing to the transfer.
+fn check_compatibility(app: &mut App, hub: Hub, repo: String, revision: String) {
+    let archs = app.supported_archs.clone();
+    let hw = crate::compat::Hardware {
+        vram_bytes: app.gpus.first().map(|g| g.memory_total).unwrap_or(0),
+        host_ram_bytes: app.host.memory_total,
+        free_disk_bytes: crate::hub::disk_free(&app.hub_view.target.value).unwrap_or(0),
+    };
+    app.hub_view.checking_compat = true;
     let tx = app.tx.clone();
     tokio::spawn(async move {
-        let res = hub.info(&repo_id, &revision).await.map_err(|e| format!("{e:#}"));
-        let _ = tx.send(Message::HubInfo(Box::new(res)));
+        let res = async {
+            let raw = hub
+                .fetch_text(&repo, &revision, "config.json")
+                .await
+                .map_err(|e| format!("{e:#}"))?;
+            let config: serde_json::Value =
+                serde_json::from_str(&raw).map_err(|e| format!("config.json is not JSON: {e}"))?;
+            // Size comes from the listing the caller already has; passing 0 keeps the
+            // report to what the config alone can say.
+            Ok::<_, String>(crate::compat::evaluate(&config, 0, archs.as_deref(), hw))
+        }
+        .await;
+        let _ = tx.send(Message::Compatibility(Box::new(res)));
     });
 }
 

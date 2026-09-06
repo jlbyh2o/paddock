@@ -268,6 +268,22 @@ fn populate(app: &mut App) {
         gated: serde_json::Value::Bool(false),
         siblings,
     });
+    app.supported_archs = Some(vec!["Qwen3MoeForCausalLM".into()]);
+    app.hub_view.compat = Some(crate::compat::evaluate(
+        &serde_json::json!({
+            "architectures": ["Qwen3MoeForCausalLM"],
+            "num_experts": 128,
+            "max_position_embeddings": 262144,
+            "quantization_config": {"format": "nvfp4-pack-quantized"}
+        }),
+        20 << 30,
+        app.supported_archs.as_deref(),
+        crate::compat::Hardware {
+            vram_bytes: 16 << 30,
+            host_ram_bytes: 40 << 30,
+            free_disk_bytes: 60 << 30,
+        },
+    ));
 
     for i in 0..30u64 {
         app.requests_view.entries.push_back(RequestRecord {
@@ -1127,4 +1143,60 @@ async fn a_clean_preflight_starts_the_conversion_without_asking() {
     assert!(a.confirm.is_none(), "a clean check must not interrupt");
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn the_hub_reports_an_incompatible_repo_before_any_download() {
+    let mut a = app().await;
+    populate(&mut a);
+
+    // The exact config that cost a 23 GiB download and two failed conversions.
+    a.hub_view.compat = Some(crate::compat::evaluate(
+        &serde_json::json!({
+            "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+            "quantization_config": {"format": "nvfp4-pack-quantized"},
+            "text_config": {"num_experts": 256, "num_hidden_layers": 40}
+        }),
+        23 << 30,
+        Some(&["Qwen3_5MoeForConditionalGeneration".to_string()]),
+        crate::compat::Hardware {
+            vram_bytes: 16 << 30,
+            host_ram_bytes: 40 << 30,
+            free_disk_bytes: 60 << 30,
+        },
+    ));
+
+    let screen = render_text(&mut a, Tab::Hub, 130, 34);
+    assert!(screen.contains("not supported"), "the verdict must be visible:\n{screen}");
+    assert!(screen.contains("text_config"), "and say why:\n{screen}");
+    // The verdict must not run into the summary beside it.
+    assert!(
+        !screen.contains("not supportedQwen"),
+        "verdict and summary need a separator:\n{screen}"
+    );
+}
+
+#[tokio::test]
+async fn a_supported_repo_reads_as_supported() {
+    let mut a = app().await;
+    populate(&mut a);
+    let screen = render_text(&mut a, Tab::Hub, 130, 34);
+    assert!(screen.contains("supported"), "{screen}");
+    assert!(!screen.contains("not supported"), "{screen}");
+}
+
+#[tokio::test]
+async fn an_unreadable_registry_leaves_the_verdict_honest_rather_than_wrong() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.supported_archs = None;
+    a.hub_view.compat = Some(crate::compat::evaluate(
+        &serde_json::json!({"architectures": ["SomethingBrandNew"], "num_experts": 8}),
+        1 << 30,
+        None,
+        crate::compat::Hardware::default(),
+    ));
+    let screen = render_text(&mut a, Tab::Hub, 130, 34);
+    assert!(screen.contains("unverified"), "say it could not check:\n{screen}");
+    assert!(!screen.contains("not in FreeToken"), "and do not claim it is unsupported");
 }

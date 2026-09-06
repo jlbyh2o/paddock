@@ -595,6 +595,22 @@ async fn fetch_file(task: &DownloadTask, file: &RepoFile) -> Result<()> {
     Ok(())
 }
 
+/// Free bytes on the filesystem holding `path`, walking up to the nearest existing
+/// ancestor so a not-yet-created target directory still reports something useful.
+pub fn disk_free(path: &str) -> Option<u64> {
+    let mut p = Path::new(path);
+    loop {
+        if p.exists() {
+            break;
+        }
+        p = p.parent()?;
+    }
+    let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    (unsafe { libc::statvfs(c.as_ptr(), &mut stat) } == 0)
+        .then(|| stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
 /// Where a repo lands by default: `<download_dir>/<repo basename>`.
 pub fn default_target(download_dir: &Path, repo: &str) -> PathBuf {
     let name = repo.rsplit('/').next().unwrap_or(repo);
