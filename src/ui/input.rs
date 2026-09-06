@@ -1036,28 +1036,29 @@ fn run_preflight(app: &mut App, name: &str, model_dir: &std::path::Path, jinja: 
         for (k, v) in &env {
             cmd.env(k, v);
         }
-        let result = match cmd.output().await {
+        let outcome = match cmd.output().await {
             Ok(out) => {
                 let text = String::from_utf8_lossy(&out.stdout);
-                let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-                match line.strip_prefix("OK ") {
-                    Some(detail) => Ok(detail.to_string()),
+                match text.lines().rev().find(|l| !l.trim().is_empty()) {
+                    Some(line) => crate::templates::Preflight::parse(line),
+                    // No stdout at all means the interpreter itself failed; the reason is
+                    // on stderr, and reporting "no output" would hide it.
                     None => {
-                        Err(line.strip_prefix("FAIL ").map(str::to_string).unwrap_or_else(|| {
-                            let err = String::from_utf8_lossy(&out.stderr);
+                        let err = String::from_utf8_lossy(&out.stderr);
+                        crate::templates::Preflight::Fail(
                             err.lines()
                                 .rev()
                                 .find(|l| !l.trim().is_empty())
                                 .unwrap_or("the check produced no output")
                                 .trim()
-                                .to_string()
-                        }))
+                                .to_string(),
+                        )
                     }
                 }
             }
-            Err(e) => Err(format!("could not run the check: {e}")),
+            Err(e) => crate::templates::Preflight::Fail(format!("could not run the check: {e}")),
         };
-        let _ = tx.send(Message::TemplatePreflight(name, result));
+        let _ = tx.send(Message::TemplatePreflight(name, outcome));
     });
 }
 

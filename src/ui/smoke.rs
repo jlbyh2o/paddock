@@ -383,8 +383,10 @@ async fn overlays_and_secondary_panes_render() {
     a.hub_view.in_files = true;
     a.jobs_view.in_output = true;
     a.templates_view.pane = crate::ui::app::TemplatePane::Remote;
-    a.templates_view.preflight =
-        Some(("Qwen-Sharp-Chat-Templates".into(), Ok("4210 chars, 980 tokens".into())));
+    a.templates_view.preflight = Some((
+        "Qwen-Sharp-Chat-Templates".into(),
+        crate::templates::Preflight::Ok("4210 chars, 980 tokens (tool calls)".into()),
+    ));
     a.cache_view.set_pending(Pool::Moe, Some(1024));
     a.cache_view.set_pending(Pool::Kv, Some(65_536));
     draw_all(&mut a);
@@ -401,7 +403,16 @@ async fn overlays_and_secondary_panes_render() {
     // A failed render check must render as legibly as a passing one.
     a.templates_view.preflight = Some((
         "Qwen-Sharp-Chat-Templates".into(),
-        Err("TemplateError: 'dict object' has no attribute 'reasoning_content'".into()),
+        crate::templates::Preflight::Fail(
+            "UndefinedError: 'dict object' has no attribute 'reasoning_content'".into(),
+        ),
+    ));
+    draw_all(&mut a);
+    a.templates_view.preflight = Some((
+        "Qwen-Sharp-Chat-Templates".into(),
+        crate::templates::Preflight::Warn(
+            "83 chars, 21 tokens (tools listed); the tool-call form did not render".into(),
+        ),
     ));
     a.templates_view.checking = true;
     draw_all(&mut a);

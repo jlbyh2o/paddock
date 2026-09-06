@@ -132,8 +132,8 @@ pub enum Message {
     TemplateRepo(Box<Result<TemplateListing, String>>),
     /// A template was fetched and saved into the store.
     TemplateFetched(Result<String, String>),
-    /// A render preflight finished: (template name, result).
-    TemplatePreflight(String, Result<String, String>),
+    /// A render preflight finished: (template name, outcome).
+    TemplatePreflight(String, crate::templates::Preflight),
     /// A cache rebuild finished.
     CacheRebuilt(Result<String, String>),
     /// The `/generate` smoke test finished.
@@ -276,7 +276,7 @@ pub struct TemplatesView {
     /// A preview of the highlighted template's first lines.
     pub preview: Option<(String, String)>,
     /// Result of the last render preflight, shown beside the template it checked.
-    pub preflight: Option<(String, Result<String, String>)>,
+    pub preflight: Option<(String, crate::templates::Preflight)>,
     pub checking: bool,
 }
 
@@ -787,13 +787,15 @@ impl App {
                     Err(e) => self.error(format!("could not fetch that template: {e}")),
                 }
             }
-            Message::TemplatePreflight(name, res) => {
+            Message::TemplatePreflight(name, outcome) => {
+                use crate::templates::Preflight;
                 self.templates_view.checking = false;
-                match &res {
-                    Ok(detail) => self.success(format!("{name} renders: {detail}")),
-                    Err(e) => self.error(format!("{name} failed to render: {e}")),
+                match &outcome {
+                    Preflight::Ok(d) => self.success(format!("{name} renders: {d}")),
+                    Preflight::Warn(d) => self.warn(format!("{name}: {d}")),
+                    Preflight::Fail(e) => self.error(format!("{name} failed to render: {e}")),
                 }
-                self.templates_view.preflight = Some((name, res));
+                self.templates_view.preflight = Some((name, outcome));
             }
             Message::CacheRebuilt(res) => {
                 self.cache_view.applying = false;

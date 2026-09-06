@@ -187,16 +187,16 @@ fn preview(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // The last render check, when it was for this template.
-    if let Some((name, result)) = &app.templates_view.preflight {
+    if let Some((name, outcome)) = &app.templates_view.preflight {
         if *name == tpl.name {
-            match result {
-                Ok(detail) => lines.push(t.field_colored("Render check", detail.clone(), t.good)),
-                Err(e) => lines.push(t.field_colored(
-                    "Render check",
-                    truncate(e, inner.width.saturating_sub(18) as usize),
-                    t.bad,
-                )),
-            }
+            use crate::templates::Preflight;
+            let color = match outcome {
+                Preflight::Ok(_) => t.good,
+                Preflight::Warn(_) => t.warn,
+                Preflight::Fail(_) => t.bad,
+            };
+            let width = inner.width.saturating_sub(18) as usize;
+            lines.push(t.field_colored("Render check", truncate(outcome.detail(), width), color));
         }
     } else if app.templates_view.checking {
         lines.push(t.field("Render check", "running…"));
@@ -262,6 +262,18 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
              tokenizer files, so both are written — otherwise the override would silently \
              not apply to whichever one you serve.",
             t.muted(),
+        )));
+    }
+
+    // A template that is in place but does not render breaks every request the engine
+    // serves, so say plainly how to back out of it.
+    let broken =
+        app.templates_view.preflight.as_ref().is_some_and(|(_, outcome)| outcome.is_fail());
+    if broken && status.is_overridden() {
+        lines.push(Line::from(Span::styled(
+            "The applied template failed its render check — press u to restore the \
+             checkpoint's own template.",
+            Style::default().fg(t.bad),
         )));
     }
 

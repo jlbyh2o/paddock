@@ -355,9 +355,48 @@ pub fn targets(model: &crate::models::Model) -> Vec<PathBuf> {
     out
 }
 
+/// How a candidate template fared against a real tokenizer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Preflight {
+    /// Rendered everything, including a tool call and its result.
+    Ok(String),
+    /// Rendered, but some form did not — usable, with a caveat worth reading.
+    Warn(String),
+    /// Did not render at all.
+    Fail(String),
+}
+
+impl Preflight {
+    pub fn detail(&self) -> &str {
+        match self {
+            Preflight::Ok(d) | Preflight::Warn(d) | Preflight::Fail(d) => d,
+        }
+    }
+
+    pub fn is_fail(&self) -> bool {
+        matches!(self, Preflight::Fail(_))
+    }
+
+    /// Parse the script's last output line.
+    pub fn parse(line: &str) -> Self {
+        let line = line.trim();
+        if let Some(d) = line.strip_prefix("OK ") {
+            Preflight::Ok(d.to_string())
+        } else if let Some(d) = line.strip_prefix("WARN ") {
+            Preflight::Warn(d.to_string())
+        } else if let Some(d) = line.strip_prefix("FAIL ") {
+            Preflight::Fail(d.to_string())
+        } else if line.is_empty() {
+            Preflight::Fail("the check produced no output".into())
+        } else {
+            Preflight::Fail(line.to_string())
+        }
+    }
+}
+
 /// The argv for a real render check: load the checkpoint's tokenizer with the candidate
-/// template and apply it to a small conversation with a tool, which is where a broken
-/// template usually fails. Returns `None` when there is no Python to run it with.
+/// template and render a conversation through it. Returns `None` when there is no Python
+/// to run it with.
 ///
 /// This is worth the subprocess: the structural check in [`validate`] cannot catch an
 /// undefined variable or a bad filter, and a template that fails at render time breaks
@@ -384,40 +423,74 @@ pub fn preflight_command(
     ])
 }
 
-/// Loads the tokenizer, swaps in the candidate template, and renders a conversation that
-/// exercises a system prompt, a tool definition and a tool result. Prints `OK <n tokens>`
-/// or `FAIL <reason>`.
+/// Renders a conversation through the candidate template and prints one of
+/// `OK <detail>`, `WARN <detail>` or `FAIL <reason>`.
+///
+/// The shapes are tried in order of coverage because templates disagree about tool
+/// calls: some want `function.arguments` as a mapping and raise on a JSON string, others
+/// want the string. Probing only one shape reports a perfectly good template as broken —
+/// which is exactly what an earlier version of this script did to a checkpoint's own
+/// template while passing the replacement, the most misleading outcome available.
 const PREFLIGHT_SCRIPT: &str = r#"
 import sys, json
 model_dir, jinja_path = sys.argv[1], sys.argv[2]
-try:
+
+def run():
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(model_dir)
     with open(jinja_path, encoding="utf-8") as f:
         tok.chat_template = f.read()
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "What is the weather in Paris?"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"type": "function", "function": {"name": "get_weather",
-             "arguments": json.dumps({"city": "Paris"})}}]},
-        {"role": "tool", "name": "get_weather", "content": "18C, clear"},
-        {"role": "assistant", "content": "It is 18C and clear in Paris."},
-        {"role": "user", "content": "And tomorrow?"},
-    ]
+
     tools = [{"type": "function", "function": {
         "name": "get_weather", "description": "Current weather for a city",
         "parameters": {"type": "object", "properties": {"city": {"type": "string"}},
                        "required": ["city"]}}}]
-    text = tok.apply_chat_template(messages, tools=tools, tokenize=False,
-                                   add_generation_prompt=True)
-    if not text or not text.strip():
-        print("FAIL template rendered an empty prompt")
-        sys.exit(1)
-    print("OK %d chars, %d tokens" % (len(text), len(tok(text)["input_ids"])))
+    base = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Paris?"},
+    ]
+    def with_call(args):
+        return base + [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"type": "function",
+                 "function": {"name": "get_weather", "arguments": args}}]},
+            {"role": "tool", "name": "get_weather", "content": "18C, clear"},
+            {"role": "assistant", "content": "It is 18C and clear in Paris."},
+            {"role": "user", "content": "And tomorrow?"},
+        ]
+
+    attempts = [
+        ("tool calls", with_call({"city": "Paris"}), {"tools": tools}),
+        ("tool calls", with_call(json.dumps({"city": "Paris"})), {"tools": tools}),
+        ("tools listed", base, {"tools": tools}),
+        ("plain chat", base, {}),
+    ]
+
+    errors = []
+    for label, messages, kwargs in attempts:
+        try:
+            text = tok.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, **kwargs)
+        except Exception as exc:
+            errors.append("%s: %s: %s" % (label, type(exc).__name__, exc))
+            continue
+        if not text or not text.strip():
+            errors.append("%s: rendered an empty prompt" % label)
+            continue
+        detail = "%d chars, %d tokens (%s)" % (
+            len(text), len(tok(text)["input_ids"]), label)
+        if label == "tool calls":
+            return "OK " + detail
+        return "WARN %s; the tool-call form did not render -- %s" % (
+            detail, errors[0] if errors else "unknown")
+    return "FAIL " + (errors[-1] if errors else "nothing rendered")
+
+try:
+    line = run()
 except Exception as exc:
-    print("FAIL %s: %s" % (type(exc).__name__, exc))
-    sys.exit(1)
+    line = "FAIL %s: %s" % (type(exc).__name__, exc)
+print(line)
+sys.exit(1 if line.startswith("FAIL") else 0)
 "#;
 
 #[cfg(test)]
@@ -577,6 +650,25 @@ mod tests {
         let dir = tmpdir("norevert");
         assert!(revert(&dir).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preflight_output_is_parsed_into_its_three_outcomes() {
+        assert_eq!(
+            Preflight::parse("OK 2737 chars, 613 tokens (tool calls)"),
+            Preflight::Ok("2737 chars, 613 tokens (tool calls)".into())
+        );
+        assert!(matches!(
+            Preflight::parse("WARN 90 chars, 20 tokens (plain chat); ..."),
+            Preflight::Warn(_)
+        ));
+        assert_eq!(
+            Preflight::parse("FAIL TypeError: Can only get item pairs from a mapping."),
+            Preflight::Fail("TypeError: Can only get item pairs from a mapping.".into())
+        );
+        // Anything unrecognized is a failure, not a silent pass.
+        assert!(Preflight::parse("").is_fail());
+        assert!(Preflight::parse("Traceback (most recent call last):").is_fail());
     }
 
     #[test]
