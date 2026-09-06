@@ -173,29 +173,22 @@ pub fn evaluate(
         (Some(_), Some(_)) => {}
     }
 
-    // ---- the multimodal quantization split ----
+    // ---- can FreeToken resolve the routed experts? ----
     //
-    // A `...ForConditionalGeneration` wrapper keeps the language model under
-    // `text_config` while `quantization_config` stays at the top level. FreeToken reads
-    // the nested config when resolving expert quantization, finds no quantization block,
-    // and settles on "none" — after which the converter looks for unquantized expert
-    // tensors, does not find the packed ones, and fails with "Missing MoE expert source
-    // layers" minutes in. Verified against Qwen3_5MoeForConditionalGeneration.
-    let quant_only_at_top = config.get("quantization_config").is_some()
-        && text.is_some_and(|t| t.get("quantization_config").is_none());
-    if r.is_moe && quant_only_at_top {
-        note(
-            Level::Blocker,
-            format!(
-                "quantization_config sits at the top level while the language model is under \
-                 text_config, so FreeToken resolves its experts as unquantized{} — conversion \
-                 and serving fail with 'Missing MoE expert source layers'",
-                r.quant
-                    .as_deref()
-                    .map(|q| format!(" despite the checkpoint declaring {q}"))
-                    .unwrap_or_default()
-            ),
-        );
+    // This is the failure that motivated the whole check, and it is worth stating
+    // precisely because the obvious reading is wrong: the architecture is registered and
+    // the checkpoint is fine. What breaks is expert-quantization detection.
+    //
+    // Verified empirically against Ornith-1.5-35B-A3B-NVFP4: patching the config so the
+    // detector resolved nvfp4 got past it and then failed deeper, in nvfp4_banks.py,
+    // with KeyError on the per-expert global-scale lookup — because the loader wanted
+    // modelopt's `weight_scale_2` and the checkpoint has compressed-tensors'
+    // `weight_global_scale`. So no config edit fixes it; the translation has to exist in
+    // FreeToken, and today only the GLM-5-Next family carries it.
+    if r.is_moe {
+        if let Some(reason) = unresolvable_experts(quant_block, r.arch.as_deref()) {
+            note(Level::Blocker, reason);
+        }
     }
 
     // ---- hardware ----
@@ -275,6 +268,65 @@ pub fn evaluate(
     r
 }
 
+/// Whether FreeToken will fail to resolve a MoE checkpoint's routed-expert quantization.
+///
+/// Mirrors the detector FreeToken actually uses for the Qwen3.5-MoE family: it reads
+/// `quant_algo`/`quant_method` and, for a modelopt `MIXED_PRECISION` export, the
+/// `quantized_layers` map — and notably never looks at `format`. An llm-compressor
+/// export therefore resolves to "none" however clearly its `format` says `nvfp4`.
+///
+/// Returns the reason when the experts cannot be resolved, `None` when they can or when
+/// there is not enough evidence to say.
+fn unresolvable_experts(quant: Option<&Value>, arch: Option<&str>) -> Option<String> {
+    let quant = quant?;
+    let get = |k: &str| quant.get(k).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+    let algo = {
+        let a = get("quant_algo");
+        if a.is_empty() {
+            get("quant_method")
+        } else {
+            a
+        }
+    };
+
+    // Block-FP8 and anything naming fp4 outright are recognized.
+    if algo.contains("fp4") || (algo == "fp8" && quant.get("weight_block_size").is_some()) {
+        return None;
+    }
+
+    // modelopt MIXED_PRECISION: the routed experts carry their own algo in a per-layer map.
+    if algo.contains("mixed") {
+        let layers = quant.get("quantized_layers").and_then(Value::as_object);
+        let experts_covered = layers.is_some_and(|m| {
+            m.iter().any(|(name, spec)| {
+                (name.ends_with(".mlp.experts") || name.contains(".mlp.experts."))
+                    && spec.get("quant_algo").and_then(|v| v.as_str()).is_some_and(|a| {
+                        let a = a.to_lowercase();
+                        a.contains("fp4") || a.contains("fp8")
+                    })
+            })
+        });
+        return (!experts_covered).then(|| {
+            "the checkpoint is a MIXED_PRECISION export but its quantized_layers map lists no              .mlp.experts entry, so FreeToken resolves the routed experts as unquantized and              the expert loader looks for tensors that are not there"
+                .to_string()
+        });
+    }
+
+    // llm-compressor: FreeToken's expert-bank loader wants modelopt tensor names, and only
+    // the GLM-5-Next family translates compressed-tensors' names into them.
+    if algo.contains("compressed-tensors") {
+        let translated = arch.is_some_and(|a| a.starts_with("Glm5Next"));
+        return (!translated).then(|| {
+            format!(
+                "this is an llm-compressor (compressed-tensors) export, whose expert tensors are                  named weight_packed/weight_global_scale. FreeToken's NVFP4 expert-bank loader                  for {} expects nvidia/modelopt names (weight/weight_scale_2); only the                  GLM-5-Next family carries that translation, so conversion and serving fail with                  'Missing MoE expert source layers'",
+                arch.unwrap_or("this architecture")
+            )
+        });
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,7 +351,7 @@ mod tests {
             "num_experts": 128,
             "num_hidden_layers": 48,
             "max_position_embeddings": 262144,
-            "quantization_config": {"quant_method": "compressed-tensors", "format": "nvfp4-pack-quantized"}
+            "quantization_config": {"quant_algo": "NVFP4"}
         });
         let r = evaluate(&cfg, 20 << 30, Some(&archs()), roomy());
         assert_eq!(r.verdict(), Verdict::Supported, "{:?}", r.notes);
@@ -316,9 +368,14 @@ mod tests {
         assert!(r.notes[0].1.contains("not in FreeToken's model registry"));
     }
 
-    /// The exact shape that cost a 23 GiB download and two failed conversions.
+    /// The checkpoint that cost a 23 GiB download and two failed conversions.
+    ///
+    /// The architecture IS registered and the config is well-formed; what breaks is that
+    /// FreeToken's expert-quantization detector never looks at `format`, so an
+    /// llm-compressor export resolves to "none". Saying "unsupported architecture" would
+    /// send someone looking in entirely the wrong place.
     #[test]
-    fn the_multimodal_quantization_split_is_caught() {
+    fn an_llm_compressor_moe_export_is_caught_with_the_real_reason() {
         let cfg = json!({
             "architectures": ["Qwen3_5MoeForConditionalGeneration"],
             "model_type": "qwen3_5_moe",
@@ -333,29 +390,83 @@ mod tests {
             }
         });
         let r = evaluate(&cfg, 23 << 30, Some(&archs()), roomy());
-        // The architecture IS registered — the wall is elsewhere, and saying "unsupported
-        // architecture" would send someone looking in the wrong place.
-        assert!(!r.notes.iter().any(|(_, m)| m.contains("model registry")));
         assert_eq!(r.verdict(), Verdict::Unsupported);
+        assert!(!r.notes.iter().any(|(_, m)| m.contains("model registry")));
         let msg = &r.notes[0].1;
-        assert!(msg.contains("text_config"), "{msg}");
+        assert!(msg.contains("compressed-tensors"), "{msg}");
+        assert!(msg.contains("weight_scale_2"), "name the mismatch it actually hits: {msg}");
         assert!(msg.contains("Missing MoE expert source layers"), "{msg}");
         // Fields still resolve through text_config.
         assert_eq!(r.num_experts, Some(256));
         assert_eq!(r.num_layers, Some(40));
     }
 
+    /// GLM-5-Next is the one family that translates compressed-tensors names, so the same
+    /// export shape must not be flagged there.
     #[test]
-    fn a_multimodal_model_that_nests_its_quant_config_is_fine() {
+    fn the_family_that_can_read_compressed_tensors_is_not_flagged() {
+        let cfg = json!({
+            "architectures": ["Glm5NextForConditionalGeneration"],
+            "quantization_config": {"quant_method": "compressed-tensors", "format": "nvfp4-pack-quantized"},
+            "text_config": {"num_experts": 160}
+        });
+        let mut known = archs();
+        known.push("Glm5NextForConditionalGeneration".into());
+        let r = evaluate(&cfg, 20 << 30, Some(&known), roomy());
+        assert_eq!(r.verdict(), Verdict::Supported, "{:?}", r.notes);
+    }
+
+    /// A modelopt MIXED_PRECISION export is fine when its per-layer map covers the experts.
+    #[test]
+    fn a_mixed_precision_export_is_judged_by_its_quantized_layers_map() {
+        let covered = json!({
+            "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+            "quantization_config": {
+                "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {
+                    "model.layers.0.mlp.experts": {"quant_algo": "W4A16_NVFP4"},
+                    "lm_head": {"quant_algo": "W4A16_NVFP4"}
+                }
+            },
+            "text_config": {"num_experts": 256}
+        });
+        let r = evaluate(&covered, 20 << 30, Some(&archs()), roomy());
+        assert_eq!(r.verdict(), Verdict::Supported, "{:?}", r.notes);
+
+        // The same export with nothing covering the experts cannot resolve them.
+        let bare = json!({
+            "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+            "quantization_config": {
+                "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {"lm_head": {"quant_algo": "W4A16_NVFP4"}}
+            },
+            "text_config": {"num_experts": 256}
+        });
+        let r = evaluate(&bare, 20 << 30, Some(&archs()), roomy());
+        assert_eq!(r.verdict(), Verdict::Unsupported);
+        assert!(r.notes[0].1.contains("quantized_layers"), "{:?}", r.notes);
+    }
+
+    /// A plain modelopt NVFP4 export names fp4 outright and needs no map.
+    #[test]
+    fn a_plain_modelopt_nvfp4_export_is_supported() {
         let cfg = json!({
             "architectures": ["Qwen3_5MoeForConditionalGeneration"],
-            "quantization_config": {"format": "nvfp4-pack-quantized"},
-            "text_config": {
-                "num_experts": 256,
-                "quantization_config": {"format": "nvfp4-pack-quantized"}
-            }
+            "quantization_config": {"quant_algo": "NVFP4"},
+            "text_config": {"num_experts": 256}
         });
-        let r = evaluate(&cfg, 23 << 30, Some(&archs()), roomy());
+        let r = evaluate(&cfg, 20 << 30, Some(&archs()), roomy());
+        assert_eq!(r.verdict(), Verdict::Supported, "{:?}", r.notes);
+    }
+
+    /// An unquantized MoE has no expert quantization to resolve, so nothing to flag.
+    #[test]
+    fn an_unquantized_moe_is_not_flagged() {
+        let cfg = json!({
+            "architectures": ["Qwen3MoeForCausalLM"],
+            "num_experts": 128
+        });
+        let r = evaluate(&cfg, 20 << 30, Some(&archs()), roomy());
         assert_eq!(r.verdict(), Verdict::Supported, "{:?}", r.notes);
     }
 

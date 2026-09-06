@@ -113,11 +113,12 @@ none of the known walls are in the way.
 
 **A doomed conversion fails in seconds, not minutes.** Before running `ft checkpoint`,
 ft-man resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
-concluded against what the checkpoint declares. The case that motivated it: a multimodal
-wrapper keeps the language model under `text_config` while `quantization_config` stays at
-the top level, so the expert-quantization detector finds nothing, settles on `none`, and
-the converter spends three minutes writing 21 GiB before raising `Missing MoE expert
-source layers`. The check catches that in under three seconds and quotes the mismatch.
+concluded against what the checkpoint declares. The case that motivated it: FreeToken's
+expert-quantization detector for the Qwen3.5-MoE family reads `quant_algo`/`quant_method`
+and never `format`, so an llm-compressor (`compressed-tensors`) NVFP4 export resolves to
+`none`; the converter then spends three minutes writing 21 GiB before raising `Missing MoE
+expert source layers`. The check catches that in under three seconds and quotes the
+mismatch.
 
 **Chat templates are a file operation, and it says so.** FreeToken has no
 `--chat-template` flag — it loads the template through
@@ -239,7 +240,7 @@ OpenAI and Anthropic APIs.
 ## Development
 
 ```bash
-cargo test        # 129 tests, including render and input sweeps across five terminal sizes
+cargo test        # 134 tests, including render and input sweeps across five terminal sizes
 cargo clippy --all-targets
 cargo fmt
 ```

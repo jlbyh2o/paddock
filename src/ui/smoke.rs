@@ -1154,7 +1154,10 @@ async fn the_hub_reports_an_incompatible_repo_before_any_download() {
     a.hub_view.compat = Some(crate::compat::evaluate(
         &serde_json::json!({
             "architectures": ["Qwen3_5MoeForConditionalGeneration"],
-            "quantization_config": {"format": "nvfp4-pack-quantized"},
+            "quantization_config": {
+                "quant_method": "compressed-tensors",
+                "format": "nvfp4-pack-quantized"
+            },
             "text_config": {"num_experts": 256, "num_hidden_layers": 40}
         }),
         23 << 30,
@@ -1168,7 +1171,7 @@ async fn the_hub_reports_an_incompatible_repo_before_any_download() {
 
     let screen = render_text(&mut a, Tab::Hub, 130, 34);
     assert!(screen.contains("not supported"), "the verdict must be visible:\n{screen}");
-    assert!(screen.contains("text_config"), "and say why:\n{screen}");
+    assert!(screen.contains("compressed-tensors"), "and say why:\n{screen}");
     // The verdict must not run into the summary beside it.
     assert!(
         !screen.contains("not supportedQwen"),
