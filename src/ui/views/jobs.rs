@@ -50,17 +50,20 @@ fn list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
 
     if items.is_empty() {
-        f.render_widget(
-            Paragraph::new(
-                "Nothing running.\n\n\
+        let msg = match &app.convert_checking {
+            Some(path) => format!(
+                "Checking that FreeToken can read {}…\n\nThis resolves the checkpoint \
+                 through FreeToken's own config so a conversion that cannot read the \
+                 experts fails in seconds rather than minutes.",
+                path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            ),
+            None => "Nothing running.\n\n\
                  c  convert the selected model to FTW (from the Models tab)\n\
                  b  benchmark CPU vs PCIe bandwidth and calibrate the MoE backend\n\
-                 d  download a repo (from the Hub tab)",
-            )
-            .style(t.muted())
-            .wrap(Wrap { trim: false }),
-            inner,
-        );
+                 d  download a repo (from the Hub tab)"
+                .to_string(),
+        };
+        f.render_widget(Paragraph::new(msg).style(t.muted()).wrap(Wrap { trim: false }), inner);
         return;
     }
 

@@ -189,7 +189,7 @@ fn preview(f: &mut Frame, app: &App, area: Rect) {
     // The last render check, when it was for this template.
     if let Some((name, outcome)) = &app.templates_view.preflight {
         if *name == tpl.name {
-            use crate::templates::Preflight;
+            use crate::ft::Preflight;
             let color = match outcome {
                 Preflight::Ok(_) => t.good,
                 Preflight::Warn(_) => t.warn,

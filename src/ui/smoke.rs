@@ -385,7 +385,7 @@ async fn overlays_and_secondary_panes_render() {
     a.templates_view.pane = crate::ui::app::TemplatePane::Remote;
     a.templates_view.preflight = Some((
         "Qwen-Sharp-Chat-Templates".into(),
-        crate::templates::Preflight::Ok("4210 chars, 980 tokens (tool calls)".into()),
+        crate::ft::Preflight::Ok("4210 chars, 980 tokens (tool calls)".into()),
     ));
     a.cache_view.set_pending(Pool::Moe, Some(1024));
     a.cache_view.set_pending(Pool::Kv, Some(65_536));
@@ -403,14 +403,14 @@ async fn overlays_and_secondary_panes_render() {
     // A failed render check must render as legibly as a passing one.
     a.templates_view.preflight = Some((
         "Qwen-Sharp-Chat-Templates".into(),
-        crate::templates::Preflight::Fail(
+        crate::ft::Preflight::Fail(
             "UndefinedError: 'dict object' has no attribute 'reasoning_content'".into(),
         ),
     ));
     draw_all(&mut a);
     a.templates_view.preflight = Some((
         "Qwen-Sharp-Chat-Templates".into(),
-        crate::templates::Preflight::Warn(
+        crate::ft::Preflight::Warn(
             "83 chars, 21 tokens (tools listed); the tool-call form did not render".into(),
         ),
     ));
@@ -1062,4 +1062,69 @@ async fn the_templates_view_warns_that_a_running_engine_needs_a_restart() {
 
     std::fs::remove_dir_all(&dir).ok();
     crate::templates::remove("sharp-restart").ok();
+}
+
+// ---------------------------------------------------------------- conversion
+
+#[tokio::test]
+async fn a_preflight_concern_asks_before_burning_minutes_on_a_conversion() {
+    let mut a = app().await;
+    let dir = with_checkpoint(&mut a, "cvtwarn", false);
+    let source = a.models[0].path.clone();
+
+    super::input::on_convert_preflight(
+        &mut a,
+        source.clone(),
+        crate::ft::Preflight::Warn(
+            "the checkpoint declares nvfp4-pack-quantized but FreeToken resolved its \
+             experts as unquantized (expert_quant=none)"
+                .into(),
+        ),
+    );
+
+    let confirm = a.confirm.as_ref().expect("a doubtful conversion must be confirmed");
+    let body = confirm.body.join("\n");
+    assert!(body.contains("expert_quant=none"), "the reason must be quoted:\n{body}");
+    assert!(body.contains("several minutes"), "say what it costs to proceed:\n{body}");
+    assert!(!confirm.accepted(), "the safe option must be preselected");
+    assert_eq!(confirm.action, ConfirmAction::ConvertAnyway(source));
+    assert!(a.jobs.is_empty(), "nothing should have been spawned yet");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_failed_preflight_is_also_offered_rather_than_silently_blocking() {
+    let mut a = app().await;
+    let dir = with_checkpoint(&mut a, "cvtfail", false);
+    let source = a.models[0].path.clone();
+
+    // A check that could not run at all must not become an unexplained refusal: the
+    // check is advisory, and the user may know better than it does.
+    super::input::on_convert_preflight(
+        &mut a,
+        source.clone(),
+        crate::ft::Preflight::Fail("ImportError: no module named torch".into()),
+    );
+    let confirm = a.confirm.as_ref().expect("a failed check should still offer the choice");
+    assert!(confirm.body.join("\n").contains("ImportError"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_clean_preflight_starts_the_conversion_without_asking() {
+    let mut a = app().await;
+    let dir = with_checkpoint(&mut a, "cvtok", false);
+    let source = a.models[0].path.clone();
+    // No FreeToken CLI here, so the spawn fails — but the point is that nothing was
+    // put in front of the user first.
+    super::input::on_convert_preflight(
+        &mut a,
+        source,
+        crate::ft::Preflight::Ok("Qwen3MoE: MoE, 128 experts x 48 layers".into()),
+    );
+    assert!(a.confirm.is_none(), "a clean check must not interrupt");
+
+    std::fs::remove_dir_all(&dir).ok();
 }

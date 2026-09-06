@@ -57,6 +57,7 @@ pub struct Config {
     pub library: LibraryCfg,
     pub hub: HubCfg,
     pub templates: TemplatesCfg,
+    pub convert: ConvertCfg,
     pub ui: UiCfg,
 }
 
@@ -180,6 +181,22 @@ impl HubCfg {
         let t = raw.trim();
         (!t.is_empty())
             .then(|| HubToken { value: t.to_string(), source: "the token cached by the hf CLI" })
+    }
+}
+
+/// Checkpoint conversion to FTW.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConvertCfg {
+    /// Ask FreeToken what it makes of a checkpoint before converting it. Costs a few
+    /// seconds against a job that otherwise runs for minutes and writes tens of
+    /// gigabytes before discovering it cannot read the experts.
+    pub preflight: bool,
+}
+
+impl Default for ConvertCfg {
+    fn default() -> Self {
+        Self { preflight: true }
     }
 }
 

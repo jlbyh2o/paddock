@@ -103,6 +103,14 @@ totals.
 help text and mutual exclusions in one schema. Setting `--moe-cache-size` clears
 `--moe-cache-rate` for you, because the engine would reject the pair.
 
+**A doomed conversion fails in seconds, not minutes.** Before running `ft checkpoint`,
+ft-man resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
+concluded against what the checkpoint declares. The case that motivated it: a multimodal
+wrapper keeps the language model under `text_config` while `quantization_config` stays at
+the top level, so the expert-quantization detector finds nothing, settles on `none`, and
+the converter spends three minutes writing 21 GiB before raising `Missing MoE expert
+source layers`. The check catches that in under three seconds and quotes the mismatch.
+
 **Chat templates are a file operation, and it says so.** FreeToken has no
 `--chat-template` flag — it loads the template through
 `AutoTokenizer.from_pretrained(model_path)` — so overriding one means writing
@@ -150,6 +158,10 @@ endpoint = "https://huggingface.co"
 # token = "hf_..."     # or set HF_TOKEN; the `hf` CLI's cached token is also read
 concurrency = 4
 ignore = ["*.bin", "*.pth", "*.msgpack", "*.h5", "*.onnx"]
+
+[convert]
+# Ask FreeToken what it makes of a checkpoint before converting it.
+preflight = true
 
 [templates]
 # Repos offered when fetching chat templates. Any repo holding .jinja files works.
@@ -219,7 +231,7 @@ OpenAI and Anthropic APIs.
 ## Development
 
 ```bash
-cargo test        # 103 tests, including render and input sweeps across five terminal sizes
+cargo test        # 116 tests, including render and input sweeps across five terminal sizes
 cargo clippy --all-targets
 cargo fmt
 ```

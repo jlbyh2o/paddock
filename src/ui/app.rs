@@ -133,7 +133,9 @@ pub enum Message {
     /// A template was fetched and saved into the store.
     TemplateFetched(Result<String, String>),
     /// A render preflight finished: (template name, outcome).
-    TemplatePreflight(String, crate::templates::Preflight),
+    TemplatePreflight(String, crate::ft::Preflight),
+    /// A conversion preflight finished: (source path, outcome).
+    ConvertPreflight(std::path::PathBuf, crate::ft::Preflight),
     /// A cache rebuild finished.
     CacheRebuilt(Result<String, String>),
     /// The `/generate` smoke test finished.
@@ -276,7 +278,7 @@ pub struct TemplatesView {
     /// A preview of the highlighted template's first lines.
     pub preview: Option<(String, String)>,
     /// Result of the last render preflight, shown beside the template it checked.
-    pub preflight: Option<(String, crate::templates::Preflight)>,
+    pub preflight: Option<(String, crate::ft::Preflight)>,
     pub checking: bool,
 }
 
@@ -358,6 +360,8 @@ pub struct App {
 
     /// The Hugging Face token, resolved once at startup. `None` means none was found.
     pub hub_token: Option<HubToken>,
+    /// The checkpoint whose conversion preflight is in flight, if any.
+    pub convert_checking: Option<PathBuf>,
     pub models: Vec<Model>,
     pub jobs: Vec<Job>,
     pub downloads: Vec<Download>,
@@ -477,6 +481,7 @@ impl App {
             series: Series::default(),
             gpu_source,
             hub_token: config_hub_token,
+            convert_checking: None,
             models: Vec::new(),
             jobs: Vec::new(),
             downloads: Vec::new(),
@@ -788,7 +793,7 @@ impl App {
                 }
             }
             Message::TemplatePreflight(name, outcome) => {
-                use crate::templates::Preflight;
+                use crate::ft::Preflight;
                 self.templates_view.checking = false;
                 match &outcome {
                     Preflight::Ok(d) => self.success(format!("{name} renders: {d}")),
@@ -796,6 +801,13 @@ impl App {
                     Preflight::Fail(e) => self.error(format!("{name} failed to render: {e}")),
                 }
                 self.templates_view.preflight = Some((name, outcome));
+            }
+            Message::ConvertPreflight(source, outcome) => {
+                self.convert_checking = None;
+                if !outcome.is_clean() {
+                    tracing::warn!(?source, detail = outcome.detail(), "convert preflight");
+                }
+                crate::ui::input::on_convert_preflight(self, source, outcome);
             }
             Message::CacheRebuilt(res) => {
                 self.cache_view.applying = false;

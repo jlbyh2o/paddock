@@ -3,9 +3,11 @@
 
 pub mod api;
 pub mod locate;
+pub mod preflight;
 pub mod proc;
 pub mod types;
 
 pub use api::Client;
 pub use locate::Freetoken;
+pub use preflight::Outcome as Preflight;
 pub use proc::{Engine, EngineEvent, EngineState, Job, JobEvent};

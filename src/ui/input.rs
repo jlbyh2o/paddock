@@ -131,6 +131,7 @@ fn run_action(app: &mut App, action: ConfirmAction) {
         ConfirmAction::ApplyCacheRebuild => apply_cache_rebuild(app),
         ConfirmAction::ApplyTemplate { template, model } => write_template(app, &template, &model),
         ConfirmAction::RevertTemplate(model) => revert_template(app, &model),
+        ConfirmAction::ConvertAnyway(source) => start_conversion(app, &source),
         ConfirmAction::ReconvertModel(source) => {
             let out = crate::models::ftw_output_path(&source);
             if let Err(e) = std::fs::remove_dir_all(&out) {
@@ -141,7 +142,7 @@ fn run_action(app: &mut App, action: ConfirmAction) {
             if let Some(i) = app.models.iter().position(|m| m.path == source) {
                 app.models_view.sel.index = i;
             }
-            start_conversion(app, &source);
+            begin_conversion(app, &source);
             app.request_scan();
         }
         ConfirmAction::DeleteTemplate(name) => match crate::templates::remove(&name) {
@@ -478,6 +479,10 @@ fn convert_selected(app: &mut App) {
         app.warn(format!("cannot convert: {reason}"));
         return;
     }
+    if app.convert_checking.is_some() {
+        app.warn("a checkpoint check is already running");
+        return;
+    }
 
     let source = model.path.clone();
     let name = model.name.clone();
@@ -517,7 +522,89 @@ fn convert_selected(app: &mut App) {
         return;
     }
 
-    start_conversion(app, &source);
+    begin_conversion(app, &source);
+}
+
+/// Ask FreeToken what it makes of the checkpoint, then convert.
+///
+/// The check is cheap and the job is not: a conversion that cannot read the experts
+/// still spends minutes writing most of the model to disk before it finds out.
+fn begin_conversion(app: &mut App, source: &std::path::Path) {
+    if !app.config.convert.preflight {
+        start_conversion(app, source);
+        return;
+    }
+    let Some(ft) = app.ft.clone() else {
+        app.error("the FreeToken CLI was not found");
+        return;
+    };
+    let moe_backend = convert_moe_backend(app);
+    let Some(argv) = crate::ft::preflight::convert_command(&ft, source, moe_backend) else {
+        // No interpreter to check with is not a reason to refuse the conversion.
+        start_conversion(app, source);
+        return;
+    };
+
+    app.convert_checking = Some(source.to_path_buf());
+    app.info("checking that FreeToken can read this checkpoint…");
+
+    let source = source.to_path_buf();
+    let env = app.config.freetoken.env.clone();
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let outcome = crate::ft::preflight::run(argv, &env).await;
+        let _ = tx.send(Message::ConvertPreflight(source, outcome));
+    });
+}
+
+/// Act on a conversion preflight: start silently when it is clean, explain and ask when
+/// it is not.
+pub fn on_convert_preflight(
+    app: &mut App,
+    source: std::path::PathBuf,
+    outcome: crate::ft::Preflight,
+) {
+    use crate::ft::Preflight;
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.display().to_string());
+
+    match outcome {
+        Preflight::Ok(detail) => {
+            app.info(detail);
+            start_conversion(app, &source);
+        }
+        Preflight::Warn(detail) | Preflight::Fail(detail) => {
+            ask(
+                app,
+                Confirm::new(
+                    "Convert anyway?",
+                    vec![
+                        format!("FreeToken may not be able to convert {name}."),
+                        String::new(),
+                        detail,
+                        String::new(),
+                        "Converting anyway will run for several minutes and write most of \
+                         the model to disk before it can fail."
+                            .into(),
+                    ],
+                    ConfirmAction::ConvertAnyway(source),
+                    false,
+                ),
+            );
+        }
+    }
+}
+
+/// `offload` packs experts into banks, which is what every offload-family backend wants;
+/// `triton` keeps them dense for resident serving. Matching the Serve configuration's MoE
+/// backend keeps the output usable by the configuration that asked for it.
+fn convert_moe_backend(app: &App) -> &'static str {
+    match app.serve.get("moe_backend") {
+        Some("fused") => "triton",
+        _ => "offload",
+    }
 }
 
 /// Spawn `ft checkpoint` for a checkpoint that has been cleared to convert.
@@ -532,14 +619,7 @@ fn start_conversion(app: &mut App, source: &std::path::Path) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| source.display().to_string());
 
-    // `offload` packs experts into banks, which is what every offload-family backend
-    // wants; `triton` keeps them dense for resident serving. Match the MoE backend the
-    // Serve config asks for so the conversion is usable by the configuration that
-    // produced it.
-    let moe_backend = match app.serve.get("moe_backend") {
-        Some("fused") => "triton",
-        _ => "offload",
-    };
+    let moe_backend = convert_moe_backend(app);
 
     let mut args = vec![
         "--model".to_string(),
@@ -1072,14 +1152,14 @@ fn verify_template(app: &mut App) {
     run_preflight(app, &name, &model_path, &path);
 }
 
-/// Spawn the render check. It needs FreeToken's Python (for transformers), so it is a
-/// no-op with a clear message when that is not available.
+/// Spawn the template render check. It needs FreeToken's Python (for transformers), so
+/// it is a no-op with a clear message when that is not available.
 fn run_preflight(app: &mut App, name: &str, model_dir: &std::path::Path, jinja: &std::path::Path) {
     let Some(ft) = app.ft.clone() else {
         app.warn("cannot verify the template without the FreeToken CLI");
         return;
     };
-    let Some(argv) = crate::templates::preflight_command(&ft, model_dir, jinja) else {
+    let Some(argv) = crate::ft::preflight::template_command(&ft, model_dir, jinja) else {
         app.warn("cannot verify the template: no Python found beside the FreeToken CLI");
         return;
     };
@@ -1092,33 +1172,7 @@ fn run_preflight(app: &mut App, name: &str, model_dir: &std::path::Path, jinja: 
     let env = app.config.freetoken.env.clone();
     let tx = app.tx.clone();
     tokio::spawn(async move {
-        let mut cmd = tokio::process::Command::new(&argv[0]);
-        cmd.args(&argv[1..]);
-        for (k, v) in &env {
-            cmd.env(k, v);
-        }
-        let outcome = match cmd.output().await {
-            Ok(out) => {
-                let text = String::from_utf8_lossy(&out.stdout);
-                match text.lines().rev().find(|l| !l.trim().is_empty()) {
-                    Some(line) => crate::templates::Preflight::parse(line),
-                    // No stdout at all means the interpreter itself failed; the reason is
-                    // on stderr, and reporting "no output" would hide it.
-                    None => {
-                        let err = String::from_utf8_lossy(&out.stderr);
-                        crate::templates::Preflight::Fail(
-                            err.lines()
-                                .rev()
-                                .find(|l| !l.trim().is_empty())
-                                .unwrap_or("the check produced no output")
-                                .trim()
-                                .to_string(),
-                        )
-                    }
-                }
-            }
-            Err(e) => crate::templates::Preflight::Fail(format!("could not run the check: {e}")),
-        };
+        let outcome = crate::ft::preflight::run(argv, &env).await;
         let _ = tx.send(Message::TemplatePreflight(name, outcome));
     });
 }
