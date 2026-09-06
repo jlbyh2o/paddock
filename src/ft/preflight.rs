@@ -121,12 +121,14 @@ pub async fn run(argv: Vec<String>, env: &[(String, String)]) -> Outcome {
 /// Resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
 /// concluded against what the checkpoint declares.
 ///
-/// The mismatch worth catching: a multimodal wrapper (`...ForConditionalGeneration`)
-/// keeps the language model under `text_config` while `quantization_config` stays at the
-/// top level, so the expert-quantization detector reads the nested config, finds nothing,
-/// and settles on "none". The converter then takes the unquantized expert path, fails to
-/// recognize the packed tensors, folds them into the dense pass, and finally raises
-/// `Missing MoE expert source layers` — minutes later, having written most of the model.
+/// The mismatch worth catching: FreeToken has two expert-quantization detectors, and the
+/// Qwen3.5-MoE family uses its own, written for nvidia/modelopt. It reads `quant_algo`,
+/// `quant_method` and the `quantized_layers` map, and never looks at `format` — so an
+/// llm-compressor export settles on "none" however plainly its format says
+/// `nvfp4-pack-quantized`. The converter then takes the unquantized expert path, folds the
+/// packed tensors into the dense pass, and finally raises `Missing MoE expert source
+/// layers` — minutes later, having written most of the model. See
+/// `docs/freetoken-compressed-tensors-moe.md`.
 const CONVERT_SCRIPT: &str = r#"
 import sys, json, os
 model_dir = sys.argv[1]

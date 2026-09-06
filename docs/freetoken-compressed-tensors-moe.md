@@ -3,7 +3,7 @@
 Handoff for a future session. Everything below marked **VERIFIED** was executed and
 observed; everything marked **UNVERIFIED** is inference that still needs testing.
 
-- **Written:** 2026-09-05
+- **Written:** 2026-09-05 (revised the same day after a review pass — see §8)
 - **FreeToken:** v0.1.2, commit `af71ba43206e124f5ff6419b47ee36c6e9981078` (2026-09-03)
 - **Fork to work in:** `git@github.com:jlbyh2o/FreeToken.git` (`origin`), with
   `upstream` = `https://github.com/FlashML-org/FreeToken.git`, push-disabled
@@ -54,8 +54,11 @@ to the family-local `_expert_quant`. The checkpoint declares:
 `"compressed-tensors"` contains neither `fp4` nor `mixed`, so `_expert_quant` returns
 `"none"`. **VERIFIED** by calling all three functions directly against the real config.
 
-With `expert_quant == "none"`, `moe/expert_banks.py` dispatches to `_bf16_banks`, which
-looks for unpacked bf16 expert tensors, finds none for any of the 40 layers, and raises.
+With `expert_quant == "none"`, `python/freetoken/moe/expert_banks.py:298` dispatches through
+`_PROVIDERS["none"]` to `_bf16_banks` (`expert_banks.py:65`), which looks for unpacked bf16
+expert tensors and finds none for any of the 40 layers. The raise itself is one level down,
+in `python/freetoken/models/loader.py:419` — grepping `expert_banks.py` for the message
+finds nothing. **VERIFIED**
 
 > Note: `parse_config` *does* call `_compressed_tensors_nvfp4` at
 > `qwen3_5_moe/config.py:185`, but that branch only sets `attn_quant`, `dense_quant` and
@@ -88,7 +91,11 @@ real model directory was never modified.
 
 That explains the ~21 GiB dense phase: with the compressed-tensors branch taken at
 `weight.py:182`, the packed expert tensors are emitted as ordinary dense weights instead of
-being excluded for the offload bank pass. **VERIFIED** (observed byte counts + docstring.)
+being excluded for the offload bank pass. **VERIFIED** — observed byte counts, and confirmed
+in the code since: the function's only early exit is `if not include_non_moe: return`
+(`weight.py:579`), so the offload call (`include_non_moe=True, include_moe_experts=False`)
+runs the full loop; and `_rename` (`weight.py:134`) drops `mtp.`/`visual.` prefixes but never
+routed experts, so the expert tensors reach the emit path.
 
 ---
 
@@ -132,16 +139,24 @@ its `model.safetensors.index.json`, which holds
 at 10240 entries each (256 experts x 40 layers). **VERIFIED**
 
 `kind_map` and `global_reciprocal` are generic fields on `Nvfp4ExpertSourceSpec`
-(`nvfp4_banks.py:20-27`), not GLM-specific.
+(`nvfp4_banks.py:20-30`), not GLM-specific.
 
 ---
 
 ## 4. Proposed fix — three parts, all **UNVERIFIED**
 
 1. **`qwen3_5_moe/config.py::_expert_quant`** — recognize a compressed-tensors NVFP4
-   export. Cleanest is probably to fall back to the shared
-   `models/config.py::detect_expert_quant`, or to reuse the already-imported
-   `_compressed_tensors_nvfp4` (it is in scope at `config.py:68`) and return `"nvfp4"`.
+   export by reusing the already-imported `_compressed_tensors_nvfp4` (in scope at
+   `config.py:68`) and returning `"nvfp4"`.
+
+   Do **not** simply fall back to the shared `models/config.py::detect_expert_quant`. Its
+   own docstring says "Models with mixed-precision configs (e.g. qwen3_5_moe) need their
+   own detector", and it returns the lowercased algo string for anything it does not
+   recognize as NVFP4: a modelopt `MIXED_PRECISION` export yields `"mixed_precision"` and a
+   compressed-tensors FP8 export yields `"compressed-tensors"`, neither of which is a key in
+   `moe/expert_banks.py::_PROVIDERS`. That trades the missing-layers error for
+   "no expert-bank provider for expert_quant=..." on checkpoints the family detector
+   deliberately answers `"none"` for.
 2. **`qwen3_5_moe/weight.py`** — add a `_NVFP4_CT_SOURCE_SPEC` mirroring GLM's, with
    Qwen's `layer_to_bank=lambda layer, config: layer`, plus a `_select_expert_source_spec`
    like GLM's; use it at `weight.py:1068-1071` where `_NVFP4_SOURCE_SPEC` is passed to
@@ -150,6 +165,16 @@ at 10240 entries each (256 experts x 40 layers). **VERIFIED**
    routed experts when `include_moe_experts=False` (offload), instead of emitting them as
    dense weights. Check `_iter_weights_compressed_tensors` against a MoE checkpoint; it
    currently early-returns on `not include_non_moe` and otherwise assumes no experts exist.
+
+**Scope: this plan covers the offload path only.** Parts 2 and 3 fix the expert *banks*
+(`--moe-backend offload`, and the bank-fed part of `hybrid`/`cpu`). They do not address a
+resident load, where `include_moe_experts=True` sends the experts through the dense pass:
+that path needs them in the pre-fused `experts.gate_up_proj` / `experts.down_proj` layout
+`_PACKED_EXPERT_PATTERN` expects (`qwen3_5_moe/weight.py:31`), and a compressed-tensors
+checkpoint stores them per-expert and un-fused. ft-man offers `auto`/`offload`/`hybrid`/
+`cpu`/`fused` (`src/knobs.rs:172`), so a user can reach the unfixed path. Decide explicitly
+whether to fuse-on-load for it or to reject `fused` for these checkpoints with a clear
+message. **UNVERIFIED** — reasoned from the key patterns, not run.
 
 **Open questions to answer before or while implementing:**
 - Is `global_reciprocal=True` correct for this checkpoint, or is that GLM-specific? It
@@ -205,6 +230,10 @@ Success criteria, in order:
    quality — a silently wrong scale convention would show up as garbage tokens, not a
    crash. **This is the step most likely to reveal a subtle error.**
 
+Steps 1-4 exercise `offload` only. If part 3's scope decision above includes the resident
+path, repeat step 4 with `--moe-backend fused` (16 GiB of VRAM will not hold 35B at FP4, so
+expect to test it on `hybrid` or accept an explicit rejection instead).
+
 Clean up `/tmp/ornith-test-ftw` afterwards (~21 GiB). Server had 82 GB free at handoff.
 
 ---
@@ -225,6 +254,9 @@ If the upstream fix lands, these need revisiting:
 
 - `src/compat.rs::unresolvable_experts` — mirrors the buggy family detector to warn on the
   Hub before downloading. Its doc comment records the same evidence.
+- `src/ft/preflight.rs::CONVERT_SCRIPT` — the convert preflight, whose doc comment explains
+  the same two-detector split and whose `WARN` branch fires on
+  `is_moe and expert_quant == "none"` with a declared quant.
 - `src/compat.rs` tests `an_llm_compressor_moe_export_is_caught_with_the_real_reason` and
   `the_family_that_can_read_compressed_tensors_is_not_flagged`.
 - `README.md`, the "A doomed conversion fails in seconds" paragraph.
@@ -234,6 +266,14 @@ If the upstream fix lands, these need revisiting:
 My first explanation was **wrong**: I claimed the multimodal wrapper keeps the language
 model under `text_config` while `quantization_config` stays top-level, so the detector read
 the nested config and found nothing. Copying `quantization_config` into `text_config`
-changed nothing — `parse_config` passes the top-level config regardless. That wrong theory
-shipped in ft-man's UI for one build before being corrected. Test the claim before
-encoding it in a user-facing message.
+changed nothing — `parse_config` passes the top-level config regardless. Test the claim
+before encoding it in a user-facing message.
+
+The correction itself then came up short, which is the second lesson. Commit `60b80b6`
+rewrote `README.md`, `src/compat.rs` and `src/ui/smoke.rs`, and the first draft of this
+handoff recorded the theory as fully retracted — but a verbatim copy survived in
+`src/ft/preflight.rs`'s doc comment above `CONVERT_SCRIPT` and shipped for two more commits,
+because §7's list of places encoding the finding did not mention that file. It was caught in
+a review pass and corrected on 2026-09-05. When retracting a claim, grep the tree for its
+distinctive words (`text_config` here) rather than trusting a list of the places you
+remember writing it.
