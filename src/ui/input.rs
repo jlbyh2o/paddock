@@ -39,6 +39,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         }
         return;
     }
+    // The plan overlay is read-then-decide: it holds the keyboard so a stray key cannot
+    // half-apply it, and only A commits.
+    if app.serve_view.plan.is_some() {
+        match key.code {
+            KeyCode::Char('A') => apply_plan(app),
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('a') => app.serve_view.plan = None,
+            _ => {}
+        }
+        return;
+    }
 
     // A text field has the keyboard until it is dismissed.
     if let Some(handled) = text_entry(app, key) {
@@ -1265,8 +1275,39 @@ fn serve_key(app: &mut App, key: KeyEvent) {
             app.serve_view.naming = true;
         }
         KeyCode::Char('P') => load_profile(app),
+        KeyCode::Char('a') => build_plan(app),
         KeyCode::Char('g') => start_engine(app),
         _ => {}
+    }
+}
+
+/// Work out what this hardware would prefer, and show it before changing anything.
+///
+/// Planning is pure and instant — every input is already in memory — so this needs no
+/// job, no spinner and no confirmation. Applying it does need a deliberate second key,
+/// which is why the overlay holds the keyboard until one arrives.
+fn build_plan(app: &mut App) {
+    match crate::ui::views::plan::build(app) {
+        Ok(plan) => {
+            if plan.is_empty() && plan.unpriced.is_none() {
+                app.success("nothing to change — this configuration is already optimal here");
+                return;
+            }
+            app.serve_view.plan = Some(plan);
+        }
+        Err(why) => app.warn(format!("cannot plan: {why}")),
+    }
+}
+
+/// Fold the plan's edits into the serve configuration.
+fn apply_plan(app: &mut App) {
+    let Some(plan) = app.serve_view.plan.take() else { return };
+    match plan.apply(&mut app.serve) {
+        0 => app.info("the configuration already matched the plan"),
+        n => app.success(format!(
+            "applied {n} change{} — press g to serve with it",
+            if n == 1 { "" } else { "s" }
+        )),
     }
 }
 

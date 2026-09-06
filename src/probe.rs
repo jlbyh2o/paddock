@@ -44,6 +44,10 @@ impl Gpu {
 pub struct Host {
     pub cpu_percent: f32,
     pub cpu_cores: usize,
+    /// Physical cores, which is not `cpu_cores` on an SMT part and is the number that
+    /// matters here: FreeToken's CPU MoE executor defaults to one worker per physical
+    /// core, and counting hyperthreads oversubscribes it.
+    pub physical_cores: usize,
     pub memory_total: u64,
     pub memory_used: u64,
     pub swap_total: u64,
@@ -100,6 +104,7 @@ impl Probe {
         Host {
             cpu_percent,
             cpu_cores: cpus.len(),
+            physical_cores: System::physical_core_count().unwrap_or(cpus.len()),
             memory_total: self.system.total_memory(),
             memory_used: self.system.used_memory(),
             swap_total: self.system.total_swap(),

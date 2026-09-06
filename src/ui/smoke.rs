@@ -135,6 +135,7 @@ fn populate(app: &mut App) {
     app.host = Host {
         cpu_percent: 62.5,
         cpu_cores: 32,
+        physical_cores: 16,
         memory_total: 137_438_953_472,
         memory_used: 96_000_000_000,
         swap_total: 8_589_934_592,
@@ -186,6 +187,25 @@ fn populate(app: &mut App) {
             modified: None,
         },
     ];
+
+    // A ring shaped like a real agent session: one cold prefill, then cached turns.
+    for (i, (prompt, ttft)) in
+        [(69_000u64, 23_100u64), (69_800, 780), (70_400, 790), (71_100, 800)].iter().enumerate()
+    {
+        app.requests_view.entries.push_back(RequestRecord {
+            ts: format!("2026-09-06T18:0{i}:00Z"),
+            method: "POST".into(),
+            path: "/v1/chat/completions".into(),
+            status: 200,
+            model: Some("Qwen3.6-35B-A3B".into()),
+            duration_ms: 12_000,
+            ttft_ms: Some(*ttft),
+            prompt_tokens: Some(*prompt),
+            completion_tokens: Some(700),
+            stream: Some(true),
+            error: None,
+        });
+    }
 
     app.jobs = vec![
         crate::ft::Job::fake(
@@ -364,6 +384,128 @@ async fn every_view_renders_with_a_live_engine() {
     draw_all(&mut a);
 }
 
+/// The whole point of the planner, end to end: a live engine that is quietly serving a
+/// fraction of the model's context is noticed, explained, and fixed by one keystroke.
+#[tokio::test]
+async fn a_starved_context_is_detected_and_the_plan_repairs_it() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.serve.set("model", "/models/Qwen3.6-35B-A3B");
+
+    // The fixture engine holds 131,072 KV tokens against a checkpoint offering 262,144.
+    let fit = a.context_fit().expect("a serving engine reports both numbers");
+    assert!(fit.is_truncated(), "half the advertised context is missing");
+    assert_eq!(fit.summary(), "128k of 256k");
+
+    let plan = crate::ui::views::plan::build(&a).expect("a plan should build");
+    assert!(plan.unpriced.is_none(), "a live engine prices the split exactly");
+
+    // This card cannot actually hold 256k of this model's KV, so the plan reaches for the
+    // most it can hold rather than promising the ceiling — and says the ceiling is out of
+    // reach rather than quietly settling.
+    let costs = a.costs_for("Qwen3.6-35B-A3B").expect("the live engine priced it");
+    let reachable = costs.max_context(false);
+    assert!(reachable > fit.usable, "the plan should still win back a lot of context");
+    assert!(reachable < fit.ceiling, "but not all of it, on this budget");
+    assert_eq!(plan.fit.unwrap().usable, reachable);
+    assert!(plan
+        .steps
+        .iter()
+        .any(|s| s.level == crate::plan::Level::Warning && s.reason.contains("cannot hold")));
+
+    // It pays for that context out of the expert cache and the prefill overlap's buffers.
+    let reserve = plan
+        .edits()
+        .into_iter()
+        .find(|(k, _)| *k == "kv_reserve_tokens")
+        .expect("the plan should raise the KV reserve");
+    assert_eq!(reserve.1, reachable.to_string());
+    assert!(plan.edits().iter().any(|(k, _)| *k == "disable_moe_prefill_overlap"));
+
+    let changed = plan.apply(&mut a.serve);
+    assert!(changed > 0);
+    assert_eq!(a.serve.get("kv_reserve_tokens"), Some(reachable.to_string().as_str()));
+
+    // And the configuration it produced is one FreeToken will accept.
+    assert!(a.serve.validate().is_empty(), "a planned configuration must be a valid one");
+    assert!(a.serve.to_args().windows(2).any(|w| w[0] == "--kv-reserve-tokens"));
+}
+
+/// Costs are only knowable from a running engine, so they are remembered for the next
+/// launch — otherwise every plan for a stopped engine would be unpriced forever.
+#[tokio::test]
+async fn measured_costs_outlive_the_engine_that_measured_them() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.serve.set("model", "/models/Qwen3.6-35B-A3B");
+
+    // A poll of a ready engine records what it measured.
+    let telemetry = std::mem::take(&mut a.telemetry);
+    a.handle(Message::Telemetry(Box::new(telemetry)));
+    assert!(
+        a.cost_store.get("Qwen3.6-35B-A3B").is_some(),
+        "a ready engine's unit costs should be written down"
+    );
+
+    // With the engine gone, the plan is still priced — from the store, not a guess.
+    a.telemetry = Telemetry::default();
+    assert!(a.context_fit().is_none(), "no engine, no live geometry");
+    let plan = crate::ui::views::plan::build(&a).expect("a plan should build");
+    assert!(plan.unpriced.is_none(), "the remembered costs still price it");
+    assert!(plan.fit.is_some());
+}
+
+/// A model nothing has ever measured must produce advice, not invented arithmetic.
+#[tokio::test]
+async fn an_unmeasured_model_is_planned_without_inventing_a_cache_split() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.telemetry = Telemetry::default();
+    a.serve.set("model", "/models/never-served");
+
+    let plan = crate::ui::views::plan::build(&a).expect("a plan should still build");
+    assert!(plan.unpriced.is_some(), "it should say why the split was skipped");
+    assert!(plan.fit.is_none());
+    assert!(
+        !plan.edits().iter().any(|(k, _)| *k == "kv_reserve_tokens"),
+        "no KV reserve may be recommended without a measured cost"
+    );
+}
+
+/// The Dashboard's prefix-reuse figure is inferred, so the thing worth testing is that
+/// it only appears when the evidence supports it.
+#[tokio::test]
+async fn prefix_reuse_is_estimated_from_the_ring_or_withheld() {
+    let mut a = app().await;
+    populate(&mut a);
+
+    let r = a.prefix_reuse().expect("a cold request plus cached ones should estimate");
+    assert!(r.fraction > 0.6, "the session is mostly cached, got {:.2}", r.fraction);
+    assert!(r.summary().contains('~'), "it must read as an estimate: {}", r.summary());
+
+    // Rebuild the ring with only the cached turns: the cold anchor is gone, the spread
+    // goes with it, and so must the estimate.
+    let cached: Vec<RequestRecord> = a
+        .requests_view
+        .entries
+        .iter()
+        .filter(|e| {
+            e.ttft_ms.is_some_and(|t| t < 1000) && e.prompt_tokens.is_some_and(|p| p > 60_000)
+        })
+        .cloned()
+        .collect();
+    assert!(cached.len() >= 3, "fixture should hold several cached turns");
+    a.requests_view.entries = cached.into_iter().collect();
+    assert!(
+        a.prefix_reuse().is_none(),
+        "uniformly fast requests cannot be told apart from a fast GPU"
+    );
+
+    // And with no ring at all there is nothing to infer from.
+    a.requests_view.entries.clear();
+    assert!(a.prefix_reuse().is_none());
+}
+
 #[tokio::test]
 async fn overlays_and_secondary_panes_render() {
     let mut a = app().await;
@@ -406,6 +548,11 @@ async fn overlays_and_secondary_panes_render() {
     a.cache_view.set_pending(Pool::Moe, Some(1024));
     a.cache_view.set_pending(Pool::Kv, Some(65_536));
     draw_all(&mut a);
+
+    a.serve.set("model", "/models/Qwen3.6-35B-A3B");
+    a.serve_view.plan = Some(crate::ui::views::plan::build(&a).expect("a plan should build"));
+    draw_all(&mut a);
+    a.serve_view.plan = None;
 
     // Every knob group, including the ones with the longest help text.
     for group in crate::knobs::Group::ALL {

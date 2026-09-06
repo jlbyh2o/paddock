@@ -23,7 +23,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Length(9), Constraint::Min(6)])
+        .constraints([Constraint::Length(11), Constraint::Length(9), Constraint::Min(6)])
         .split(cols[0]);
 
     let right = Layout::default()
@@ -116,10 +116,18 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
         lines.push(t.field("Model sampling", sampling));
     }
 
+    // The context the engine can actually serve, which is not the one the model card
+    // advertises. `/v1/models` reports the checkpoint's ceiling on purpose, and the
+    // engine quietly clamps to `num_pages * page_size` — so a checkpoint offering 256k
+    // can be serving 8k with nothing anywhere saying so. This is the one place the two
+    // numbers are put side by side.
+    let fit = app.context_fit();
     if let Some(model) = app.telemetry.stats.as_ref().map(|s| &s.model) {
         let mut facts: Vec<String> = Vec::new();
-        if model.ctx > 0 {
-            facts.push(format!("{}k ctx", model.ctx / 1024));
+        match fit {
+            Some(fit) if fit.is_truncated() => facts.push(format!("{} ctx", fit.summary())),
+            _ if model.ctx > 0 => facts.push(format!("{} ctx", crate::plan::tokens(model.ctx))),
+            _ => {}
         }
         if let Some(a) = &model.attn {
             facts.push(a.clone());
@@ -128,8 +136,27 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
             facts.push("MoE".into());
         }
         if !facts.is_empty() {
-            lines.push(t.field("Shape", facts.join(" · ")));
+            let truncated = fit.is_some_and(|f| f.is_truncated());
+            if truncated {
+                lines.push(t.field_colored("Shape", facts.join(" · "), t.warn));
+            } else {
+                lines.push(t.field("Shape", facts.join(" · ")));
+            }
         }
+    }
+
+    if let Some(fit) = fit.filter(|f| f.is_truncated()) {
+        lines.push(Line::from(Span::styled(
+            crate::util::truncate(
+                &format!(
+                    "KV holds {} of {} — press a on the Serve tab to plan a fix",
+                    crate::plan::tokens(fit.usable),
+                    crate::plan::tokens(fit.ceiling),
+                ),
+                inner.width.saturating_sub(1) as usize,
+            ),
+            Style::default().fg(t.warn),
+        )));
     }
 
     f.render_widget(Paragraph::new(lines), inner);
@@ -479,6 +506,18 @@ fn activity_pane(f: &mut Frame, app: &App, area: Rect) {
             ));
             lines.push(t.field("Prompt tokens", count(r.prompt_tokens_total)));
             lines.push(t.field("Output tokens", count(r.completion_tokens_total)));
+            // Prefix reuse is the engine's own figure in principle, but it only appears
+            // in a completion's usage block -- which ft-man never sees, since it polls
+            // the control plane rather than proxying model traffic. This is inferred
+            // from TTFT against prompt size, and is labelled so it never reads as
+            // something the server reported.
+            if let Some(reuse) = app.prefix_reuse() {
+                lines.push(t.field_colored(
+                    "Prefix reuse",
+                    reuse.summary(),
+                    if reuse.fraction >= 0.5 { t.good } else { t.dim },
+                ));
+            }
             if s.vram_bytes > 0 {
                 lines.push(t.field("Engine VRAM", bytes(s.vram_bytes)));
             }

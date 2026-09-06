@@ -78,7 +78,7 @@ $EDITOR ~/.config/ft-man/config.toml
 | **Models** | Your local checkpoint library. Recognizes HF, FTW and GGUF, pairs a checkpoint with its FTW build, and says what to do with each. |
 | **Hub** | Search Hugging Face, check a repo against FreeToken *before* downloading it, pick files, download. Resumable and parallel. |
 | **Templates** | Override a checkpoint's chat template with one fetched from a Hugging Face repo, and put the original back. |
-| **Serve** | Every `ft serve` flag, grouped, with its domain and help text. Save configurations as named profiles. |
+| **Serve** | Every `ft serve` flag, grouped, with its domain and help text. `a` plans the launch against your hardware. Save configurations as named profiles. |
 | **Cache** | Resize the MoE, KV, GDN and SWA pools on the running engine, with the VRAM cost of each change shown before you apply it. |
 | **Jobs** | FTW conversions, bandwidth benchmarks and downloads, with real progress bars and live output. |
 | **Requests** | The engine's request ring: status, latency, TTFT and token counts per call. |
@@ -102,6 +102,65 @@ totals.
 **The knob table is the documentation.** Every flag carries its type, range, default,
 help text and mutual exclusions in one schema. Setting `--moe-cache-size` clears
 `--moe-cache-rate` for you, because the engine would reject the pair.
+
+**It notices when you are serving a fraction of your context.** FreeToken sizes the KV
+cache from whatever VRAM the expert cache leaves it — `--moe-cache-auto` reserves
+`--kv-reserve-tokens` (8192 by default), lets the experts take the rest, and hands KV the
+remainder. The engine then serves `min(model_ceiling, num_pages * page_size)` without
+logging that it clamped, while `/v1/models` keeps advertising the checkpoint's full
+ceiling on purpose. So a 256k model can be answering with 8k and nothing says so. The
+Dashboard puts both numbers on one line and says which is real.
+
+**And it can plan the fix.** Press `a` on the Serve tab. ft-man prices the cache split
+from what the engine measured — `cache_budget_bytes` and the per-unit KV and expert costs
+from `/v1/cache/status` — and works out the `--kv-reserve-tokens` that buys back the
+context, what it costs in expert slots, and whether the card can reach the ceiling at all.
+It also makes the two calls `auto` will not: `--moe-backend fused` when every expert
+demonstrably fits in VRAM alongside full-context KV (the engine refuses to guess, because
+a wrong guess is an OOM at weight load; ft-man has NVML and the geometry, so it is
+arithmetic), and hybrid-vs-offload from the `ft bench bw` profile. Every line says why,
+with the numbers it used. `A` applies it to the configuration you were already editing;
+nothing is changed until you press it.
+
+Costs are only knowable from a running engine, so ft-man writes down what each serve
+measured (`~/.local/state/ft-man/costs.json`) and plans the next launch of that model
+exactly. Before a model has ever been served, the plan says the split is unpriced rather
+than inventing one.
+
+**It estimates prefix-cache reuse, and says that it is an estimate.** FreeToken reports
+the exact figure only in a completion's `usage.prompt_tokens_details` block, which ft-man
+never sees — it polls the control plane rather than proxying model traffic, and neither
+`/v1/stats` nor the request ring carries a cached-token count. So the Dashboard infers it:
+time to first token is dominated by prefill, prefill only covers the uncached part of a
+prompt, and the slowest request in the ring anchors the hardware's cold rate. A 70k prompt
+reaching first token in 0.8 s on a card that prefills ~3k tokens/s did not prefill 70k
+tokens. When the ring holds no spread between slow and fast requests the figure is withheld
+rather than guessed, because a uniformly quick session and a quick GPU look identical from
+outside.
+
+**It prices the GDN state pool, which is easy to forget and expensive.** On a
+hybrid-linear model (Qwen3.5-MoE and friends) the linear-attention state pool is a sibling
+of the KV and expert pools, drawn from the same `cache_budget_bytes`, at tens of MiB per
+slot — on a 16 GiB card that can be a seventh of the whole budget. Its size is a function
+of `--max-running-requests`: four slots per running request plus a snapshot cache. So
+concurrency is a *memory* knob on these models, not just a scheduling one, and the KV pool
+may only have room for one full-length request anyway. When the expert cache is
+budget-capped, the plan offers the trade with the arithmetic attached — on a 5070 Ti
+serving a 35B-A3B at full context, dropping to one running request frees 982 MiB and grows
+the expert cache from 1,822 to 2,403 slots. It stays quiet when every expert already fits,
+because then the trade buys nothing.
+
+**It knows host RAM is spent too.** The offload backends pin *every* expert in host RAM,
+resident or not, so the host-side footprint is the whole model's experts rather than the
+cache. ft-man reports when those banks dominate RAM, and a benched `hybrid` verdict yields
+to a host with no headroom — hybrid's CPU executor needs working room on top of the banks,
+and a faster backend that cannot allocate is not faster.
+
+**A missing bandwidth profile is a speed ceiling with no symptom.** Without
+`~/.cache/freetoken/benchbw/<gpu-uuid>.json`, `--moe-backend auto` can only ever resolve
+to `offload`, and `--moe-hybrid-max-fetch auto` falls back to a fixed cap of 1 instead of
+the bandwidth-matched split. `--doctor` and the plan both say so, and the benchmark is one
+key on the Jobs tab.
 
 **It says whether a repo can run here before you download it.** Pressing Enter on a Hub
 result fetches only `config.json` — one small request — and reports a verdict. The

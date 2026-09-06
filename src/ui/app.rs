@@ -190,6 +190,9 @@ pub struct ServeView {
     pub show_preview: bool,
     pub profile_sel: Selection,
     pub in_profiles: bool,
+    /// The last plan built for this configuration, shown until it is applied or the
+    /// model changes under it.
+    pub plan: Option<crate::plan::Plan>,
 }
 
 impl Default for ServeView {
@@ -204,6 +207,7 @@ impl Default for ServeView {
             show_preview: false,
             profile_sel: Selection::default(),
             in_profiles: false,
+            plan: None,
         }
     }
 }
@@ -377,6 +381,10 @@ pub struct App {
     pub jobs: Vec<Job>,
     pub downloads: Vec<Download>,
     pub bench_profile: Option<BenchProfile>,
+    /// Per-unit VRAM costs remembered from earlier serves, so a launch can be
+    /// planned before the engine that would measure them is running.
+    pub cost_store: crate::plan::CostStore,
+    cost_store_warned: bool,
 
     pub serve: ServeConfig,
     pub models_view: ModelsView,
@@ -498,6 +506,8 @@ impl App {
             jobs: Vec::new(),
             downloads: Vec::new(),
             bench_profile: None,
+            cost_store: crate::plan::CostStore::load(),
+            cost_store_warned: false,
             serve,
             models_view: ModelsView::default(),
             hub_view: HubView { revision: "main".into(), ..Default::default() },
@@ -890,6 +900,61 @@ impl App {
             self.engine.mark_ready();
         }
         self.telemetry = t;
+        self.record_costs();
+    }
+
+    /// Remember what this engine measured, so the next launch of the same model can be
+    /// planned exactly instead of not at all.
+    ///
+    /// The per-unit VRAM costs are only knowable once the model is loaded, which is after
+    /// every decision they would have informed. Writing them down turns that into a
+    /// one-serve cost. Only a fully ready engine is trusted: a loading one publishes
+    /// zeroes, and a rebuilding one is mid-flight.
+    fn record_costs(&mut self) {
+        if !self.telemetry.health.as_ref().is_some_and(Health::is_ready) {
+            return;
+        }
+        let Some(geo) = self.telemetry.cache.as_ref().map(|c| &c.geometry) else { return };
+        let Some(costs) = crate::plan::Costs::from_geometry(geo) else { return };
+        let Some(model) = self.current_model() else { return };
+        if self.cost_store.observe(&model, costs) {
+            if let Err(e) = self.cost_store.save() {
+                // Said once, not once per poll: an unwritable state directory does not
+                // get better on the next tick, and the only cost is an unpriced plan.
+                if !self.cost_store_warned {
+                    self.cost_store_warned = true;
+                    self.warn(format!("could not record cache costs for planning: {e}"));
+                }
+            }
+        }
+    }
+
+    /// The costs to plan `model` against: what the running engine is reporting right now,
+    /// else what a previous serve of the same model recorded.
+    pub fn costs_for(&self, model: &str) -> Option<crate::plan::Costs> {
+        let live = self
+            .telemetry
+            .cache
+            .as_ref()
+            .filter(|_| self.current_model().as_deref() == Some(model))
+            .and_then(|c| crate::plan::Costs::from_geometry(&c.geometry));
+        live.or_else(|| self.cost_store.get(model).copied())
+    }
+
+    /// Estimated prefix-cache reuse across the requests currently in the ring.
+    ///
+    /// `None` whenever the evidence is too thin to say — see [`crate::reuse`]. The
+    /// Dashboard then shows nothing rather than a number that could be invented.
+    pub fn prefix_reuse(&self) -> Option<crate::reuse::Reuse> {
+        let entries: Vec<_> = self.requests_view.entries.iter().cloned().collect();
+        crate::reuse::estimate(&entries)
+    }
+
+    /// How much of the served model's advertised context the engine can actually use.
+    pub fn context_fit(&self) -> Option<crate::plan::ContextFit> {
+        let geo = &self.telemetry.cache.as_ref()?.geometry;
+        let ceiling = self.telemetry.stats.as_ref()?.model.ctx;
+        crate::plan::ContextFit::measure(geo, ceiling)
     }
 
     fn on_engine(&mut self, e: EngineEvent) {
@@ -1031,14 +1096,12 @@ impl App {
 }
 
 /// The URL ft-man polls: whatever the serve configuration will bind, falling back to
-/// the configured default. A bind address of 0.0.0.0 means "every interface", which is
-/// not a usable destination, so poll the loopback the engine is also listening on.
+/// the configured default. Either can be a wildcard bind, which `poll_host` turns into
+/// the loopback the engine is also listening on.
 fn endpoint_for(config: &Config, serve: &ServeConfig) -> String {
-    let host = match serve.get("host").map(str::trim).filter(|h| !h.is_empty()) {
-        Some("0.0.0.0") | Some("::") | Some("*") => "127.0.0.1",
-        Some(h) => h,
-        None => &config.server.host,
-    };
+    let host =
+        serve.get("host").map(str::trim).filter(|h| !h.is_empty()).unwrap_or(&config.server.host);
+    let host = crate::config::poll_host(host);
     let port =
         serve.get("port").and_then(|p| p.trim().parse::<u16>().ok()).unwrap_or(config.server.port);
     format!("http://{host}:{port}")
@@ -1046,29 +1109,8 @@ fn endpoint_for(config: &Config, serve: &ServeConfig) -> String {
 
 /// Read the `ft bench bw` profile for a GPU, falling back to the newest one written.
 fn load_bench_profile(gpu_uuid: Option<String>) -> Option<BenchProfile> {
-    let cache = dirs::cache_dir()?.join("freetoken");
-    let path = gpu_uuid
-        .map(|u| cache.join("benchbw").join(format!("{u}.json")))
-        .filter(|p| p.is_file())
-        .or_else(|| newest_profile(&cache.join("benchbw")))
-        .or_else(|| {
-            let legacy = cache.join("benchbw.json");
-            legacy.is_file().then_some(legacy)
-        })?;
+    let path = crate::plan::bench_profile_status(gpu_uuid.as_deref())?;
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-}
-
-fn newest_profile(dir: &std::path::Path) -> Option<PathBuf> {
-    let rd = std::fs::read_dir(dir).ok()?;
-    rd.filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .filter_map(|p| {
-            let t = std::fs::metadata(&p).ok()?.modified().ok()?;
-            Some((t, p))
-        })
-        .max_by_key(|(t, _)| *t)
-        .map(|(_, p)| p)
 }
 
 /// Build the rebuild request from the Cache view's pending edits.
@@ -1132,6 +1174,14 @@ mod tests {
                 "binding {wildcard} is not itself a destination"
             );
         }
+    }
+
+    #[test]
+    fn the_default_bind_address_is_the_wildcard_polled_over_loopback() {
+        let config = Config::default();
+        assert_eq!(config.server.host, "0.0.0.0", "serve should be reachable off-box by default");
+        assert_eq!(config.server.base_url(), "http://127.0.0.1:1919");
+        assert_eq!(endpoint_for(&config, &ServeConfig::new()), "http://127.0.0.1:1919");
     }
 
     #[test]

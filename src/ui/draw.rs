@@ -27,6 +27,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(confirm) = app.confirm.clone() {
         confirm.render(f, &app.theme, area);
     }
+    if app.serve_view.plan.is_some() {
+        views::plan::render(f, app, area);
+    }
     if app.show_help {
         views::help::render(f, app, area);
     }
@@ -112,6 +115,9 @@ fn hints(app: &App) -> &'static [(&'static str, &'static str)] {
     if app.show_help {
         return &[("Esc", "close")];
     }
+    if app.serve_view.plan.is_some() {
+        return &[("A", "apply the plan"), ("Esc", "close")];
+    }
     match app.tab {
         Tab::Dashboard => {
             &[("e", "start"), ("s", "stop"), ("t", "smoke test"), ("r", "rescan"), ("?", "keys")]
@@ -144,6 +150,7 @@ fn hints(app: &App) -> &'static [(&'static str, &'static str)] {
             ("Enter", "edit"),
             ("← →", "group"),
             ("x", "unset"),
+            ("a", "plan"),
             ("g", "start engine"),
             ("S", "save profile"),
             ("?", "keys"),

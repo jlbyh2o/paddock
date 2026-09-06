@@ -8,6 +8,7 @@ pub mod hub;
 pub mod jobs;
 pub mod logs;
 pub mod models;
+pub mod plan;
 pub mod requests;
 pub mod serve;
 pub mod templates;

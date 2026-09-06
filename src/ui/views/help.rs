@@ -75,6 +75,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("Enter", "edit a value, or toggle a flag"),
             ("Space", "cycle a choice knob"),
             ("x / Del", "unset a knob, back to its default"),
+            ("a", "plan this serve for the hardware; A applies it"),
             ("p", "show the resolved command line"),
             ("Tab", "move to the profile list"),
             ("S", "save as a profile"),
