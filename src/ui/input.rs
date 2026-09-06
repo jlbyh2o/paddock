@@ -1,0 +1,1219 @@
+//! Keyboard handling and the actions keys trigger.
+//!
+//! Dispatch is layered: overlays first (a modal owns the keyboard completely), then
+//! text-entry modes, then the active tab. Anything that spawns a process, deletes a
+//! directory, or stops the engine goes through a confirmation unless the user has turned
+//! those off.
+
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+use crate::ft::proc::{spawn_job, JobKind, JobSpec};
+use crate::hub::{start_download, Hub};
+use crate::knobs::{knobs_in, Kind, Knob};
+use crate::models::Format;
+use crate::ui::app::{rebuild_from_pending, App, Message, Pool, Tab, Telemetry};
+use crate::ui::views;
+use crate::ui::widgets::{Confirm, ConfirmAction, ToastKind};
+
+pub fn handle_key(app: &mut App, key: KeyEvent) {
+    // Terminals that report key releases would otherwise fire every binding twice.
+    if key.kind == KeyEventKind::Release {
+        return;
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        app.should_quit = true;
+        return;
+    }
+
+    if app.confirm.is_some() {
+        confirm_key(app, key);
+        return;
+    }
+    if app.show_help {
+        if matches!(
+            key.code,
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::F(1)
+        ) {
+            app.show_help = false;
+        }
+        return;
+    }
+
+    // A text field has the keyboard until it is dismissed.
+    if let Some(handled) = text_entry(app, key) {
+        if handled {
+            return;
+        }
+    }
+
+    if global_key(app, key) {
+        return;
+    }
+
+    match app.tab {
+        Tab::Dashboard => dashboard_key(app, key),
+        Tab::Models => models_key(app, key),
+        Tab::Hub => hub_key(app, key),
+        Tab::Serve => serve_key(app, key),
+        Tab::Cache => cache_key(app, key),
+        Tab::Jobs => jobs_key(app, key),
+        Tab::Requests => requests_key(app, key),
+        Tab::Logs => logs_key(app, key),
+    }
+}
+
+// ---------------------------------------------------------------- overlays
+
+fn confirm_key(app: &mut App, key: KeyEvent) {
+    let Some(confirm) = app.confirm.as_mut() else { return };
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => confirm.selected = confirm.selected.saturating_sub(1),
+        KeyCode::Right | KeyCode::Char('l') => {
+            confirm.selected = (confirm.selected + 1).min(confirm.options.len() - 1)
+        }
+        KeyCode::Tab => confirm.selected = (confirm.selected + 1) % confirm.options.len(),
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            confirm.selected = 1;
+            let action = confirm.action.clone();
+            app.confirm = None;
+            run_action(app, action);
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm = None,
+        KeyCode::Enter => {
+            let accepted = confirm.accepted();
+            let action = confirm.action.clone();
+            app.confirm = None;
+            if accepted {
+                run_action(app, action);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Carry out a confirmed action.
+fn run_action(app: &mut App, action: ConfirmAction) {
+    match action {
+        ConfirmAction::Quit => app.should_quit = true,
+        ConfirmAction::StopEngine { force } => {
+            app.engine.stop(force);
+            app.info(if force { "force-stopping the engine" } else { "stopping the engine" });
+        }
+        ConfirmAction::DeleteModel(path) => match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                app.success(format!("deleted {}", path.display()));
+                app.request_scan();
+            }
+            Err(e) => app.error(format!("could not delete {}: {e}", path.display())),
+        },
+        ConfirmAction::CancelJob(id) => {
+            if let Some(j) = app.jobs.iter_mut().find(|j| j.id == id) {
+                j.cancel();
+            }
+        }
+        ConfirmAction::CancelDownload(id) => {
+            if let Some(d) = app.downloads.iter_mut().find(|d| d.id == id) {
+                d.cancel();
+                app.warn("download canceled");
+            }
+        }
+        ConfirmAction::DeleteProfile(name) => {
+            if app.profiles.remove(&name) {
+                if app.profiles.last_used.as_deref() == Some(name.as_str()) {
+                    app.profiles.last_used = None;
+                }
+                save_profiles(app);
+                app.success(format!("deleted profile '{name}'"));
+            }
+        }
+        ConfirmAction::ApplyCacheRebuild => apply_cache_rebuild(app),
+    }
+}
+
+fn ask(app: &mut App, confirm: Confirm) {
+    if app.config.ui.confirm_destructive {
+        app.confirm = Some(confirm);
+    } else {
+        run_action(app, confirm.action);
+    }
+}
+
+// ---------------------------------------------------------------- text entry
+
+/// Route a key into whichever text field is active. `None` means no field is active;
+/// `Some(true)` means the key was consumed.
+fn text_entry(app: &mut App, key: KeyEvent) -> Option<bool> {
+    let field = active_field(app)?;
+
+    match key.code {
+        KeyCode::Esc => {
+            close_field(app, false);
+            return Some(true);
+        }
+        KeyCode::Enter => {
+            close_field(app, true);
+            return Some(true);
+        }
+        _ => {}
+    }
+
+    let input = match field {
+        Field::ModelFilter => &mut app.models_view.filter,
+        Field::HubQuery => &mut app.hub_view.query,
+        Field::ServeValue => &mut app.serve_view.editor,
+        Field::ProfileName => &mut app.serve_view.profile_name,
+        Field::LogFilter => &mut app.logs_view.filter,
+    };
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('w') => input.delete_word(),
+            KeyCode::Char('u') => input.clear(),
+            KeyCode::Char('a') => input.home(),
+            KeyCode::Char('e') => input.end(),
+            KeyCode::Char('k') => {
+                while input.cursor < input.value.chars().count() {
+                    input.delete();
+                }
+            }
+            _ => {}
+        }
+        return Some(true);
+    }
+
+    match key.code {
+        KeyCode::Char(c) => input.insert(c),
+        KeyCode::Backspace => input.backspace(),
+        KeyCode::Delete => input.delete(),
+        KeyCode::Left => input.left(),
+        KeyCode::Right => input.right(),
+        KeyCode::Home => input.home(),
+        KeyCode::End => input.end(),
+        _ => return Some(false),
+    }
+
+    // The model filter is live, so the cursor must not point past the shortened list.
+    if field == Field::ModelFilter {
+        let n = app.filtered_models().len();
+        app.models_view.sel.clamp(n);
+    }
+    Some(true)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    ModelFilter,
+    HubQuery,
+    ServeValue,
+    ProfileName,
+    LogFilter,
+}
+
+fn active_field(app: &App) -> Option<Field> {
+    if app.models_view.filtering {
+        return Some(Field::ModelFilter);
+    }
+    if app.hub_view.editing {
+        return Some(Field::HubQuery);
+    }
+    if app.serve_view.editing {
+        return Some(Field::ServeValue);
+    }
+    if app.serve_view.naming {
+        return Some(Field::ProfileName);
+    }
+    if app.logs_view.filtering {
+        return Some(Field::LogFilter);
+    }
+    None
+}
+
+fn close_field(app: &mut App, commit: bool) {
+    match active_field(app) {
+        Some(Field::ModelFilter) => {
+            app.models_view.filtering = false;
+            if !commit {
+                app.models_view.filter.clear();
+            }
+            app.models_view.sel.clamp(app.filtered_models().len());
+        }
+        Some(Field::HubQuery) => {
+            app.hub_view.editing = false;
+            if commit && !app.hub_view.query.is_empty() {
+                start_search(app);
+            }
+        }
+        Some(Field::ServeValue) => {
+            app.serve_view.editing = false;
+            if commit {
+                commit_knob_edit(app);
+            }
+        }
+        Some(Field::ProfileName) => {
+            app.serve_view.naming = false;
+            if commit {
+                save_profile(app);
+            }
+        }
+        Some(Field::LogFilter) => {
+            app.logs_view.filtering = false;
+            if !commit {
+                app.logs_view.filter.clear();
+            }
+        }
+        None => {}
+    }
+}
+
+// ---------------------------------------------------------------- global
+
+fn global_key(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('?') | KeyCode::F(1) => {
+            app.show_help = true;
+            true
+        }
+        KeyCode::Char('q') => {
+            if app.engine.is_live() && app.engine.state != crate::ft::EngineState::Adopted {
+                ask(
+                    app,
+                    Confirm::new(
+                        "Quit ft-man",
+                        vec![
+                            "The engine ft-man started is still running.".into(),
+                            String::new(),
+                            "Quitting leaves it running and detached; it keeps serving, and a \
+                             later ft-man run will re-attach to it."
+                                .into(),
+                        ],
+                        ConfirmAction::Quit,
+                        false,
+                    ),
+                );
+            } else {
+                app.should_quit = true;
+            }
+            true
+        }
+        KeyCode::Tab if !tab_is_local(app) => {
+            app.tab = app.tab.next();
+            true
+        }
+        KeyCode::BackTab => {
+            app.tab = app.tab.prev();
+            true
+        }
+        KeyCode::Char(c @ '1'..='8') => {
+            if let Some(t) = Tab::from_digit(c.to_digit(10).unwrap()) {
+                app.tab = t;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Tabs where `Tab` moves focus within the view instead of switching views.
+fn tab_is_local(app: &App) -> bool {
+    matches!(app.tab, Tab::Hub | Tab::Serve | Tab::Jobs)
+}
+
+// ---------------------------------------------------------------- dashboard
+
+fn dashboard_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('e') => start_engine(app),
+        KeyCode::Char('s') => request_stop(app, false),
+        KeyCode::Char('S') => request_stop(app, true),
+        KeyCode::Char('r') => app.request_scan(),
+        KeyCode::Char('t') => smoke_test(app),
+        _ => {}
+    }
+}
+
+fn request_stop(app: &mut App, force: bool) {
+    if !app.engine.is_live() {
+        app.warn("no engine is running");
+        return;
+    }
+    let adopted = app.engine.state == crate::ft::EngineState::Adopted;
+    let model = app.current_model().unwrap_or_else(|| "the model".into());
+    ask(
+        app,
+        Confirm::new(
+            if force { "Force-stop the engine" } else { "Stop the engine" },
+            vec![
+                format!("Stop the engine serving {model}?"),
+                String::new(),
+                if force {
+                    "SIGKILL does not let the engine drain in-flight requests or release VRAM \
+                     cleanly. Use it only when a normal stop has already failed."
+                        .into()
+                } else if adopted {
+                    "This engine was started by an earlier ft-man run and re-attached to. \
+                     In-flight requests are aborted and the weights are unloaded."
+                        .to_string()
+                } else {
+                    "In-flight requests are aborted and the weights are unloaded.".to_string()
+                },
+            ],
+            ConfirmAction::StopEngine { force },
+            force,
+        ),
+    );
+}
+
+fn smoke_test(app: &mut App) {
+    if !app.server_reachable() {
+        app.warn("the server is not answering");
+        return;
+    }
+    let client = app.client.clone();
+    let tx = app.tx.clone();
+    app.info("running a /generate smoke test…");
+    tokio::spawn(async move {
+        let res =
+            client.generate("The capital of France is", 16).await.map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::SmokeTest(res));
+    });
+}
+
+// ---------------------------------------------------------------- models
+
+fn models_key(app: &mut App, key: KeyEvent) {
+    let len = app.filtered_models().len();
+    match key.code {
+        KeyCode::Char('/') => {
+            app.models_view.filtering = true;
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.models_view.sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.models_view.sel.down(len),
+        KeyCode::PageUp => app.models_view.sel.page_up(10),
+        KeyCode::PageDown => app.models_view.sel.page_down(len, 10),
+        KeyCode::Home => app.models_view.sel.first(),
+        KeyCode::End => app.models_view.sel.last(len),
+        KeyCode::Char('r') => app.request_scan(),
+        KeyCode::Enter => use_selected_model(app, false),
+        KeyCode::Char('s') => use_selected_model(app, true),
+        KeyCode::Char('c') => convert_selected(app),
+        KeyCode::Char('D') => delete_selected_model(app),
+        _ => {}
+    }
+}
+
+/// Load the highlighted model into the Serve configuration, optionally starting it.
+fn use_selected_model(app: &mut App, and_serve: bool) {
+    let Some(model) = app.selected_model() else { return };
+    // An FTW build loads meaningfully faster, so prefer it when one exists.
+    let (path, note) = match &model.converted_to {
+        Some(ftw) => (ftw.clone(), Some(format!("using the FTW build at {}", ftw.display()))),
+        None => (model.path.clone(), None),
+    };
+    let name = model.name.clone();
+    app.serve.set("model", path.display().to_string());
+    if let Some(n) = note {
+        app.info(n);
+    }
+    if and_serve {
+        start_engine(app);
+    } else {
+        app.tab = Tab::Serve;
+        app.success(format!("{name} loaded into the Serve configuration"));
+    }
+}
+
+fn convert_selected(app: &mut App) {
+    let Some(model) = app.selected_model() else { return };
+    if model.format != Format::Hf {
+        app.warn(format!(
+            "{} is already in {} format; conversion only applies to Hugging Face checkpoints",
+            model.name,
+            model.format.label()
+        ));
+        return;
+    }
+    if let Some(reason) = app.gpu_busy_reason() {
+        app.warn(format!("cannot convert: {reason}"));
+        return;
+    }
+    let Some(ft) = app.ft.clone() else {
+        app.error("the FreeToken CLI was not found");
+        return;
+    };
+
+    let source = model.path.clone();
+    let out = crate::models::ftw_output_path(&source);
+    let name = model.name.clone();
+    if out.exists() {
+        app.warn(format!("{} already exists; delete it to reconvert", out.display()));
+        return;
+    }
+
+    // `offload` packs experts into banks, which is what every offload-family backend
+    // wants; `triton` keeps them dense for resident serving. Match the MoE backend the
+    // Serve config asks for so the conversion is usable by the configuration that
+    // produced it.
+    let moe_backend = match app.serve.get("moe_backend") {
+        Some("fused") => "triton",
+        _ => "offload",
+    };
+
+    let mut args = vec![
+        "--model".to_string(),
+        source.display().to_string(),
+        "--out".to_string(),
+        out.display().to_string(),
+        "--moe-backend".to_string(),
+        moe_backend.to_string(),
+    ];
+    if let Some(gpu) = app.serve.get("gpu") {
+        args.push("--gpu".into());
+        args.push(gpu.to_string());
+    }
+
+    match spawn_job(
+        &ft,
+        JobSpec {
+            kind: JobKind::Convert,
+            subcommand: &["checkpoint"],
+            args,
+            env: &app.config.freetoken.env,
+            title: format!("{name} → FTW"),
+            log_capacity: app.config.ui.log_capacity,
+        },
+        app.job_tx.clone(),
+    ) {
+        Ok(job) => {
+            app.jobs.push(job);
+            app.jobs_view.sel.last(views::jobs::rows(app).len());
+            app.tab = Tab::Jobs;
+            app.info(format!("converting {name} to {}", out.display()));
+        }
+        Err(e) => app.error(format!("could not start the conversion: {e:#}")),
+    }
+}
+
+fn delete_selected_model(app: &mut App) {
+    let Some(model) = app.selected_model() else { return };
+    let path = model.path.clone();
+    let name = model.name.clone();
+    let size = crate::models::dir_size(&path);
+    ask(
+        app,
+        Confirm::new(
+            "Delete checkpoint",
+            vec![
+                format!("Permanently delete {name}?"),
+                String::new(),
+                path.display().to_string(),
+                format!("This frees {} and cannot be undone.", crate::util::bytes(size)),
+            ],
+            ConfirmAction::DeleteModel(path),
+            true,
+        ),
+    );
+}
+
+// ---------------------------------------------------------------- hub
+
+fn hub_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('/') => app.hub_view.editing = true,
+        KeyCode::Tab => {
+            if !app.hub_view.files.is_empty() {
+                app.hub_view.in_files = !app.hub_view.in_files;
+            }
+        }
+        KeyCode::Esc if app.hub_view.in_files => app.hub_view.in_files = false,
+        _ if app.hub_view.in_files => hub_files_key(app, key),
+        _ => hub_results_key(app, key),
+    }
+}
+
+fn hub_results_key(app: &mut App, key: KeyEvent) {
+    let len = app.hub_view.results.len();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.hub_view.sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.hub_view.sel.down(len),
+        KeyCode::PageUp => app.hub_view.sel.page_up(5),
+        KeyCode::PageDown => app.hub_view.sel.page_down(len, 5),
+        KeyCode::Home => app.hub_view.sel.first(),
+        KeyCode::End => app.hub_view.sel.last(len),
+        KeyCode::Enter => load_repo_files(app),
+        KeyCode::Char('d') => begin_download(app),
+        _ => {}
+    }
+}
+
+fn hub_files_key(app: &mut App, key: KeyEvent) {
+    let len = app.hub_view.files.len();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.hub_view.file_sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.hub_view.file_sel.down(len),
+        KeyCode::PageUp => app.hub_view.file_sel.page_up(10),
+        KeyCode::PageDown => app.hub_view.file_sel.page_down(len, 10),
+        KeyCode::Home => app.hub_view.file_sel.first(),
+        KeyCode::End => app.hub_view.file_sel.last(len),
+        KeyCode::Char(' ') => {
+            if let Some(f) = app.hub_view.files.get_mut(app.hub_view.file_sel.index) {
+                f.wanted = !f.wanted;
+            }
+        }
+        KeyCode::Char('a') => app.hub_view.files.iter_mut().for_each(|f| f.wanted = true),
+        KeyCode::Char('n') => app.hub_view.files.iter_mut().for_each(|f| f.wanted = false),
+        KeyCode::Char('d') => begin_download(app),
+        _ => {}
+    }
+}
+
+fn hub_client(app: &App) -> Result<Hub, String> {
+    Hub::new(&app.config.hub.endpoint, app.config.hub.effective_token())
+        .map_err(|e| format!("{e:#}"))
+}
+
+fn start_search(app: &mut App) {
+    let query = app.hub_view.query.value.trim().to_string();
+    if query.is_empty() {
+        return;
+    }
+    let hub = match hub_client(app) {
+        Ok(h) => h,
+        Err(e) => {
+            app.error(e);
+            return;
+        }
+    };
+    app.hub_view.searching = true;
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let res = hub.search(&query, 50).await.map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::HubSearch(res));
+    });
+}
+
+fn load_repo_files(app: &mut App) {
+    let Some(repo) = app.hub_view.results.get(app.hub_view.sel.index) else { return };
+    let repo_id = repo.id.clone();
+    let gated = repo.is_gated();
+    let hub = match hub_client(app) {
+        Ok(h) => h,
+        Err(e) => {
+            app.error(e);
+            return;
+        }
+    };
+    if gated && !hub.has_token() {
+        app.warn(format!(
+            "{repo_id} is gated — set HF_TOKEN or hub.token and accept its terms on the Hub first"
+        ));
+    }
+    let revision = app.hub_view.revision.clone();
+    app.hub_view.loading_info = true;
+    app.hub_view.in_files = true;
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let res = hub.info(&repo_id, &revision).await.map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::HubInfo(Box::new(res)));
+    });
+}
+
+fn begin_download(app: &mut App) {
+    let Some(info) = app.hub_view.info.as_ref() else {
+        app.warn("select a repo and press Enter to list its files first");
+        return;
+    };
+    let selected: Vec<_> = app.hub_view.files.iter().filter(|f| f.wanted).cloned().collect();
+    if selected.is_empty() {
+        app.warn("no files selected");
+        return;
+    }
+    let repo = info.id.clone();
+    if app.downloads.iter().any(|d| d.is_running() && d.repo == repo) {
+        app.warn(format!("{repo} is already downloading"));
+        return;
+    }
+
+    let hub = match hub_client(app) {
+        Ok(h) => h,
+        Err(e) => {
+            app.error(e);
+            return;
+        }
+    };
+    let target = std::path::PathBuf::from(app.hub_view.target.value.clone());
+    let revision = app.hub_view.revision.clone();
+    let concurrency = app.config.hub.concurrency;
+    let files = selected;
+    let tx = app.tx.clone();
+    let dl_tx = app.download_tx.clone();
+    let total: u64 = files.iter().map(|f| f.size).sum();
+
+    app.info(format!(
+        "downloading {} file(s), {} from {repo}",
+        files.len(),
+        crate::util::bytes(total)
+    ));
+    app.tab = Tab::Jobs;
+
+    // The launch itself does network I/O (filling in missing file sizes), so it runs off
+    // the UI thread and reports back rather than blocking a keystroke.
+    tokio::spawn(async move {
+        match start_download(hub, repo.clone(), revision, target, files, concurrency, dl_tx).await {
+            Ok(dl) => {
+                let _ = tx.send(Message::RegisterDownload(Box::new(dl)));
+            }
+            Err(e) => {
+                let _ = tx.send(Message::Toast(crate::ui::widgets::Toast::new(
+                    format!("could not start the download: {e:#}"),
+                    ToastKind::Error,
+                )));
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------- serve
+
+fn serve_key(app: &mut App, key: KeyEvent) {
+    if app.serve_view.in_profiles {
+        match key.code {
+            KeyCode::Tab | KeyCode::Esc => {
+                app.serve_view.in_profiles = false;
+                return;
+            }
+            _ => {
+                profiles_key(app, key);
+                return;
+            }
+        }
+    }
+
+    let items: Vec<&Knob> = knobs_in(app.serve_view.group).collect();
+    let len = items.len();
+    match key.code {
+        KeyCode::Tab => app.serve_view.in_profiles = true,
+        KeyCode::Up | KeyCode::Char('k') => app.serve_view.sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.serve_view.sel.down(len),
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.serve_view.group = prev_group(app.serve_view.group);
+            app.serve_view.sel.first();
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.serve_view.group = next_group(app.serve_view.group);
+            app.serve_view.sel.first();
+        }
+        KeyCode::Home => app.serve_view.sel.first(),
+        KeyCode::End => app.serve_view.sel.last(len),
+        KeyCode::Enter => begin_knob_edit(app),
+        KeyCode::Char(' ') => cycle_knob(app, 1),
+        KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
+            if let Some(k) = items.get(app.serve_view.sel.index) {
+                let key_name = k.key;
+                let label = k.label;
+                if app.serve.is_set(key_name) {
+                    app.serve.unset(key_name);
+                    app.info(format!("{label} reset to its default"));
+                }
+            }
+        }
+        KeyCode::Char('p') => app.serve_view.show_preview = !app.serve_view.show_preview,
+        KeyCode::Char('S') => {
+            app.serve_view.profile_name.set(suggested_profile_name(app));
+            app.serve_view.naming = true;
+        }
+        KeyCode::Char('P') => load_profile(app),
+        KeyCode::Char('g') => start_engine(app),
+        _ => {}
+    }
+}
+
+fn profiles_key(app: &mut App, key: KeyEvent) {
+    let len = app.profiles.items.len();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.serve_view.profile_sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.serve_view.profile_sel.down(len),
+        KeyCode::Home => app.serve_view.profile_sel.first(),
+        KeyCode::End => app.serve_view.profile_sel.last(len),
+        KeyCode::Enter | KeyCode::Char('P') => load_profile(app),
+        KeyCode::Char('D') => {
+            let Some(p) = app.profiles.items.get(app.serve_view.profile_sel.index) else { return };
+            let name = p.name.clone();
+            ask(
+                app,
+                Confirm::new(
+                    "Delete profile",
+                    vec![format!("Delete the saved profile '{name}'?")],
+                    ConfirmAction::DeleteProfile(name),
+                    true,
+                ),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn prev_group(g: crate::knobs::Group) -> crate::knobs::Group {
+    let all = crate::knobs::Group::ALL;
+    let i = all.iter().position(|x| *x == g).unwrap_or(0);
+    all[(i + all.len() - 1) % all.len()]
+}
+
+fn next_group(g: crate::knobs::Group) -> crate::knobs::Group {
+    let all = crate::knobs::Group::ALL;
+    let i = all.iter().position(|x| *x == g).unwrap_or(0);
+    all[(i + 1) % all.len()]
+}
+
+fn selected_knob(app: &App) -> Option<&'static Knob> {
+    knobs_in(app.serve_view.group).nth(app.serve_view.sel.index)
+}
+
+fn begin_knob_edit(app: &mut App) {
+    let Some(k) = selected_knob(app) else { return };
+    match k.kind {
+        // A flag has nothing to type, so Enter just toggles it.
+        Kind::Flag => {
+            app.serve.toggle_flag(k.key);
+            let state = if app.serve.flag(k.key) { "on" } else { "off" };
+            app.info(format!("{} {state}", k.label));
+        }
+        Kind::Choice(_) => cycle_knob(app, 1),
+        _ => {
+            app.serve_view.editor =
+                crate::ui::widgets::TextInput::new(app.serve.get(k.key).unwrap_or_default());
+            app.serve_view.editing = true;
+        }
+    }
+}
+
+fn cycle_knob(app: &mut App, delta: isize) {
+    let Some(k) = selected_knob(app) else { return };
+    match k.kind {
+        Kind::Flag => {
+            app.serve.toggle_flag(k.key);
+        }
+        Kind::Choice(options) => {
+            if options.is_empty() {
+                return;
+            }
+            // Cycling walks options and then wraps through "unset", so there is always a
+            // way back to the default without reaching for another key.
+            let current = app.serve.get(k.key).and_then(|v| options.iter().position(|o| *o == v));
+            let next = match current {
+                None if delta > 0 => Some(0),
+                None => Some(options.len() - 1),
+                Some(i) => {
+                    let n = i as isize + delta;
+                    if n < 0 || n >= options.len() as isize {
+                        None
+                    } else {
+                        Some(n as usize)
+                    }
+                }
+            };
+            match next {
+                Some(i) => app.serve.set(k.key, options[i]),
+                None => app.serve.unset(k.key),
+            }
+        }
+        _ => begin_knob_edit(app),
+    }
+}
+
+fn commit_knob_edit(app: &mut App) {
+    let Some(k) = selected_knob(app) else { return };
+    let value = app.serve_view.editor.value.trim().to_string();
+    if value.is_empty() {
+        app.serve.unset(k.key);
+        return;
+    }
+    if let Some(msg) = crate::knobs::validate_value(k, &value) {
+        app.error(format!("{}: {msg}", k.flag));
+        return;
+    }
+    app.serve.set(k.key, value);
+}
+
+fn suggested_profile_name(app: &App) -> String {
+    app.serve
+        .get("model")
+        .map(|m| {
+            std::path::Path::new(m)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| m.to_string())
+        })
+        .unwrap_or_else(|| "profile".into())
+}
+
+fn save_profile(app: &mut App) {
+    let name = app.serve_view.profile_name.value.trim().to_string();
+    if name.is_empty() {
+        app.warn("a profile needs a name");
+        return;
+    }
+    let existed = app.profiles.get(&name).is_some();
+    app.profiles.upsert(crate::ui::app::profile_from(name.clone(), &app.serve));
+    app.profiles.last_used = Some(name.clone());
+    save_profiles(app);
+    app.success(if existed {
+        format!("profile '{name}' updated")
+    } else {
+        format!("profile '{name}' saved")
+    });
+    if let Some(i) = app.profiles.items.iter().position(|p| p.name == name) {
+        app.serve_view.profile_sel.index = i;
+    }
+}
+
+fn load_profile(app: &mut App) {
+    let Some(p) = app.profiles.items.get(app.serve_view.profile_sel.index) else {
+        app.warn("no profile selected");
+        return;
+    };
+    app.serve = p.serve.clone();
+    let name = p.name.clone();
+    app.profiles.last_used = Some(name.clone());
+    save_profiles(app);
+    app.success(format!("loaded profile '{name}'"));
+}
+
+fn save_profiles(app: &mut App) {
+    if let Err(e) = app.profiles.save() {
+        app.error(format!("could not save profiles: {e:#}"));
+    }
+}
+
+// ---------------------------------------------------------------- engine launch
+
+pub fn start_engine(app: &mut App) {
+    if app.engine.is_live() {
+        app.warn("an engine is already running; stop it first");
+        return;
+    }
+    if let Some(job) = app.jobs.iter().find(|j| j.is_running()) {
+        app.warn(format!(
+            "a {} job is using the GPU; wait for it or cancel it first",
+            job.kind.label()
+        ));
+        return;
+    }
+    let Some(ft) = app.ft.clone() else {
+        app.error(app.ft_error.clone().unwrap_or_else(|| "the FreeToken CLI was not found".into()));
+        return;
+    };
+
+    let errors = app.serve.validate();
+    if !errors.is_empty() {
+        let (key, msg) = &errors[0];
+        let flag = crate::knobs::knob(key).map(|k| k.flag).unwrap_or(key);
+        app.error(format!("{flag}: {msg}"));
+        app.tab = Tab::Serve;
+        return;
+    }
+
+    let model = app.serve.get("model").unwrap_or_default().to_string();
+    let port = app.serve.get("port").and_then(|p| p.parse().ok()).unwrap_or(app.config.server.port);
+    let args = app.serve.to_args();
+
+    match app.engine.start(&ft, args, &app.config.freetoken.env, model.clone(), port) {
+        Ok(path) => {
+            app.telemetry = Telemetry::default();
+            app.series = crate::ui::app::Series::default();
+            app.requests_view.entries.clear();
+            app.requests_view.cursor = 0;
+            app.tab = Tab::Logs;
+            app.logs_view.follow = true;
+            app.logs_view.scroll = 0;
+            app.info(format!("starting {model}; logging to {}", path.display()));
+        }
+        Err(e) => app.error(format!("could not start the engine: {e:#}")),
+    }
+}
+
+// ---------------------------------------------------------------- cache
+
+fn cache_key(app: &mut App, key: KeyEvent) {
+    let Some(geo) = app.telemetry.cache.as_ref().map(|c| c.geometry.clone()) else { return };
+    let pools: Vec<Pool> =
+        Pool::ALL.iter().copied().filter(|p| views::cache::pool_present(&geo, *p)).collect();
+    if pools.is_empty() {
+        return;
+    }
+    app.cache_view.sel.clamp(pools.len());
+    let pool = pools[app.cache_view.sel.index];
+    let big = key.modifiers.contains(KeyModifiers::SHIFT);
+    let step = if big { 0.10 } else { 0.01 };
+
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.cache_view.sel.up(pools.len()),
+        KeyCode::Down | KeyCode::Char('j') => app.cache_view.sel.down(pools.len()),
+        KeyCode::Left | KeyCode::Char('h') => views::cache::adjust(app, pool, -step),
+        KeyCode::Right | KeyCode::Char('l') => views::cache::adjust(app, pool, step),
+        KeyCode::Char('r') => app.cache_view.set_pending(pool, None),
+        KeyCode::Char('R') => app.cache_view.clear_pending(),
+        KeyCode::Char('a') | KeyCode::Enter => {
+            if !app.cache_view.has_pending() {
+                app.warn("nothing to apply");
+                return;
+            }
+            let active = app.telemetry.stats.as_ref().map(|s| s.requests.active).unwrap_or(0);
+            let mut body =
+                vec!["Resize the cache pools on the running engine?".to_string(), String::new()];
+            for p in &pools {
+                if let Some(v) = app.cache_view.pending_for(*p) {
+                    body.push(format!(
+                        "  {}: {} → {} {}",
+                        p.label(),
+                        crate::util::count(views::cache::pool_current(&geo, *p)),
+                        crate::util::count(v),
+                        p.unit()
+                    ));
+                }
+            }
+            body.push(String::new());
+            body.push(if active > 0 {
+                format!(
+                    "{active} request(s) are in flight. The engine only rebuilds while idle, so \
+                     this will be rejected until they finish."
+                )
+            } else {
+                "Weights stay loaded; only the pools are rebuilt.".to_string()
+            });
+            ask(app, Confirm::new("Rebuild cache", body, ConfirmAction::ApplyCacheRebuild, false));
+        }
+        _ => {}
+    }
+}
+
+fn apply_cache_rebuild(app: &mut App) {
+    let req = rebuild_from_pending(&app.cache_view);
+    if req.is_empty() {
+        return;
+    }
+    app.cache_view.applying = true;
+    let client = app.client.clone();
+    let tx = app.tx.clone();
+    app.info("rebuilding cache pools…");
+    tokio::spawn(async move {
+        let res = client
+            .cache_rebuild(&req)
+            .await
+            .map(|_| "cache pools rebuilt".to_string())
+            .map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::CacheRebuilt(res));
+    });
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn jobs_key(app: &mut App, key: KeyEvent) {
+    let items = views::jobs::rows(app);
+    let len = items.len();
+    match key.code {
+        KeyCode::Tab => app.jobs_view.in_output = !app.jobs_view.in_output,
+        KeyCode::Char('b') => run_bench(app),
+        _ if app.jobs_view.in_output => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.jobs_view.output_scroll = app.jobs_view.output_scroll.saturating_add(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.jobs_view.output_scroll = app.jobs_view.output_scroll.saturating_sub(1)
+            }
+            KeyCode::PageUp => {
+                app.jobs_view.output_scroll = app.jobs_view.output_scroll.saturating_add(10)
+            }
+            KeyCode::PageDown => {
+                app.jobs_view.output_scroll = app.jobs_view.output_scroll.saturating_sub(10)
+            }
+            KeyCode::End | KeyCode::Char('G') => app.jobs_view.output_scroll = 0,
+            KeyCode::Esc => app.jobs_view.in_output = false,
+            _ => {}
+        },
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.jobs_view.sel.up(len);
+            app.jobs_view.output_scroll = 0;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.jobs_view.sel.down(len);
+            app.jobs_view.output_scroll = 0;
+        }
+        KeyCode::Home => app.jobs_view.sel.first(),
+        KeyCode::End => app.jobs_view.sel.last(len),
+        KeyCode::Char('x') => cancel_selected(app),
+        KeyCode::Char('X') => {
+            let before = app.jobs.len() + app.downloads.len();
+            app.jobs.retain(|j| j.is_running());
+            app.downloads.retain(|d| d.is_running());
+            let removed = before - (app.jobs.len() + app.downloads.len());
+            app.jobs_view.sel.clamp(views::jobs::rows(app).len());
+            if removed > 0 {
+                app.info(format!("cleared {removed} finished entr(ies)"));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn cancel_selected(app: &mut App) {
+    let items = views::jobs::rows(app);
+    let Some(row) = items.get(app.jobs_view.sel.index).copied() else { return };
+    match row {
+        views::jobs::Row::Job(i) => {
+            let job = &app.jobs[i];
+            if !job.is_running() {
+                app.warn("that job has already finished");
+                return;
+            }
+            let (id, title) = (job.id, job.title.clone());
+            ask(
+                app,
+                Confirm::new(
+                    "Cancel job",
+                    vec![
+                        format!("Cancel '{title}'?"),
+                        String::new(),
+                        "A partly written FTW directory is left behind and must be deleted before \
+                         the conversion can be retried."
+                            .into(),
+                    ],
+                    ConfirmAction::CancelJob(id),
+                    true,
+                ),
+            );
+        }
+        views::jobs::Row::Download(i) => {
+            let d = &app.downloads[i];
+            if !d.is_running() {
+                app.warn("that download has already finished");
+                return;
+            }
+            let (id, repo) = (d.id, d.repo.clone());
+            ask(
+                app,
+                Confirm::new(
+                    "Cancel download",
+                    vec![
+                        format!("Cancel the download of {repo}?"),
+                        String::new(),
+                        "Completed files are kept and a partial file resumes where it stopped."
+                            .into(),
+                    ],
+                    ConfirmAction::CancelDownload(id),
+                    false,
+                ),
+            );
+        }
+    }
+}
+
+fn run_bench(app: &mut App) {
+    if let Some(reason) = app.gpu_busy_reason() {
+        app.warn(format!("cannot benchmark: {reason}"));
+        return;
+    }
+    let Some(ft) = app.ft.clone() else {
+        app.error("the FreeToken CLI was not found");
+        return;
+    };
+    let mut args = Vec::new();
+    if let Some(gpu) = app.serve.get("gpu") {
+        args.push("--gpu".to_string());
+        args.push(gpu.to_string());
+    }
+    match spawn_job(
+        &ft,
+        JobSpec {
+            kind: JobKind::Bench,
+            subcommand: &["bench", "bw"],
+            args,
+            env: &app.config.freetoken.env,
+            title: "CPU vs PCIe bandwidth".into(),
+            log_capacity: app.config.ui.log_capacity,
+        },
+        app.job_tx.clone(),
+    ) {
+        Ok(job) => {
+            app.jobs.push(job);
+            app.jobs_view.sel.last(views::jobs::rows(app).len());
+            app.info("benchmarking CPU and PCIe bandwidth; this takes a few minutes");
+        }
+        Err(e) => app.error(format!("could not start the benchmark: {e:#}")),
+    }
+}
+
+// ---------------------------------------------------------------- requests
+
+fn requests_key(app: &mut App, key: KeyEvent) {
+    let len = app.requests_view.entries.len();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.requests_view.sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.requests_view.sel.down(len),
+        KeyCode::PageUp => app.requests_view.sel.page_up(10),
+        KeyCode::PageDown => app.requests_view.sel.page_down(len, 10),
+        KeyCode::Home => app.requests_view.sel.first(),
+        KeyCode::End | KeyCode::Char('G') => app.requests_view.sel.last(len),
+        KeyCode::Enter => app.requests_view.show_details = !app.requests_view.show_details,
+        KeyCode::Char('f') => views::requests::follow_tail(app),
+        KeyCode::Char('p') => {
+            app.requests_view.paused = !app.requests_view.paused;
+            let state = if app.requests_view.paused { "paused" } else { "resumed" };
+            app.info(format!("request polling {state}"));
+        }
+        KeyCode::Char('c') => {
+            app.requests_view.entries.clear();
+            app.requests_view.sel.first();
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------- logs
+
+fn logs_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('/') => app.logs_view.filtering = true,
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.logs_view.follow = false;
+            app.logs_view.scroll += 1;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.logs_view.scroll = app.logs_view.scroll.saturating_sub(1);
+            if app.logs_view.scroll == 0 {
+                app.logs_view.follow = true;
+            }
+        }
+        KeyCode::PageUp => {
+            app.logs_view.follow = false;
+            app.logs_view.scroll += 20;
+        }
+        KeyCode::PageDown => {
+            app.logs_view.scroll = app.logs_view.scroll.saturating_sub(20);
+            if app.logs_view.scroll == 0 {
+                app.logs_view.follow = true;
+            }
+        }
+        KeyCode::End | KeyCode::Char('G') => {
+            app.logs_view.scroll = 0;
+            app.logs_view.follow = true;
+        }
+        KeyCode::Home => {
+            app.logs_view.follow = false;
+            app.logs_view.scroll = usize::MAX / 2;
+        }
+        KeyCode::Char('f') => {
+            app.logs_view.follow = !app.logs_view.follow;
+            if app.logs_view.follow {
+                app.logs_view.scroll = 0;
+            }
+        }
+        KeyCode::Char('e') => app.logs_view.errors_only = !app.logs_view.errors_only,
+        KeyCode::Char('w') => app.logs_view.wrap = !app.logs_view.wrap,
+        KeyCode::Char('c') => {
+            app.engine.log.clear();
+            app.logs_view.scroll = 0;
+        }
+        _ => {}
+    }
+}

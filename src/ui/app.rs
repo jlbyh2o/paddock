@@ -1,0 +1,978 @@
+//! Application state and the event loop's model half.
+//!
+//! `App` owns everything the views read and the background tasks write into. Polling is
+//! decoupled from rendering: a telemetry task pushes snapshots over a channel on its own
+//! cadence, so a slow or unreachable server slows nothing down visibly.
+
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use tokio::sync::mpsc;
+
+use crate::config::{Config, Profile, Profiles};
+use crate::ft::proc::{JobKind, JobProgress, JobStatus};
+use crate::ft::{
+    api::CacheRebuild, types::*, Client, Engine, EngineEvent, EngineState, Freetoken, Job, JobEvent,
+};
+use crate::hub::{Download, DownloadEvent, RepoFile, RepoInfo, RepoSummary};
+use crate::knobs::{Group, ServeConfig};
+use crate::models::Model;
+use crate::probe::{Gpu, Host, Probe};
+use crate::util::{Ema, History};
+
+use super::theme::Theme;
+use super::widgets::{Confirm, Selection, TextInput, Toast, ToastKind};
+
+// ---------------------------------------------------------------- tabs
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Dashboard,
+    Models,
+    Hub,
+    Serve,
+    Cache,
+    Jobs,
+    Requests,
+    Logs,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 8] = [
+        Tab::Dashboard,
+        Tab::Models,
+        Tab::Hub,
+        Tab::Serve,
+        Tab::Cache,
+        Tab::Jobs,
+        Tab::Requests,
+        Tab::Logs,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Tab::Dashboard => "Dashboard",
+            Tab::Models => "Models",
+            Tab::Hub => "Hub",
+            Tab::Serve => "Serve",
+            Tab::Cache => "Cache",
+            Tab::Jobs => "Jobs",
+            Tab::Requests => "Requests",
+            Tab::Logs => "Logs",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
+    }
+
+    pub fn next(self) -> Tab {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    pub fn prev(self) -> Tab {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    pub fn from_digit(d: u32) -> Option<Tab> {
+        (d >= 1).then(|| Self::ALL.get(d as usize - 1).copied()).flatten()
+    }
+}
+
+// ---------------------------------------------------------------- telemetry
+
+/// One poll of the server's control plane. `Option` throughout: a server that is still
+/// loading answers `/health` long before `/v1/stats` means anything.
+#[derive(Debug, Default)]
+pub struct Telemetry {
+    pub health: Option<Health>,
+    pub stats: Option<Stats>,
+    pub cache: Option<CacheStatus>,
+    pub error: Option<String>,
+    pub at: Option<Instant>,
+}
+
+#[derive(Debug)]
+pub enum Message {
+    Telemetry(Box<Telemetry>),
+    Hardware {
+        gpus: Vec<Gpu>,
+        host: Host,
+    },
+    Engine(EngineEvent),
+    Job(JobEvent),
+    Download(DownloadEvent),
+    /// A download that finished starting up and is now ready to be tracked.
+    RegisterDownload(Box<Download>),
+    /// A rescan of the local library finished.
+    Models(Vec<Model>),
+    /// Hub search results.
+    HubSearch(Result<Vec<RepoSummary>, String>),
+    /// Full repo metadata for the selected result.
+    HubInfo(Box<Result<RepoInfo, String>>),
+    /// New request-ring entries and the cursor to poll with next.
+    Requests {
+        entries: Vec<RequestRecord>,
+        next_cursor: u64,
+    },
+    /// A cache rebuild finished.
+    CacheRebuilt(Result<String, String>),
+    /// The `/generate` smoke test finished.
+    SmokeTest(Result<String, String>),
+    Toast(Toast),
+}
+
+// ---------------------------------------------------------------- per-tab state
+
+#[derive(Default)]
+pub struct ModelsView {
+    pub sel: Selection,
+    pub filter: TextInput,
+    pub filtering: bool,
+    pub scanning: bool,
+}
+
+#[derive(Default)]
+pub struct HubView {
+    pub query: TextInput,
+    pub editing: bool,
+    pub results: Vec<RepoSummary>,
+    pub sel: Selection,
+    pub searching: bool,
+    pub info: Option<RepoInfo>,
+    pub files: Vec<RepoFile>,
+    pub file_sel: Selection,
+    /// Focus is on the file list rather than the result list.
+    pub in_files: bool,
+    pub revision: String,
+    pub loading_info: bool,
+    pub target: TextInput,
+}
+
+pub struct ServeView {
+    pub group: Group,
+    pub sel: Selection,
+    pub editing: bool,
+    pub editor: TextInput,
+    /// Index into a `Choice` knob's options while cycling.
+    pub profile_name: TextInput,
+    pub naming: bool,
+    pub show_preview: bool,
+    pub profile_sel: Selection,
+    pub in_profiles: bool,
+}
+
+impl Default for ServeView {
+    fn default() -> Self {
+        Self {
+            group: Group::Model,
+            sel: Selection::default(),
+            editing: false,
+            editor: TextInput::default(),
+            profile_name: TextInput::default(),
+            naming: false,
+            show_preview: false,
+            profile_sel: Selection::default(),
+            in_profiles: false,
+        }
+    }
+}
+
+/// The four resizable pools, in the order the Cache view lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pool {
+    Moe,
+    Kv,
+    Mamba,
+    Swa,
+}
+
+impl Pool {
+    pub const ALL: [Pool; 4] = [Pool::Moe, Pool::Kv, Pool::Mamba, Pool::Swa];
+    pub fn label(self) -> &'static str {
+        match self {
+            Pool::Moe => "MoE expert slots",
+            Pool::Kv => "KV pages",
+            Pool::Mamba => "GDN state slots",
+            Pool::Swa => "SWA window pages",
+        }
+    }
+    pub fn unit(self) -> &'static str {
+        match self {
+            Pool::Moe => "slots",
+            Pool::Kv => "pages",
+            Pool::Mamba => "slots",
+            Pool::Swa => "pages",
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct CacheView {
+    pub sel: Selection,
+    /// Pending edits, keyed by pool. Absent means "leave this pool alone".
+    pub pending: [Option<u64>; 4],
+    pub applying: bool,
+}
+
+impl CacheView {
+    pub fn pending_for(&self, pool: Pool) -> Option<u64> {
+        self.pending[Pool::ALL.iter().position(|p| *p == pool).unwrap()]
+    }
+    pub fn set_pending(&mut self, pool: Pool, value: Option<u64>) {
+        self.pending[Pool::ALL.iter().position(|p| *p == pool).unwrap()] = value;
+    }
+    pub fn has_pending(&self) -> bool {
+        self.pending.iter().any(Option::is_some)
+    }
+    pub fn clear_pending(&mut self) {
+        self.pending = [None; 4];
+    }
+}
+
+#[derive(Default)]
+pub struct JobsView {
+    pub sel: Selection,
+    /// Focus is on the selected job's output rather than the job list.
+    pub in_output: bool,
+    pub output_scroll: usize,
+}
+
+#[derive(Default)]
+pub struct RequestsView {
+    pub sel: Selection,
+    pub cursor: u64,
+    pub entries: VecDeque<RequestRecord>,
+    pub paused: bool,
+    pub show_details: bool,
+}
+
+#[derive(Default)]
+pub struct LogsView {
+    /// Lines from the bottom; 0 means follow the tail.
+    pub scroll: usize,
+    pub follow: bool,
+    pub filter: TextInput,
+    pub filtering: bool,
+    pub wrap: bool,
+    pub errors_only: bool,
+}
+
+/// Rolling series behind the Dashboard sparklines.
+#[derive(Debug)]
+pub struct Series {
+    pub decode_tps: History,
+    pub prefill_tps: History,
+    pub gpu_util: History,
+    pub vram: History,
+    pub active: History,
+    pub decode_peak: f64,
+}
+
+impl Default for Series {
+    fn default() -> Self {
+        Self {
+            decode_tps: History::new(240),
+            prefill_tps: History::new(240),
+            gpu_util: History::new(240),
+            vram: History::new(240),
+            active: History::new(240),
+            decode_peak: 0.0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- app
+
+pub struct App {
+    pub config: Config,
+    pub profiles: Profiles,
+    pub theme: Theme,
+    pub ft: Option<Freetoken>,
+    /// Why the CLI could not be found, when it could not be.
+    pub ft_error: Option<String>,
+    pub client: Client,
+
+    pub tab: Tab,
+    pub should_quit: bool,
+    pub show_help: bool,
+    pub confirm: Option<Confirm>,
+    pub toasts: VecDeque<Toast>,
+
+    pub engine: Engine,
+    pub telemetry: Telemetry,
+    pub gpus: Vec<Gpu>,
+    pub host: Host,
+    pub series: Series,
+    pub gpu_source: &'static str,
+
+    pub models: Vec<Model>,
+    pub jobs: Vec<Job>,
+    pub downloads: Vec<Download>,
+    pub bench_profile: Option<BenchProfile>,
+
+    pub serve: ServeConfig,
+    pub models_view: ModelsView,
+    pub hub_view: HubView,
+    pub serve_view: ServeView,
+    pub cache_view: CacheView,
+    pub jobs_view: JobsView,
+    pub requests_view: RequestsView,
+    pub logs_view: LogsView,
+
+    pub tx: mpsc::UnboundedSender<Message>,
+    /// The endpoint the telemetry task polls. Rewritten when the serve configuration
+    /// changes which host or port the engine will bind.
+    pub endpoint_tx: tokio::sync::watch::Sender<String>,
+    pub job_tx: mpsc::UnboundedSender<JobEvent>,
+    pub download_tx: mpsc::UnboundedSender<DownloadEvent>,
+    /// Smoothed request rate for the Dashboard.
+    pub completed_rate: Ema,
+    last_completed: (Instant, u64),
+}
+
+impl App {
+    pub fn new(
+        config: Config,
+        profiles: Profiles,
+        ft: Option<Freetoken>,
+        ft_error: Option<String>,
+        tx: mpsc::UnboundedSender<Message>,
+    ) -> Result<Self> {
+        let theme = Theme::from_name(&config.ui.theme);
+
+        // Bridge the typed channels the supervisor and job runner use into the single
+        // message stream the event loop drains.
+        let (engine_tx, mut engine_rx) = mpsc::unbounded_channel();
+        let (job_tx, mut job_rx) = mpsc::unbounded_channel();
+        let (download_tx, mut download_rx) = mpsc::unbounded_channel();
+        {
+            let fwd = tx.clone();
+            tokio::spawn(async move {
+                while let Some(e) = engine_rx.recv().await {
+                    if fwd.send(Message::Engine(e)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        {
+            let fwd = tx.clone();
+            tokio::spawn(async move {
+                while let Some(e) = job_rx.recv().await {
+                    if fwd.send(Message::Job(e)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        {
+            let fwd = tx.clone();
+            tokio::spawn(async move {
+                while let Some(e) = download_rx.recv().await {
+                    if fwd.send(Message::Download(e)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        let mut engine = Engine::new(config.ui.log_capacity, engine_tx);
+        let adopted = engine.adopt();
+
+        let mut serve = ServeConfig::new();
+        // Seed from the last-used profile so restarting ft-man lands where it left off.
+        if let Some(last) = profiles.last_used.as_ref().and_then(|n| profiles.get(n)) {
+            serve = last.serve.clone();
+        }
+        // Seed bind address and port only when the profile did not already pin them:
+        // a saved profile that serves on 1920 must keep doing so, and ft-man then polls
+        // 1920 rather than the config's default.
+        if !serve.is_set("host") {
+            serve.set("host", config.server.host.clone());
+        }
+        if !serve.is_set("port") {
+            serve.set("port", config.server.port.to_string());
+        }
+        if let Some(state) = &adopted {
+            serve.set("model", state.model.clone());
+            serve.set("port", state.port.to_string());
+        }
+
+        let probe = Probe::new();
+        let gpu_source = probe.gpu_source;
+        let endpoint = endpoint_for(&config, &serve);
+        let client = Client::new(&endpoint, Duration::from_millis(config.server.timeout_ms))?;
+        let (endpoint_tx, _) = tokio::sync::watch::channel(endpoint);
+        let mut app = Self {
+            config,
+            profiles,
+            theme,
+            ft,
+            ft_error,
+            client,
+            tab: Tab::Dashboard,
+            should_quit: false,
+            show_help: false,
+            confirm: None,
+            toasts: VecDeque::new(),
+            engine,
+            telemetry: Telemetry::default(),
+            gpus: Vec::new(),
+            host: Host::default(),
+            series: Series::default(),
+            gpu_source,
+            models: Vec::new(),
+            jobs: Vec::new(),
+            downloads: Vec::new(),
+            bench_profile: None,
+            serve,
+            models_view: ModelsView::default(),
+            hub_view: HubView { revision: "main".into(), ..Default::default() },
+            serve_view: ServeView::default(),
+            cache_view: CacheView::default(),
+            jobs_view: JobsView::default(),
+            requests_view: RequestsView::default(),
+            logs_view: LogsView { follow: true, wrap: false, ..Default::default() },
+            tx,
+            endpoint_tx,
+            job_tx,
+            download_tx,
+            completed_rate: Ema::new(0.25),
+            last_completed: (Instant::now(), 0),
+        };
+        app.hub_view.target.set(
+            crate::models::expand_tilde(&app.config.library.download_dir).display().to_string(),
+        );
+        app.reload_bench_profile();
+        Ok(app)
+    }
+
+    // ---- notifications ----------------------------------------------
+
+    pub fn toast(&mut self, text: impl Into<String>, kind: ToastKind) {
+        self.toasts.push_back(Toast::new(text, kind));
+        while self.toasts.len() > 4 {
+            self.toasts.pop_front();
+        }
+    }
+
+    pub fn info(&mut self, text: impl Into<String>) {
+        self.toast(text, ToastKind::Info);
+    }
+    pub fn success(&mut self, text: impl Into<String>) {
+        self.toast(text, ToastKind::Success);
+    }
+    pub fn warn(&mut self, text: impl Into<String>) {
+        self.toast(text, ToastKind::Warn);
+    }
+    pub fn error(&mut self, text: impl Into<String>) {
+        self.toast(text, ToastKind::Error);
+    }
+
+    pub fn expire_toasts(&mut self) {
+        while self.toasts.front().is_some_and(Toast::is_expired) {
+            self.toasts.pop_front();
+        }
+    }
+
+    // ---- derived state ----------------------------------------------
+
+    /// True when the server answered its last poll.
+    pub fn server_reachable(&self) -> bool {
+        self.telemetry.health.is_some() && self.telemetry.error.is_none()
+    }
+
+    pub fn engine_status_text(&self) -> String {
+        if let Some(h) = &self.telemetry.health {
+            if h.is_loading() {
+                return match h.load_ratio() {
+                    Some(r) => format!("loading {:.0}%", r * 100.0),
+                    None => format!("loading ({})", h.phase.as_deref().unwrap_or("weights")),
+                };
+            }
+            if h.is_error() {
+                return format!("error: {}", h.message.as_deref().unwrap_or("unknown"));
+            }
+            if h.is_ready() {
+                return match h.maintenance.as_deref() {
+                    Some("rebuilding") => "rebuilding cache".into(),
+                    _ => "serving".into(),
+                };
+            }
+        }
+        match &self.engine.state {
+            EngineState::Starting => "starting".into(),
+            EngineState::Stopping => "stopping".into(),
+            EngineState::Exited { code, signal } => {
+                format!("exited {}", crate::ft::proc::describe_exit(*code, *signal))
+            }
+            EngineState::Adopted => "attached (unreachable)".into(),
+            EngineState::Running => "running (unreachable)".into(),
+            EngineState::Stopped => "not running".into(),
+        }
+    }
+
+    pub fn engine_status_color(&self) -> ratatui::style::Color {
+        if let Some(h) = &self.telemetry.health {
+            if h.is_ready() {
+                return self.theme.good;
+            }
+            if h.is_loading() {
+                return self.theme.warn;
+            }
+            if h.is_error() {
+                return self.theme.bad;
+            }
+        }
+        match self.engine.state {
+            EngineState::Starting | EngineState::Stopping => self.theme.warn,
+            EngineState::Exited { .. } => self.theme.bad,
+            _ => self.theme.dim,
+        }
+    }
+
+    /// The model currently in play: what the server reports, else what is configured.
+    pub fn current_model(&self) -> Option<String> {
+        self.telemetry
+            .stats
+            .as_ref()
+            .and_then(|s| s.model.id.clone())
+            .or_else(|| self.telemetry.health.as_ref().and_then(|h| h.model.clone()))
+            .or_else(|| self.engine.model.clone())
+    }
+
+    pub fn selected_model(&self) -> Option<&Model> {
+        self.filtered_models().get(self.models_view.sel.index).copied()
+    }
+
+    /// Library entries matching the current filter, in display order.
+    pub fn filtered_models(&self) -> Vec<&Model> {
+        let needle = self.models_view.filter.value.to_lowercase();
+        self.models
+            .iter()
+            .filter(|m| {
+                needle.is_empty()
+                    || m.name.to_lowercase().contains(&needle)
+                    || m.path.to_string_lossy().to_lowercase().contains(&needle)
+                    || m.arch.as_deref().is_some_and(|a| a.to_lowercase().contains(&needle))
+            })
+            .collect()
+    }
+
+    pub fn active_jobs(&self) -> usize {
+        self.jobs.iter().filter(|j| j.is_running()).count()
+    }
+
+    pub fn active_downloads(&self) -> usize {
+        self.downloads.iter().filter(|d| d.is_running()).count()
+    }
+
+    /// A GPU-heavy job and a serve cannot share the card, so both `ft checkpoint` and
+    /// `ft bench bw` refuse to start while an engine is up. Surfacing that as a reason
+    /// string keeps the explanation in one place.
+    pub fn gpu_busy_reason(&self) -> Option<String> {
+        if self.engine.is_live() {
+            return Some(
+                "the engine is running; stop it first (Serve tab, or s on the Dashboard)".into(),
+            );
+        }
+        if let Some(j) = self.jobs.iter().find(|j| j.is_running()) {
+            return Some(format!("a {} job is already using the GPU", j.kind.label()));
+        }
+        None
+    }
+
+    pub fn reload_bench_profile(&mut self) {
+        self.bench_profile = load_bench_profile(
+            self.gpus.first().and_then(|g| (!g.uuid.is_empty()).then(|| g.uuid.clone())),
+        );
+    }
+
+    // ---- message handling -------------------------------------------
+
+    pub fn handle(&mut self, msg: Message) {
+        match msg {
+            Message::Telemetry(t) => self.on_telemetry(*t),
+            Message::Hardware { gpus, host } => {
+                if self.bench_profile.is_none() && self.gpus.is_empty() && !gpus.is_empty() {
+                    self.gpus = gpus.clone();
+                    self.reload_bench_profile();
+                }
+                if let Some(g) = gpus.first() {
+                    self.series.gpu_util.push(g.utilization.unwrap_or(0) as u64);
+                    self.series.vram.push(g.memory_used / (1 << 20));
+                }
+                self.gpus = gpus;
+                self.host = host;
+            }
+            Message::Engine(e) => self.on_engine(e),
+            Message::Job(e) => self.on_job(e),
+            Message::Download(e) => self.on_download(e),
+            Message::RegisterDownload(dl) => {
+                self.downloads.push(*dl);
+                self.jobs_view.sel.last(self.jobs.len() + self.downloads.len());
+            }
+            Message::Models(models) => {
+                self.models = models;
+                self.models_view.scanning = false;
+                self.models_view.sel.clamp(self.filtered_models().len());
+            }
+            Message::HubSearch(res) => {
+                self.hub_view.searching = false;
+                match res {
+                    Ok(items) => {
+                        if items.is_empty() {
+                            self.warn("no models matched that search");
+                        }
+                        self.hub_view.results = items;
+                        self.hub_view.sel = Selection::default();
+                        self.hub_view.info = None;
+                        self.hub_view.files.clear();
+                    }
+                    Err(e) => self.error(format!("Hub search failed: {e}")),
+                }
+            }
+            Message::HubInfo(res) => {
+                self.hub_view.loading_info = false;
+                match *res {
+                    Ok(info) => {
+                        self.hub_view.files =
+                            crate::hub::select_files(&info.siblings, &self.config.hub.ignore);
+                        self.hub_view.file_sel = Selection::default();
+                        let target =
+                            crate::hub::default_target(&self.config.library.download_dir, &info.id);
+                        self.hub_view.target.set(target.display().to_string());
+                        self.hub_view.info = Some(info);
+                    }
+                    Err(e) => self.error(format!("could not read repo metadata: {e}")),
+                }
+            }
+            Message::Requests { entries, next_cursor } => {
+                self.requests_view.cursor = next_cursor;
+                // Only chase the newest row when the cursor was already on it; a reader
+                // who has scrolled back to inspect a failure keeps their place.
+                let following = crate::ui::views::requests::at_tail(self);
+                for e in entries {
+                    if self.requests_view.entries.len() >= 512 {
+                        self.requests_view.entries.pop_front();
+                    }
+                    self.requests_view.entries.push_back(e);
+                }
+                if following {
+                    crate::ui::views::requests::follow_tail(self);
+                }
+            }
+            Message::CacheRebuilt(res) => {
+                self.cache_view.applying = false;
+                match res {
+                    Ok(msg) => {
+                        self.cache_view.clear_pending();
+                        self.success(msg);
+                    }
+                    Err(e) => self.error(format!("cache rebuild failed: {e}")),
+                }
+            }
+            Message::SmokeTest(res) => match res {
+                Ok(text) => {
+                    let preview: String = text.chars().take(120).collect();
+                    self.success(format!("smoke test OK: {preview}"));
+                }
+                Err(e) => self.error(format!("smoke test failed: {e}")),
+            },
+            Message::Toast(t) => {
+                self.toasts.push_back(t);
+                while self.toasts.len() > 4 {
+                    self.toasts.pop_front();
+                }
+            }
+        }
+    }
+
+    fn on_telemetry(&mut self, t: Telemetry) {
+        if let Some(s) = &t.stats {
+            self.series.decode_tps.push(s.throughput.decode_tps.round() as u64);
+            self.series.prefill_tps.push(s.throughput.prefill_tps.round() as u64);
+            self.series.active.push(s.requests.active);
+            self.series.decode_peak = self.series.decode_peak.max(s.throughput.decode_tps);
+
+            let now = Instant::now();
+            let dt = now.duration_since(self.last_completed.0).as_secs_f64();
+            if dt >= 1.0 {
+                let delta = s.requests.completed.saturating_sub(self.last_completed.1) as f64;
+                self.completed_rate.push(delta / dt);
+                self.last_completed = (now, s.requests.completed);
+            }
+        }
+        if t.health.as_ref().is_some_and(Health::is_ready) {
+            self.engine.mark_ready();
+        }
+        self.telemetry = t;
+    }
+
+    fn on_engine(&mut self, e: EngineEvent) {
+        match e {
+            EngineEvent::Started { pid } => self.info(format!("engine started (pid {pid})")),
+            EngineEvent::Exited { code, signal } => {
+                let how = crate::ft::proc::describe_exit(code, signal);
+                if code == Some(0) || signal == Some(libc::SIGINT) {
+                    self.info(format!("engine stopped {how}"));
+                } else {
+                    self.error(format!("engine exited {how} — see the Logs tab"));
+                }
+                self.telemetry = Telemetry::default();
+            }
+        }
+    }
+
+    fn on_job(&mut self, e: JobEvent) {
+        match e {
+            JobEvent::Progress(id, p) => {
+                if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
+                    j.progress = p;
+                }
+            }
+            JobEvent::Line => {}
+            JobEvent::Output(id, path) => {
+                if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
+                    j.output_path = Some(path);
+                }
+            }
+            JobEvent::Finished(id, status) => {
+                let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) else { return };
+                j.status = status.clone();
+                j.finished_at = Some(chrono::Local::now());
+                j.progress = JobProgress {
+                    phase: "done".into(),
+                    done: j.progress.total,
+                    total: j.progress.total,
+                    bytes: j.progress.bytes,
+                };
+                let (kind, title) = (j.kind, j.title.clone());
+                match status {
+                    JobStatus::Done => {
+                        self.success(format!("{} finished: {title}", kind.label()));
+                        if kind == JobKind::Convert {
+                            self.request_scan();
+                        } else {
+                            self.reload_bench_profile();
+                        }
+                    }
+                    JobStatus::Failed(why) => {
+                        self.error(format!("{} failed ({why}): {title}", kind.label()))
+                    }
+                    JobStatus::Canceled => self.warn(format!("{} canceled: {title}", kind.label())),
+                    JobStatus::Running => {}
+                }
+            }
+        }
+    }
+
+    fn on_download(&mut self, e: DownloadEvent) {
+        match e {
+            DownloadEvent::Progress { id, current, .. } => {
+                if let Some(d) = self.downloads.iter_mut().find(|d| d.id == id) {
+                    d.current = current;
+                }
+            }
+            DownloadEvent::FileDone { id } => {
+                if let Some(d) = self.downloads.iter_mut().find(|d| d.id == id) {
+                    d.files_done += 1;
+                }
+            }
+            DownloadEvent::Finished { id, result } => {
+                let Some(d) = self.downloads.iter_mut().find(|d| d.id == id) else { return };
+                d.finished_at = Some(chrono::Local::now());
+                let repo = d.repo.clone();
+                match result {
+                    Ok(path) => {
+                        d.status = crate::hub::DownloadStatus::Done;
+                        self.success(format!("downloaded {repo} to {}", path.display()));
+                        self.request_scan();
+                    }
+                    Err(e) if e == "canceled" => {
+                        d.status = crate::hub::DownloadStatus::Canceled;
+                        self.warn(format!("download canceled: {repo}"));
+                    }
+                    Err(e) => {
+                        d.status = crate::hub::DownloadStatus::Failed(e.clone());
+                        self.error(format!("download failed ({repo}): {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Kick off a library rescan on the blocking pool — a cold scan of a directory
+    /// holding several hundred-gigabyte checkpoints does real I/O.
+    pub fn request_scan(&mut self) {
+        if self.models_view.scanning {
+            return;
+        }
+        self.models_view.scanning = true;
+        let roots = self.config.library.roots.clone();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let models = crate::models::scan(&roots);
+            let _ = tx.send(Message::Models(models));
+        });
+    }
+
+    /// Keep the polled endpoint in step with the serve configuration. Called each tick;
+    /// a no-op unless the host or port knob actually changed.
+    pub fn sync_endpoint(&mut self) {
+        let wanted = endpoint_for(&self.config, &self.serve);
+        if wanted == *self.endpoint_tx.borrow() {
+            return;
+        }
+        match Client::new(&wanted, Duration::from_millis(self.config.server.timeout_ms)) {
+            Ok(client) => {
+                self.client = client;
+                self.telemetry = Telemetry::default();
+                self.requests_view.cursor = 0;
+                let _ = self.endpoint_tx.send(wanted);
+            }
+            Err(e) => self.error(format!("could not point at that endpoint: {e:#}")),
+        }
+    }
+
+    pub fn tick(&mut self) {
+        self.sync_endpoint();
+        self.engine.poll();
+        self.expire_toasts();
+        for d in &mut self.downloads {
+            d.sample_rate();
+        }
+    }
+}
+
+/// The URL ft-man polls: whatever the serve configuration will bind, falling back to
+/// the configured default. A bind address of 0.0.0.0 means "every interface", which is
+/// not a usable destination, so poll the loopback the engine is also listening on.
+fn endpoint_for(config: &Config, serve: &ServeConfig) -> String {
+    let host = match serve.get("host").map(str::trim).filter(|h| !h.is_empty()) {
+        Some("0.0.0.0") | Some("::") | Some("*") => "127.0.0.1",
+        Some(h) => h,
+        None => &config.server.host,
+    };
+    let port =
+        serve.get("port").and_then(|p| p.trim().parse::<u16>().ok()).unwrap_or(config.server.port);
+    format!("http://{host}:{port}")
+}
+
+/// Read the `ft bench bw` profile for a GPU, falling back to the newest one written.
+fn load_bench_profile(gpu_uuid: Option<String>) -> Option<BenchProfile> {
+    let cache = dirs::cache_dir()?.join("freetoken");
+    let path = gpu_uuid
+        .map(|u| cache.join("benchbw").join(format!("{u}.json")))
+        .filter(|p| p.is_file())
+        .or_else(|| newest_profile(&cache.join("benchbw")))
+        .or_else(|| {
+            let legacy = cache.join("benchbw.json");
+            legacy.is_file().then_some(legacy)
+        })?;
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn newest_profile(dir: &std::path::Path) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    rd.filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| {
+            let t = std::fs::metadata(&p).ok()?.modified().ok()?;
+            Some((t, p))
+        })
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, p)| p)
+}
+
+/// Build the rebuild request from the Cache view's pending edits.
+pub fn rebuild_from_pending(view: &CacheView) -> CacheRebuild {
+    CacheRebuild {
+        moe_cache_size: view.pending_for(Pool::Moe),
+        num_pages: view.pending_for(Pool::Kv),
+        num_mamba_slots: view.pending_for(Pool::Mamba),
+        num_swa_pages: view.pending_for(Pool::Swa),
+        ..Default::default()
+    }
+}
+
+/// The profile the Serve view would save right now.
+pub fn profile_from(name: String, serve: &ServeConfig) -> Profile {
+    Profile { name, notes: String::new(), serve: serve.clone() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tabs_cycle_in_both_directions() {
+        assert_eq!(Tab::Dashboard.prev(), Tab::Logs);
+        assert_eq!(Tab::Logs.next(), Tab::Dashboard);
+        assert_eq!(Tab::Dashboard.next(), Tab::Models);
+    }
+
+    #[test]
+    fn digits_map_to_tabs_one_based() {
+        assert_eq!(Tab::from_digit(1), Some(Tab::Dashboard));
+        assert_eq!(Tab::from_digit(8), Some(Tab::Logs));
+        assert_eq!(Tab::from_digit(9), None);
+        assert_eq!(Tab::from_digit(0), None);
+    }
+
+    #[test]
+    fn the_polled_endpoint_follows_the_serve_configuration() {
+        let config = Config::default();
+        let mut serve = ServeConfig::new();
+        assert_eq!(endpoint_for(&config, &serve), "http://127.0.0.1:1919");
+
+        serve.set("port", "1920");
+        assert_eq!(endpoint_for(&config, &serve), "http://127.0.0.1:1920");
+
+        serve.set("host", "10.0.0.5");
+        assert_eq!(endpoint_for(&config, &serve), "http://10.0.0.5:1920");
+    }
+
+    #[test]
+    fn a_wildcard_bind_address_is_polled_over_loopback() {
+        let config = Config::default();
+        for wildcard in ["0.0.0.0", "::", "*"] {
+            let mut serve = ServeConfig::new();
+            serve.set("host", wildcard);
+            assert_eq!(
+                endpoint_for(&config, &serve),
+                "http://127.0.0.1:1919",
+                "binding {wildcard} is not itself a destination"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unparseable_port_falls_back_to_the_configured_one() {
+        let config = Config::default();
+        let mut serve = ServeConfig::new();
+        serve.set("port", "not-a-port");
+        assert_eq!(endpoint_for(&config, &serve), "http://127.0.0.1:1919");
+    }
+
+    #[test]
+    fn pending_pool_edits_round_trip() {
+        let mut v = CacheView::default();
+        assert!(!v.has_pending());
+        v.set_pending(Pool::Kv, Some(4096));
+        assert_eq!(v.pending_for(Pool::Kv), Some(4096));
+        assert_eq!(v.pending_for(Pool::Moe), None);
+        assert!(v.has_pending());
+
+        let req = rebuild_from_pending(&v);
+        assert_eq!(req.num_pages, Some(4096));
+        assert!(req.moe_cache_size.is_none());
+
+        v.clear_pending();
+        assert!(!v.has_pending());
+    }
+}
