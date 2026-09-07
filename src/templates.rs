@@ -274,6 +274,15 @@ pub fn status(model_dir: &Path) -> Status {
 /// make [`revert`] restore the wrong thing.
 pub fn apply(model_dir: &Path, template: &StoredTemplate, jinja: &str) -> Result<()> {
     anyhow::ensure!(model_dir.is_dir(), "{} is not a directory", model_dir.display());
+    // The backstop for the filtering [`targets`] already does, kept here so no caller can
+    // route around it.
+    anyhow::ensure!(
+        !is_hub_cache_path(model_dir),
+        "{} is inside the Hugging Face cache, which ft-man reads but never writes. \
+         Convert the checkpoint to FTW and apply the template to that build instead — it \
+         is the copy the engine loads.",
+        model_dir.display()
+    );
     if let Some(problem) = validate(jinja) {
         anyhow::bail!("{problem}");
     }
@@ -352,7 +361,25 @@ pub fn targets(model: &crate::models::Model) -> Vec<PathBuf> {
     if let Some(ftw) = &model.converted_to {
         out.push(ftw.clone());
     }
+    // The Hugging Face cache is read, never written. A snapshot directory is shared with
+    // every other tool reading that cache — on a dataset mounted by several inference
+    // containers, an override written there would silently change what all of them serve —
+    // and `huggingface_hub` owns the tree, so a file it did not write is at risk from
+    // `hf cache delete` regardless. The FTW build is the copy the engine actually loads,
+    // and it is ours to write.
+    out.retain(|p| !is_hub_cache_path(p));
     out
+}
+
+/// True when a path lies inside a Hugging Face hub cache snapshot.
+///
+/// Recognized by the `models--org--name/snapshots` shape rather than by comparing against
+/// the configured cache root: a second cache, a relocated `HF_HOME`, or a shared dataset
+/// bind-mounted at a different path in each container must all be caught, and the layout
+/// is the only thing they have in common.
+pub fn is_hub_cache_path(dir: &Path) -> bool {
+    let names: Vec<&str> = dir.components().filter_map(|c| c.as_os_str().to_str()).collect();
+    names.windows(2).any(|w| w[0].starts_with("models--") && w[1] == "snapshots")
 }
 
 #[cfg(test)]
@@ -515,9 +542,73 @@ mod tests {
     }
 
     #[test]
+    fn a_cache_snapshot_is_recognized_wherever_it_is_mounted() {
+        assert!(is_hub_cache_path(Path::new(
+            "/workspace/huggingface/hub/models--unsloth--Qwen3.8/snapshots/abc123"
+        )));
+        // Same cache, different mount point in a sibling container.
+        assert!(is_hub_cache_path(Path::new(
+            "/mnt/shared/hub/models--acme--M/snapshots/deadbeef/nested"
+        )));
+        assert!(!is_hub_cache_path(Path::new("/workspace/models/unsloth--Qwen3.8-ftw")));
+        assert!(!is_hub_cache_path(Path::new("/models/models--not--a--cache")));
+    }
+
+    /// A cache-resident checkpoint must not be written to, but its FTW build still must
+    /// be — refusing the whole operation would leave no way to override a template for a
+    /// model downloaded the standard way.
+    #[test]
+    fn a_cache_checkpoint_is_skipped_but_its_ftw_build_is_not() {
+        let mut model = crate::models::Model {
+            name: "acme/M".into(),
+            repo: Some("acme/M".into()),
+            variant: None,
+            path: PathBuf::from("/hf/hub/models--acme--M/snapshots/abc123"),
+            format: crate::models::Format::Hf,
+            size_bytes: 0,
+            arch: None,
+            model_type: None,
+            is_moe: false,
+            num_experts: None,
+            num_layers: None,
+            quant: None,
+            max_position: None,
+            ftw_fingerprint: None,
+            converted_to: Some(PathBuf::from("/workspace/models/acme--M-ftw")),
+            modified: None,
+        };
+        assert_eq!(targets(&model), vec![PathBuf::from("/workspace/models/acme--M-ftw")]);
+
+        // With no build yet there is nothing writable, and the caller must be told rather
+        // than shown a confirmation that would write nothing.
+        model.converted_to = None;
+        assert!(targets(&model).is_empty());
+    }
+
+    /// `apply` refuses a cache path even if a caller bypasses [`targets`].
+    #[test]
+    fn applying_directly_into_the_cache_is_refused() {
+        let dir = tmpdir("cacheapply");
+        let snap = dir.join("models--acme--M/snapshots/abc123");
+        std::fs::create_dir_all(&snap).unwrap();
+        let tpl = StoredTemplate {
+            name: "t".into(),
+            path: dir.join("t.jinja"),
+            size: 0,
+            meta: TemplateMeta::default(),
+        };
+        let err = apply(&snap, &tpl, "{{ x }}").expect_err("the cache must never be written");
+        assert!(format!("{err:#}").contains("reads but never writes"), "{err:#}");
+        assert!(!snap.join(TEMPLATE_FILE).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn an_ftw_build_is_targeted_alongside_its_checkpoint() {
         let mut model = crate::models::Model {
             name: "m".into(),
+            repo: None,
+            variant: None,
             path: PathBuf::from("/models/m"),
             format: crate::models::Format::Hf,
             size_bytes: 0,

@@ -35,11 +35,17 @@ supervision that keeps a serve alive across sessions.
 ## Requirements
 
 - Linux x86_64 (developed against Debian 13), NVIDIA GPU
-- A working FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md)
+- A working FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md).
+  Its virtualenv also supplies the `hf` CLI that Hub downloads are delegated to
 - Rust 1.88+ to build
 
 `ft-man` drives FreeToken's own CLI and HTTP API; it does not link against or vendor any
-of it, and it needs no Python of its own.
+of it. It also shells out to `hf` for Hub downloads — that is `huggingface_hub`'s own CLI,
+which FreeToken already depends on, so it is normally present in the same virtualenv as
+`ft`. If it is not, the Hub tab says so up front rather than failing at the keypress, and
+`i` offers to run [Hugging Face's own installer](https://huggingface.co/docs/huggingface_hub/en/guides/cli)
+— the method their guide lists as recommended, not one invented here. `hub.cli` points at
+it if it lives somewhere else.
 
 1.88 is the floor the dependency tree actually imposes; CI proves it still holds. Day-to-day
 development uses the exact toolchain CI runs, pinned in `mise.toml` — with
@@ -92,7 +98,7 @@ $EDITOR ~/.config/ft-man/config.toml
 |---|---|
 | **Dashboard** | Engine state, throughput, cache pools, GPU and host telemetry. The screen you leave open. |
 | **Models** | Your local checkpoint library. Recognizes HF, FTW and GGUF, pairs a checkpoint with its FTW build, and says what to do with each. |
-| **Hub** | Search Hugging Face, check a repo against FreeToken *before* downloading it, pick files, download. Resumable and parallel. |
+| **Hub** | Search Hugging Face, check a repo against FreeToken *before* downloading it, pick a quantization, download. Lands in the standard Hugging Face cache. |
 | **Templates** | Override a checkpoint's chat template with one fetched from a Hugging Face repo, and put the original back. |
 | **Serve** | Every `ft serve` flag, grouped, with its domain and help text. `a` plans the launch against your hardware. Save configurations as named profiles. |
 | **Cache** | Resize the MoE, KV, GDN and SWA pools on the running engine, with the VRAM cost of each change shown before you apply it. |
@@ -195,6 +201,57 @@ and never `format`, so an llm-compressor (`compressed-tensors`) NVFP4 export res
 expert source layers`. The check catches that in under three seconds and quotes the
 mismatch.
 
+**You pick a quantization, not sixty files.** A quantized GGUF repo is not a checkpoint,
+it is a shelf of them: `unsloth/Qwen3.8-Flash-Next-GGUF` holds eleven builds of one model,
+two multimodal projectors and a drawer of draft models, in sixty files. Presenting that as
+sixty checkboxes asks the reader to know which shards belong together, which projector
+matches and which directory is a draft model. So the Hub tab groups them and asks the one
+question that matters — `UD-IQ3_XXS` or `Q8_0`? — with each option's real size beside it,
+smallest first. Choosing one selects its shards and the shared tokenizer and config, adds
+the projector (a vision model without one still loads and answers, it just silently cannot
+see), and leaves the other ten builds and the draft models alone. Two layouts are
+recognized: a directory per quantization, and a file per quantization. The raw file list is
+still there behind Tab for the repo whose layout the grouping cannot express.
+
+The same grouping runs over the cache on disk, so a downloaded build is listed the way it
+was chosen, at its real size. That matters more than it sounds: the weights of one
+quantization sit in a subdirectory, so a scan that only counted a snapshot's top level
+reported an 82 GB model as the 862 MiB projector lying beside it.
+
+**Nothing is served under a name FreeToken invented.** `ft serve` defaults
+`--served-model-name` to `os.path.basename(model_path)`, which for a cache snapshot is a
+40-character commit sha and for a quantization directory is a bare `UD-IQ3_XXS` — neither
+of which says which model it is. Worse, that name is the key ft-man remembers measured
+cache costs under, so two quantizations sharing one name would price the second against the
+first. ft-man therefore always passes the name explicitly, as `repo:variant`:
+`unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS`. FTW builds are named the same way, so
+converting two quantizations of one repo cannot write both to one directory.
+
+**The library is the Hugging Face cache, not a directory of its own.** ft-man reads
+`models--org--name/snapshots/<sha>/` out of `$HF_HOME/hub` (following `HF_HUB_CACHE` and
+`HF_HOME` exactly as `huggingface_hub` does), so a checkpoint pulled by `hf download`,
+`from_pretrained`, Unsloth or any other engine on the machine is already in the list —
+under its repo id, not a commit sha, and at its real size, which means resolving the
+symlinks a snapshot is made of. Downloads go back to the same place, delegated to `hf`
+rather than reimplemented: the cache is blobs addressed by hash, a snapshot of symlinks per
+revision, refs and `.incomplete` staging, and a second implementation that is subtly wrong
+produces a cache every other tool quietly disagrees with.
+
+Progress stays in bytes anyway. `hf` reports only a file count (`Fetching 12 files:  25%`),
+which on a repo of two 40 GiB shards is a bar that sits at zero for an hour and then jumps
+to done — so ft-man measures the cache instead: files resolved through the snapshot, plus
+the `.incomplete` blob of whatever is in flight.
+
+**What ft-man derives, it keeps out of the cache.** FTW builds go to `library.ftw_dir`, and
+a template override is never written into a snapshot. That tree belongs to
+`huggingface_hub` — a directory it did not write is invisible to `hf cache scan` and at
+risk from `hf cache delete`, and an FTW build has no repo id or revision for the cache to
+file it under in the first place. It also is not private: on a dataset shared between
+containers running different engines, editing a snapshot would silently change what all of
+them serve. So an override applies to the FTW build, which is the copy the engine loads.
+Names under `ftw_dir` are org-qualified for the same reason the cache's own are — two
+organizations publishing the same model name is common, and a flat name merges them.
+
 **Chat templates are a file operation, and it says so.** FreeToken has no
 `--chat-template` flag — it loads the template through
 `AutoTokenizer.from_pretrained(model_path)` — so overriding one means writing
@@ -234,13 +291,20 @@ poll_ms = 1000
 timeout_ms = 4000
 
 [library]
+# The Hugging Face cache is always scanned, whether or not it is listed here; these are
+# additional roots. Each is searched one level deep, plus the two-level `org/model` layout,
+# plus any `models--org--name` cache entry found in it.
 roots = ["/home/you/models", "/srv/models"]
+# Where a checkpoint placed by hand lives. Hub downloads go to the cache instead.
 download_dir = "/home/you/models"
+# Where FTW builds are written. Defaults to download_dir. Never inside the cache.
+ftw_dir = "/home/you/models"
 
 [hub]
 endpoint = "https://huggingface.co"
 # token = "hf_..."     # or set HF_TOKEN; the `hf` CLI's cached token is also read
-concurrency = 4
+# cli = "/opt/freetoken/.venv/bin/hf"   # found in the FreeToken venv or on PATH otherwise
+concurrency = 4        # passed to `hf download --max-workers`
 ignore = ["*.bin", "*.pth", "*.msgpack", "*.h5", "*.onnx"]
 
 [convert]
@@ -275,10 +339,11 @@ CLI flags override the config file for that run and are not written back.
 
 ## A typical first run
 
-1. **Hub** → `/` → search `Qwen3.6-35B-A3B` → Enter → `d`. It downloads to
-   `library.download_dir`.
-2. **Models** → select it → `c`. Converts to FTW in a sibling `-ftw` directory. Watch it
-   on **Jobs**.
+1. **Hub** → `/` → search `Qwen3.6-35B-A3B` → Enter. If the repo ships several
+   quantizations, pick one and press `d`. It downloads into the Hugging Face cache, so
+   every other tool on the machine can already see it.
+2. **Models** → select it → `c`. Converts to FTW under `library.ftw_dir`. Watch it on
+   **Jobs**.
 3. **Jobs** → `b`. Runs `ft bench bw` once for this machine, so `--moe-backend auto` can
    choose hybrid over offload when your RAM bandwidth justifies it.
 4. **Models** → select the checkpoint → Enter. It loads the FTW build into **Serve**.
@@ -315,7 +380,7 @@ OpenAI and Anthropic APIs.
 ## Development
 
 ```bash
-cargo test        # 134 tests, including render and input sweeps across five terminal sizes
+cargo test        # 215 tests, including render and input sweeps across five terminal sizes
 cargo clippy --all-targets
 cargo fmt
 ```

@@ -317,6 +317,8 @@ pub enum ConfirmAction {
     DeleteTemplate(String),
     /// Delete a failed conversion's leftovers, then convert `source` again.
     ReconvertModel(std::path::PathBuf),
+    /// Run Hugging Face's installer for the `hf` CLI.
+    InstallHfCli,
     /// Convert `source` even though the preflight raised a concern.
     ConvertAnyway(std::path::PathBuf),
 }

@@ -11,7 +11,9 @@ use crate::ft::proc::{spawn_job, JobKind, JobSpec};
 use crate::hub::{start_download, Hub};
 use crate::knobs::{knobs_in, Kind, Knob};
 use crate::models::Format;
-use crate::ui::app::{rebuild_from_pending, App, Message, Pool, Tab, Telemetry, TemplatePane};
+use crate::ui::app::{
+    rebuild_from_pending, App, HubFocus, Message, Pool, Tab, Telemetry, TemplatePane,
+};
 use crate::ui::views;
 use crate::ui::widgets::{Confirm, ConfirmAction, ToastKind};
 
@@ -138,12 +140,20 @@ fn run_action(app: &mut App, action: ConfirmAction) {
                 app.success(format!("deleted profile '{name}'"));
             }
         }
+        ConfirmAction::InstallHfCli => {
+            app.hf_installing = true;
+            app.info("installing the hf CLI…");
+            let tx = app.tx.clone();
+            tokio::spawn(async move {
+                let _ = tx.send(Message::HfInstalled(crate::hub::install_cli().await));
+            });
+        }
         ConfirmAction::ApplyCacheRebuild => apply_cache_rebuild(app),
         ConfirmAction::ApplyTemplate { template, model } => write_template(app, &template, &model),
         ConfirmAction::RevertTemplate(model) => revert_template(app, &model),
         ConfirmAction::ConvertAnyway(source) => start_conversion(app, &source),
         ConfirmAction::ReconvertModel(source) => {
-            let out = crate::models::ftw_output_path(&source);
+            let out = ftw_out(app, &source);
             if let Err(e) = std::fs::remove_dir_all(&out) {
                 app.error(format!("could not remove {}: {e}", out.display()));
                 return;
@@ -463,7 +473,10 @@ fn use_selected_model(app: &mut App, and_serve: bool) {
         None => (model.path.clone(), None),
     };
     let name = model.name.clone();
+    // Explicit, never inferred. See `Model::served_name`.
+    let served = model.served_name();
     app.serve.set("model", path.display().to_string());
+    app.serve.set("served_model_name", served);
     if let Some(n) = note {
         app.info(n);
     }
@@ -496,7 +509,12 @@ fn convert_selected(app: &mut App) {
 
     let source = model.path.clone();
     let name = model.name.clone();
-    let out = crate::models::ftw_output_path(&source);
+    let out = crate::models::ftw_output_path(
+        &source,
+        model.repo.as_deref(),
+        model.variant.as_deref(),
+        &app.config.library.ftw_dir(),
+    );
 
     if out.exists() {
         // A finished build is a real artifact; the leftovers of a failed run are not, and
@@ -617,13 +635,27 @@ fn convert_moe_backend(app: &App) -> &'static str {
     }
 }
 
+/// Where the FTW build of `source` goes, resolving the checkpoint's repo id out of the
+/// library so one that came from the Hugging Face cache gets an org-qualified name.
+fn ftw_out(app: &App, source: &std::path::Path) -> std::path::PathBuf {
+    let found = app.models.iter().find(|m| m.path == source);
+    let repo = found.and_then(|m| m.repo.clone());
+    let variant = found.and_then(|m| m.variant.clone());
+    crate::models::ftw_output_path(
+        source,
+        repo.as_deref(),
+        variant.as_deref(),
+        &app.config.library.ftw_dir(),
+    )
+}
+
 /// Spawn `ft checkpoint` for a checkpoint that has been cleared to convert.
 fn start_conversion(app: &mut App, source: &std::path::Path) {
     let Some(ft) = app.ft.clone() else {
         app.error("the FreeToken CLI was not found");
         return;
     };
-    let out = crate::models::ftw_output_path(source);
+    let out = ftw_out(app, source);
     let name = source
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -694,11 +726,20 @@ fn hub_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('/') => app.hub_view.editing = true,
         KeyCode::Tab => {
             if !app.hub_view.files.is_empty() {
-                app.hub_view.in_files = !app.hub_view.in_files;
+                app.hub_view.focus = match app.hub_view.focus {
+                    HubFocus::Results if app.hub_view.layout.is_multi() => HubFocus::Variants,
+                    HubFocus::Results => HubFocus::Files,
+                    HubFocus::Variants => HubFocus::Files,
+                    HubFocus::Files => HubFocus::Results,
+                };
             }
         }
-        KeyCode::Esc if app.hub_view.in_files => app.hub_view.in_files = false,
-        _ if app.hub_view.in_files => hub_files_key(app, key),
+        KeyCode::Char('i') if app.hf_cli.is_none() && !app.hf_installing => offer_hf_install(app),
+        KeyCode::Esc if app.hub_view.focus != HubFocus::Results => {
+            app.hub_view.focus = HubFocus::Results
+        }
+        _ if app.hub_view.focus == HubFocus::Variants => hub_variants_key(app, key),
+        _ if app.hub_view.focus == HubFocus::Files => hub_files_key(app, key),
         _ => hub_results_key(app, key),
     }
 }
@@ -718,6 +759,76 @@ fn hub_results_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Offer Hugging Face's own installer for the missing `hf` CLI.
+fn offer_hf_install(app: &mut App) {
+    ask(
+        app,
+        Confirm::new(
+            "Install the Hugging Face CLI",
+            vec![
+                "ft-man delegates Hub downloads to `hf`, and it is not installed.".into(),
+                String::new(),
+                "This runs Hugging Face's own installer, the method their CLI guide lists \
+                 as recommended:"
+                    .into(),
+                String::new(),
+                format!("  {}", crate::hub::INSTALL_COMMAND),
+                String::new(),
+                "It downloads and executes a script from hf.co and installs into \
+                 ~/.local/bin. `--exclude-skill` keeps it from also writing agent skills \
+                 into your home directory."
+                    .into(),
+            ],
+            ConfirmAction::InstallHfCli,
+            // Not destructive: it adds a tool, it does not remove or overwrite anything of
+            // the user's. Defaulting to Cancel is still the right posture for a network
+            // install, and Confirm::new already does that.
+            false,
+        ),
+    );
+}
+
+/// Choosing a quantization — the one interaction this tab really exists for.
+fn hub_variants_key(app: &mut App, key: KeyEvent) {
+    let len = app.hub_view.layout.weights().count();
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => app.hub_view.variant_sel.up(len),
+        KeyCode::Down | KeyCode::Char('j') => app.hub_view.variant_sel.down(len),
+        KeyCode::PageUp => app.hub_view.variant_sel.page_up(10),
+        KeyCode::PageDown => app.hub_view.variant_sel.page_down(len, 10),
+        KeyCode::Home => app.hub_view.variant_sel.first(),
+        KeyCode::End => app.hub_view.variant_sel.last(len),
+        KeyCode::Enter | KeyCode::Char(' ') => choose_variant(app),
+        KeyCode::Char('d') => {
+            // `d` on a highlighted row means that row. Nobody presses download expecting
+            // the quantization under the cursor to be the one left out.
+            if app.hub_view.variant.is_none() {
+                choose_variant(app);
+            }
+            begin_download(app);
+        }
+        _ => {}
+    }
+}
+
+/// Apply the highlighted quantization to the file selection.
+fn choose_variant(app: &mut App) {
+    let Some(label) =
+        app.hub_view.layout.weights().nth(app.hub_view.variant_sel.index).map(|v| v.label.clone())
+    else {
+        return;
+    };
+    let wanted = app.hub_view.layout.files_for(&label);
+    for f in &mut app.hub_view.files {
+        f.wanted = wanted.contains(&f.path);
+    }
+    let total: u64 = app.hub_view.files.iter().filter(|f| f.wanted).map(|f| f.size).sum();
+    let count = app.hub_view.files.iter().filter(|f| f.wanted).count();
+    app.hub_view.variant = Some(label.clone());
+    app.hub_view.custom_selection = false;
+    app.info(format!("{label}: {count} file(s), {}", crate::util::bytes(total)));
+}
+
 fn hub_files_key(app: &mut App, key: KeyEvent) {
     let len = app.hub_view.files.len();
     match key.code {
@@ -730,10 +841,19 @@ fn hub_files_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char(' ') => {
             if let Some(f) = app.hub_view.files.get_mut(app.hub_view.file_sel.index) {
                 f.wanted = !f.wanted;
+                // The selection no longer is a quantization, so nothing downstream may go
+                // on claiming it is one.
+                app.hub_view.custom_selection = true;
             }
         }
-        KeyCode::Char('a') => app.hub_view.files.iter_mut().for_each(|f| f.wanted = true),
-        KeyCode::Char('n') => app.hub_view.files.iter_mut().for_each(|f| f.wanted = false),
+        KeyCode::Char('a') => {
+            app.hub_view.files.iter_mut().for_each(|f| f.wanted = true);
+            app.hub_view.custom_selection = true;
+        }
+        KeyCode::Char('n') => {
+            app.hub_view.files.iter_mut().for_each(|f| f.wanted = false);
+            app.hub_view.custom_selection = true;
+        }
         KeyCode::Char('d') => begin_download(app),
         _ => {}
     }
@@ -787,7 +907,7 @@ fn load_repo_files(app: &mut App) {
     }
     let revision = app.hub_view.revision.clone();
     app.hub_view.loading_info = true;
-    app.hub_view.in_files = true;
+    app.hub_view.focus = HubFocus::Files;
     app.hub_view.compat = None;
     app.hub_view.compat_error = None;
     let tx = app.tx.clone();
@@ -856,7 +976,12 @@ fn begin_download(app: &mut App) {
             return;
         }
     };
-    let target = std::path::PathBuf::from(app.hub_view.target.value.clone());
+    let Some(cli) = app.hf_cli.clone() else {
+        app.error("the hf CLI is not installed — press i on the Hub tab to install it");
+        return;
+    };
+    let cache_dir = app.config.library.hub_cache();
+    let token = app.config.hub.resolve_token().map(|t| t.value);
     let revision = app.hub_view.revision.clone();
     let concurrency = app.config.hub.concurrency;
     let files = selected;
@@ -871,10 +996,22 @@ fn begin_download(app: &mut App) {
     ));
     app.tab = Tab::Jobs;
 
-    // The launch itself does network I/O (filling in missing file sizes), so it runs off
-    // the UI thread and reports back rather than blocking a keystroke.
+    // Spawning the child and taking the first cache sample both touch the filesystem, so
+    // this runs off the UI thread and reports back rather than blocking a keystroke.
     tokio::spawn(async move {
-        match start_download(hub, repo.clone(), revision, target, files, concurrency, dl_tx).await {
+        match start_download(
+            hub,
+            cli,
+            cache_dir,
+            token,
+            repo.clone(),
+            revision,
+            files,
+            concurrency,
+            dl_tx,
+        )
+        .await
+        {
             Ok(dl) => {
                 let _ = tx.send(Message::RegisterDownload(Box::new(dl)));
             }

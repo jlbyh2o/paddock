@@ -17,6 +17,7 @@ mod reuse;
 mod templates;
 mod ui;
 mod util;
+mod variants;
 
 use std::io;
 use std::time::Duration;
@@ -155,13 +156,27 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
     println!();
 
     println!("server         {}", config.server.base_url());
-    println!("model roots");
-    for root in &config.library.roots {
-        let path = models::expand_tilde(root);
-        let exists = if path.is_dir() { "" } else { "  (missing)" };
-        println!("  {}{exists}", path.display());
+    match hub::locate_cli(config, ft.as_ref().ok().map(|f| f.program.as_path())) {
+        Ok(path) => println!("hf CLI        {}", path.display()),
+        Err(e) => println!(
+            "hf CLI        NOT FOUND
+  {e}"
+        ),
     }
-    let found = models::scan(&config.library.roots);
+    println!();
+
+    println!("model roots");
+    let roots = config.library.effective_roots();
+    let cache = config.library.hub_cache();
+    for root in &roots {
+        let exists = if root.is_dir() { "" } else { "  (missing)" };
+        // Worth naming: it is added implicitly, so a user who never configured it should
+        // still be told this is where their `hf`-downloaded weights are being read from.
+        let note = if *root == cache { "  (Hugging Face cache)" } else { "" };
+        println!("  {}{note}{exists}", root.display());
+    }
+    println!("  FTW builds  {}", config.library.ftw_dir().display());
+    let found = models::scan(&roots, &config.library.ftw_dir());
     println!("  {} checkpoint(s) found", found.len());
     for m in found.iter().take(20) {
         println!("    {:<5} {:>10}  {}", m.format.label(), util::bytes(m.size_bytes), m.name);
@@ -175,8 +190,9 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
     match config.hub.resolve_token() {
         Some(t) => println!("  token        found via {}", t.source),
         None => println!(
-            "  token        NOT FOUND (checked HF_TOKEN, HUGGING_FACE_HUB_TOKEN, hub.token in \
-             the config, and ~/.cache/huggingface/token)"
+            "  token        NOT FOUND (checked HF_TOKEN, HUGGING_FACE_HUB_TOKEN, hub.token \
+                 in the config, and {})",
+            config::hf_token_path().display()
         ),
     }
 

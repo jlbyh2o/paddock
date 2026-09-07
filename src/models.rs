@@ -6,6 +6,18 @@
 //! where a conversion already exists, and surface enough metadata (architecture, MoE-ness,
 //! quantization, context length) to decide what to do next without opening a JSON file by
 //! hand.
+//!
+//! Checkpoints are found in three layouts. A plain directory, the `org/model` layout that
+//! `hf download --local-dir` and mirrors produce, and — the one that matters most on a
+//! machine shared with other engines — the Hugging Face **hub cache**,
+//! `models--org--name/snapshots/<sha>/`. The cache is where `from_pretrained`, `hf
+//! download` and every library built on `huggingface_hub` already put weights, so reading
+//! it is what lets ft-man see a model Ollama or Unsloth downloaded, and vice versa.
+//!
+//! The cache is read, never written. Anything ft-man derives — an FTW build, a chat
+//! template override — goes elsewhere, because that tree belongs to `huggingface_hub`:
+//! a directory it did not write is invisible to `hf cache scan` and at risk from `hf cache
+//! delete`, and an FTW build has no repo id or revision for the cache to file it under.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -40,6 +52,13 @@ impl Format {
 #[derive(Debug, Clone)]
 pub struct Model {
     pub name: String,
+    /// The Hugging Face repo id (`org/name`) when this checkpoint came from the hub
+    /// cache. `None` for a plain directory, which carries no repo identity — and the
+    /// distinction matters, because `ft serve --model-path` accepts a repo id directly.
+    pub repo: Option<String>,
+    /// Which quantization of [`Self::repo`] this is, when the repo ships more than one.
+    /// `UD-IQ3_XXS`, `Q8_0`. `None` for a repo with a single build.
+    pub variant: Option<String>,
     pub path: PathBuf,
     pub format: Format,
     /// Total bytes of weight files under the directory.
@@ -88,6 +107,22 @@ impl Model {
         parts.join(" · ")
     }
 
+    /// The name to serve this model under, and the key its measured cache costs are
+    /// remembered by.
+    ///
+    /// Always passed explicitly, because FreeToken's own default is
+    /// `os.path.basename(model_path)` — which for a Hugging Face snapshot is a 40-character
+    /// commit sha, and for a quantization subdirectory is a bare `UD-IQ3_XXS` that says
+    /// nothing about which model it is. Both are unusable as an API model id, and both
+    /// would poison `costs.json`, which is keyed by this name.
+    pub fn served_name(&self) -> String {
+        let base = self.repo.clone().unwrap_or_else(|| self.name.clone());
+        match &self.variant {
+            Some(v) => format!("{base}:{v}"),
+            None => base,
+        }
+    }
+
     /// Whether converting this checkpoint to FTW is a sensible next action.
     pub fn convertible(&self) -> bool {
         self.format == Format::Hf
@@ -101,11 +136,13 @@ impl Model {
 
 /// Scan every configured root and return the library, sorted by name.
 ///
-/// Roots are searched at depth 1 and 2: depth 1 catches `~/models/Qwen3.6-35B-A3B`, and
-/// depth 2 catches the `org/model` layout that mirrors and `hf download --local-dir`
-/// produce. Deeper recursion is deliberately avoided — a model directory can hold
-/// thousands of files and a runaway walk would make the Models view feel broken.
-pub fn scan(roots: &[PathBuf]) -> Vec<Model> {
+/// Three layouts are recognized per root. A hub cache entry (`models--org--name`) is
+/// resolved through its ref to the snapshot it points at. Otherwise the root is searched
+/// at depth 1 and 2: depth 1 catches `~/models/Qwen3.6-35B-A3B`, and depth 2 catches the
+/// `org/model` layout that mirrors and `hf download --local-dir` produce. Deeper recursion
+/// is deliberately avoided — a model directory can hold thousands of files and a runaway
+/// walk would make the Models view feel broken.
+pub fn scan(roots: &[PathBuf], ftw_dir: &Path) -> Vec<Model> {
     let mut found: BTreeMap<PathBuf, Model> = BTreeMap::new();
     for root in roots {
         let root = expand_tilde(root);
@@ -114,6 +151,15 @@ pub fn scan(roots: &[PathBuf]) -> Vec<Model> {
         }
         for entry in read_dir_sorted(&root) {
             if !entry.is_dir() {
+                continue;
+            }
+            // Tried first, and cheap to reject: it only matches a `models--org--name`
+            // name, so a plain library directory falls straight through to the rest.
+            let cached = inspect_cache_entry(&entry);
+            if !cached.is_empty() {
+                for m in cached {
+                    found.insert(m.path.clone(), m);
+                }
                 continue;
             }
             if let Some(m) = inspect(&entry) {
@@ -132,37 +178,159 @@ pub fn scan(roots: &[PathBuf]) -> Vec<Model> {
     }
 
     let mut models: Vec<Model> = found.into_values().collect();
-    link_conversions(&mut models);
+    link_conversions(&mut models, ftw_dir);
     models.sort_by_key(|m| m.name.to_lowercase());
     models
 }
 
-/// Pair each HF checkpoint with an FTW directory converted from it. Matching is by the
-/// naming convention ft-man itself uses (`<name>-ftw`) and by FTW indexes that record
-/// their source path.
-fn link_conversions(models: &mut [Model]) {
-    let ftw: Vec<(PathBuf, Option<String>)> = models
-        .iter()
-        .filter(|m| m.format == Format::Ftw)
-        .map(|m| (m.path.clone(), m.ftw_fingerprint.clone()))
-        .collect();
+/// Resolve a Hugging Face hub cache entry to the checkpoint it currently points at.
+///
+/// `None` for anything that is not a cache entry, which is what makes this safe to try
+/// ahead of the ordinary layouts.
+fn inspect_cache_entry(dir: &Path) -> Vec<Model> {
+    let Some(repo) = dir.file_name().and_then(|n| n.to_str()).and_then(repo_from_cache_dir) else {
+        return Vec::new();
+    };
+    let Some(snapshot) = cache_snapshot(dir) else { return Vec::new() };
+
+    // Grouped by exactly the rules the Hub tab uses, so a quantization looks the same
+    // before and after it is downloaded.
+    let layout = crate::variants::analyze(&local_listing(&snapshot));
+    let mut out = Vec::new();
+    for v in layout.weights() {
+        // A quantization in its own directory is a separate checkpoint on disk, and the
+        // engine has to be pointed at that directory: a snapshot root holding eleven
+        // builds is not something `--model-path` can resolve.
+        let path = match &v.subdir {
+            Some(sub) => snapshot.join(sub),
+            None => snapshot.clone(),
+        };
+        let Some(mut m) = inspect(&path) else { continue };
+        // `inspect` names a directory after itself, which here is a commit sha or a bare
+        // quantization label. Neither identifies the model.
+        // Tagged whenever the label names a real build, not merely when several are
+        // present. Only one quantization may be downloaded today and a second tomorrow,
+        // and the two have genuinely different cache costs — `costs.json` is keyed by
+        // this name, so letting them share one would price the second against the first.
+        let tagged = crate::variants::is_build_label(&v.label);
+        m.name = if tagged { format!("{repo}:{}", v.label) } else { repo.clone() };
+        m.repo = Some(repo.clone());
+        m.variant = tagged.then(|| v.label.clone());
+        // Taken from the grouping rather than from the directory, so a quantization whose
+        // shards sit beside ten other builds is not reported as the whole shelf.
+        if v.bytes > 0 {
+            m.size_bytes = v.bytes;
+        }
+        out.push(m);
+    }
+    out
+}
+
+/// A snapshot's files, shaped like a Hub listing so [`crate::variants::analyze`] can group
+/// local and remote repos with one set of rules.
+///
+/// Two levels deep, which is all the layout ever uses: `UD-IQ3_XXS/shard.gguf`.
+fn local_listing(snapshot: &Path) -> Vec<crate::hub::Sibling> {
+    let mut out = Vec::new();
+    let mut push = |path: &Path, rel: String| {
+        // Follows symlinks: in a hub cache the file is a link into `blobs/`.
+        let size = std::fs::metadata(path).map(|m| m.len()).ok();
+        out.push(crate::hub::Sibling { path: rel, size });
+    };
+    for entry in read_dir_sorted(snapshot) {
+        let Some(name) = entry.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+            continue;
+        };
+        if entry.is_dir() {
+            for child in read_dir_sorted(&entry) {
+                if let Some(c) = child.file_name().and_then(|n| n.to_str()) {
+                    push(&child, format!("{name}/{c}"));
+                }
+            }
+        } else {
+            push(&entry, name);
+        }
+    }
+    out
+}
+
+/// Decode a hub cache directory name back into a repo id.
+///
+/// `huggingface_hub` builds these as `models--` followed by the repo id with `/` replaced
+/// by `--`. An organization name cannot contain `--`, so the first separator splits it
+/// from the model name; the model name may contain further ones and is taken whole.
+fn repo_from_cache_dir(dir_name: &str) -> Option<String> {
+    let (org, name) = dir_name.strip_prefix("models--")?.split_once("--")?;
+    (!org.is_empty() && !name.is_empty()).then(|| format!("{org}/{name}"))
+}
+
+/// The snapshot directory a cache entry resolves to.
+///
+/// `refs/main` is what a bare repo id resolves to for every other tool, so it is the
+/// revision to show. A repo pinned to a tag or a commit has no `main` ref; falling back to
+/// the most recently written snapshot lists it rather than hiding it, and an unlisted
+/// checkpoint is one nothing can act on.
+pub(crate) fn cache_snapshot(repo_dir: &Path) -> Option<PathBuf> {
+    let snapshots = repo_dir.join("snapshots");
+    if let Ok(sha) = std::fs::read_to_string(repo_dir.join("refs").join("main")) {
+        let pinned = snapshots.join(sha.trim());
+        if pinned.is_dir() {
+            return Some(pinned);
+        }
+    }
+    read_dir_sorted(&snapshots)
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, p)| p)
+}
+
+/// Pair each HF checkpoint with the FTW directory converted from it, by the naming
+/// convention [`ftw_output_path`] applies.
+fn link_conversions(models: &mut [Model], ftw_dir: &Path) {
+    let ftw: Vec<PathBuf> =
+        models.iter().filter(|m| m.format == Format::Ftw).map(|m| m.path.clone()).collect();
     for m in models.iter_mut().filter(|m| m.format == Format::Hf) {
-        let expected = ftw_output_path(&m.path);
-        if let Some((path, _)) = ftw.iter().find(|(p, _)| *p == expected) {
+        let expected = ftw_output_path(&m.path, m.repo.as_deref(), m.variant.as_deref(), ftw_dir);
+        if let Some(path) = ftw.iter().find(|p| **p == expected) {
             m.converted_to = Some(path.clone());
         }
     }
 }
 
-/// Where ft-man puts the FTW build of a checkpoint: a sibling directory with a `-ftw`
-/// suffix, so the pair stays together and the origin stays obvious.
-pub fn ftw_output_path(source: &Path) -> PathBuf {
-    let name = source
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "model".into());
-    let parent = source.parent().unwrap_or(Path::new("."));
-    parent.join(format!("{name}-ftw"))
+/// Where ft-man puts the FTW build of a checkpoint: under `library.ftw_dir`, with a
+/// `-ftw` suffix.
+///
+/// Deliberately not beside the source. A hub-cache checkpoint's sibling would be inside
+/// `snapshots/`, a tree that belongs to `huggingface_hub` — a directory it did not write
+/// is invisible to `hf cache scan` and at risk from `hf cache delete`. An FTW build is
+/// also not a Hugging Face repo: it has no repo id and no revision, so the cache has
+/// nowhere to file it even in principle.
+///
+/// The name is org-qualified whenever the origin is known, for the same reason the cache's
+/// own names are: two organizations publishing the same model name is common, and a flat
+/// name silently merges them into one directory.
+pub fn ftw_output_path(
+    source: &Path,
+    repo: Option<&str>,
+    variant: Option<&str>,
+    ftw_dir: &Path,
+) -> PathBuf {
+    let mut stem = match repo {
+        Some(r) => r.replace('/', "--"),
+        None => source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "model".into()),
+    };
+    // Without this, converting two quantizations of one repo would write both builds to
+    // the same directory, and the second would silently overwrite the first.
+    if let Some(v) = variant {
+        stem.push_str("--");
+        stem.push_str(v);
+    }
+    expand_tilde(ftw_dir).join(format!("{stem}-ftw"))
 }
 
 /// Identify a single directory, returning `None` when it holds no recognizable model.
@@ -196,6 +364,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             converted_to: None,
+            repo: None,
+            variant: None,
             modified,
         });
     }
@@ -216,6 +386,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             max_position: None,
             ftw_fingerprint: None,
             converted_to: None,
+            repo: None,
+            variant: None,
             modified,
         });
     }
@@ -241,6 +413,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             max_position: cfg.max_position(),
             ftw_fingerprint: None,
             converted_to: None,
+            repo: None,
+            variant: None,
             modified,
         });
     }
@@ -262,6 +436,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             max_position: None,
             ftw_fingerprint: None,
             converted_to: None,
+            repo: None,
+            variant: None,
             modified,
         });
     }
@@ -366,13 +542,18 @@ fn has_any_extension(dir: &Path, exts: &[&str]) -> bool {
 
 /// Sum the weight files directly inside `dir`. Checkpoints are flat, so this stays a
 /// single readdir rather than a recursive walk.
+/// Total bytes of the weight files directly in a directory.
+///
+/// Resolves symlinks, which is the whole point on a hub cache snapshot: every weight file
+/// there is a link into `blobs/`, and `DirEntry::metadata` does not traverse links, so it
+/// would report an 80 GiB model as a few hundred bytes. [`dir_size`] deliberately does the
+/// opposite — deleting a snapshot frees only the links, not the blobs behind them.
 fn weight_bytes(dir: &Path, exts: &[&str]) -> u64 {
     let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
     rd.filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x))
-        })
-        .filter_map(|e| e.metadata().ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x)))
+        .filter_map(|p| std::fs::metadata(&p).ok())
         .map(|m| m.len())
         .sum()
 }
@@ -497,7 +678,7 @@ mod tests {
         std::fs::write(src.join("model.safetensors"), b"x").unwrap();
         std::fs::write(ftw.join(crate::ft::proc::FTW_INDEX), r#"{"quant_format":"bf16"}"#).unwrap();
 
-        let models = scan(std::slice::from_ref(&dir));
+        let models = scan(std::slice::from_ref(&dir), &dir);
         let hf = models.iter().find(|m| m.format == Format::Hf).unwrap();
         assert_eq!(hf.converted_to.as_deref(), Some(ftw.as_path()));
         std::fs::remove_dir_all(&dir).ok();
@@ -531,7 +712,7 @@ mod tests {
         std::fs::write(src.join("model.safetensors"), b"x").unwrap();
         std::fs::write(out.join("freetoken-00000.ftw"), b"x").unwrap();
 
-        let models = scan(std::slice::from_ref(&dir));
+        let models = scan(std::slice::from_ref(&dir), &dir);
         let hf = models.iter().find(|m| m.format == Format::Hf).unwrap();
         assert_eq!(hf.converted_to, None, "a half-written build is not a conversion");
         assert!(models.iter().any(|m| m.is_partial()));
@@ -550,10 +731,179 @@ mod tests {
     }
 
     #[test]
-    fn ftw_output_is_a_suffixed_sibling() {
+    fn ftw_output_lands_in_the_ftw_dir_not_beside_the_source() {
+        let ftw_dir = Path::new("/workspace/models");
+
+        // A plain directory keeps its own name.
         assert_eq!(
-            ftw_output_path(Path::new("/models/Qwen3.6-35B-A3B")),
-            PathBuf::from("/models/Qwen3.6-35B-A3B-ftw")
+            ftw_output_path(Path::new("/models/Qwen3.6-35B-A3B"), None, None, ftw_dir),
+            PathBuf::from("/workspace/models/Qwen3.6-35B-A3B-ftw")
         );
+
+        // A cache-resident checkpoint is org-qualified, and — the point of the change —
+        // the build does NOT land beside the source, which would be inside `snapshots/`.
+        let snapshot = Path::new("/hf/hub/models--unsloth--Qwen3.8/snapshots/abc123");
+        let out = ftw_output_path(snapshot, Some("unsloth/Qwen3.8"), None, ftw_dir);
+        assert_eq!(out, PathBuf::from("/workspace/models/unsloth--Qwen3.8-ftw"));
+        assert!(!out.starts_with("/hf/hub"), "an FTW build must never be written into the cache");
+
+        // Two orgs publishing the same model name must not collide, which is exactly what
+        // the old repo-basename scheme did.
+        let a = ftw_output_path(snapshot, Some("unsloth/Qwen3.8"), None, ftw_dir);
+        let b = ftw_output_path(snapshot, Some("bartowski/Qwen3.8"), None, ftw_dir);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_cache_directory_name_decodes_to_its_repo_id() {
+        assert_eq!(
+            repo_from_cache_dir("models--unsloth--Qwen3.8-Flash-Next-GGUF").as_deref(),
+            Some("unsloth/Qwen3.8-Flash-Next-GGUF")
+        );
+        // A model name may itself contain the separator; only the first one splits.
+        assert_eq!(repo_from_cache_dir("models--org--we--ird").as_deref(), Some("org/we--ird"));
+        // Not cache entries.
+        assert_eq!(repo_from_cache_dir("Qwen3.6-35B-A3B"), None);
+        assert_eq!(repo_from_cache_dir("datasets--org--name"), None);
+        assert_eq!(repo_from_cache_dir("models--org"), None);
+    }
+
+    /// The case that motivated reading the cache at all: a checkpoint downloaded by `hf`,
+    /// `from_pretrained`, or another engine on the same machine must show up in the
+    /// library, under its repo id rather than a commit sha, at its real size.
+    #[test]
+    fn a_hub_cache_entry_is_found_named_and_sized() {
+        let dir = tmpdir("hubcache");
+        let repo = dir.join("models--acme--Tiny-Model");
+        let blobs = repo.join("blobs");
+        let snap = repo.join("snapshots/abc123def456");
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::create_dir_all(repo.join("refs")).unwrap();
+        std::fs::write(repo.join("refs/main"), "abc123def456\n").unwrap();
+
+        std::fs::write(blobs.join("cfg"), r#"{"model_type":"llama"}"#).unwrap();
+        std::fs::write(blobs.join("weights"), vec![0u8; 4096]).unwrap();
+        // The cache stores content in `blobs/` and links to it per revision. Reading the
+        // link rather than its target is what once reported an 80 GiB model as 200 bytes.
+        std::os::unix::fs::symlink("../../blobs/cfg", snap.join("config.json")).unwrap();
+        std::os::unix::fs::symlink("../../blobs/weights", snap.join("model.safetensors")).unwrap();
+
+        let models = scan(std::slice::from_ref(&dir), Path::new("/workspace/models"));
+        assert_eq!(models.len(), 1, "the cache entry must be found: {models:?}");
+        let m = &models[0];
+        assert_eq!(m.name, "acme/Tiny-Model", "named by repo id, not by commit sha");
+        assert_eq!(m.repo.as_deref(), Some("acme/Tiny-Model"));
+        assert_eq!(m.format, Format::Hf);
+        assert_eq!(m.size_bytes, 4096, "size must resolve through the blob symlink");
+        assert_eq!(m.path, snap, "the servable path is the snapshot directory");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A repo pinned to a tag or a commit has no `refs/main`. Listing it anyway beats
+    /// hiding a checkpoint that is sitting on disk.
+    #[test]
+    fn a_cache_entry_without_a_main_ref_falls_back_to_a_snapshot() {
+        let dir = tmpdir("hubcache-noref");
+        let repo = dir.join("models--acme--Pinned");
+        let snap = repo.join("snapshots/deadbeef");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::write(snap.join("config.json"), r#"{"model_type":"llama"}"#).unwrap();
+        std::fs::write(snap.join("model.safetensors"), vec![0u8; 16]).unwrap();
+
+        let models = scan(std::slice::from_ref(&dir), Path::new("/workspace/models"));
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "acme/Pinned");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The bug this fixes, exactly as it appeared: a downloaded quantization lives in a
+    /// subdirectory of the snapshot, the snapshot root holds only a projector, and the
+    /// library reported an 82 GB model as 862 MiB.
+    #[test]
+    fn a_snapshot_of_quantizations_lists_each_one_at_its_real_size() {
+        let dir = tmpdir("variants-cache");
+        let repo = dir.join("models--unsloth--Model-GGUF");
+        let snap = repo.join("snapshots/abc123");
+        std::fs::create_dir_all(snap.join("UD-IQ3_XXS")).unwrap();
+        std::fs::create_dir_all(snap.join("Q8_0")).unwrap();
+        std::fs::create_dir_all(repo.join("refs")).unwrap();
+        std::fs::write(repo.join("refs/main"), "abc123").unwrap();
+
+        // The only weight file at the snapshot root, and not the model.
+        std::fs::write(snap.join("mmproj-F16.gguf"), vec![0u8; 800]).unwrap();
+        for i in 1..=3 {
+            std::fs::write(
+                snap.join(format!("UD-IQ3_XXS/Model-UD-IQ3_XXS-0000{i}-of-00003.gguf")),
+                vec![0u8; 10_000],
+            )
+            .unwrap();
+        }
+        std::fs::write(snap.join("Q8_0/Model-Q8_0.gguf"), vec![0u8; 50_000]).unwrap();
+
+        let mut models = scan(std::slice::from_ref(&dir), Path::new("/workspace/models"));
+        models.sort_by_key(|m| m.size_bytes);
+        let names: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["unsloth/Model-GGUF:UD-IQ3_XXS", "unsloth/Model-GGUF:Q8_0"],
+            "each quantization is its own entry, named for the model and the build"
+        );
+
+        let small = &models[0];
+        assert_eq!(small.size_bytes, 30_000, "the shards of that build, not the projector");
+        assert_eq!(
+            small.path,
+            snap.join("UD-IQ3_XXS"),
+            "--model-path must reach the quantization, not a root holding two of them"
+        );
+        assert_eq!(small.variant.as_deref(), Some("UD-IQ3_XXS"));
+        assert_eq!(small.repo.as_deref(), Some("unsloth/Model-GGUF"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FreeToken defaults the served name to `basename(model_path)`, which for these paths
+    /// is a commit sha or a bare quantization label. ft-man must never let it.
+    #[test]
+    fn a_served_name_identifies_the_model_not_the_directory() {
+        let mut m = inspect(Path::new("/nonexistent")).unwrap_or_else(|| Model {
+            name: "abc123def456".into(),
+            repo: Some("unsloth/Model-GGUF".into()),
+            variant: Some("UD-IQ3_XXS".into()),
+            path: PathBuf::from("/hf/hub/models--unsloth--Model-GGUF/snapshots/abc123/UD-IQ3_XXS"),
+            format: Format::Gguf,
+            size_bytes: 0,
+            arch: None,
+            model_type: None,
+            is_moe: false,
+            num_experts: None,
+            num_layers: None,
+            quant: None,
+            max_position: None,
+            ftw_fingerprint: None,
+            converted_to: None,
+            modified: None,
+        });
+        assert_eq!(m.served_name(), "unsloth/Model-GGUF:UD-IQ3_XXS");
+
+        // A repo with one build needs no tag.
+        m.variant = None;
+        assert_eq!(m.served_name(), "unsloth/Model-GGUF");
+
+        // A plain directory falls back to its own name, which is meaningful there.
+        m.repo = None;
+        m.name = "Qwen3.6-35B-A3B".into();
+        assert_eq!(m.served_name(), "Qwen3.6-35B-A3B");
+    }
+
+    /// Two quantizations of one repo must not converge on one FTW directory.
+    #[test]
+    fn ftw_builds_of_two_quantizations_do_not_collide() {
+        let ftw_dir = Path::new("/workspace/models");
+        let src = Path::new("/hf/hub/models--unsloth--M/snapshots/abc/UD-IQ3_XXS");
+        let a = ftw_output_path(src, Some("unsloth/M"), Some("UD-IQ3_XXS"), ftw_dir);
+        let b = ftw_output_path(src, Some("unsloth/M"), Some("Q8_0"), ftw_dir);
+        assert_ne!(a, b);
+        assert_eq!(a, PathBuf::from("/workspace/models/unsloth--M--UD-IQ3_XXS-ftw"));
     }
 }

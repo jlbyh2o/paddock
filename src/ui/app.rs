@@ -108,6 +108,8 @@ pub struct TemplateListing {
 #[derive(Debug)]
 pub enum Message {
     Telemetry(Box<Telemetry>),
+    /// The `hf` installer finished.
+    HfInstalled(Result<std::path::PathBuf, String>),
     Hardware {
         gpus: Vec<Gpu>,
         host: Host,
@@ -157,6 +159,18 @@ pub struct ModelsView {
     pub scanning: bool,
 }
 
+/// Which pane of the Hub tab has the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HubFocus {
+    #[default]
+    Results,
+    /// The quantization list — the normal way to choose what to download.
+    Variants,
+    /// The raw file list, kept as the escape hatch for a repo whose layout the grouping
+    /// cannot express.
+    Files,
+}
+
 #[derive(Default)]
 pub struct HubView {
     pub query: TextInput,
@@ -167,8 +181,16 @@ pub struct HubView {
     pub info: Option<RepoInfo>,
     pub files: Vec<RepoFile>,
     pub file_sel: Selection,
-    /// Focus is on the file list rather than the result list.
-    pub in_files: bool,
+    /// The repo's files grouped into the quantizations a reader chooses between.
+    pub layout: crate::variants::Layout,
+    pub variant_sel: Selection,
+    /// The chosen quantization. Drives the file selection, the path the engine is pointed
+    /// at, and the name it serves the model under.
+    pub variant: Option<String>,
+    /// True once files have been toggled by hand, so the footer stops claiming the
+    /// selection is a quantization it no longer matches.
+    pub custom_selection: bool,
+    pub focus: HubFocus,
     pub revision: String,
     pub loading_info: bool,
     pub target: TextInput,
@@ -356,6 +378,10 @@ pub struct App {
     pub ft: Option<Freetoken>,
     /// Why the CLI could not be found, when it could not be.
     pub ft_error: Option<String>,
+    /// The `hf` CLI that Hub downloads are delegated to. `None` means the Hub tab cannot
+    /// download anything, which it says rather than failing at the keypress.
+    pub hf_cli: Option<std::path::PathBuf>,
+    pub hf_installing: bool,
     pub client: Client,
 
     pub tab: Tab,
@@ -481,6 +507,9 @@ impl App {
         let endpoint = endpoint_for(&config, &serve);
         let client = Client::new(&endpoint, Duration::from_millis(config.server.timeout_ms))?;
         let (endpoint_tx, _) = tokio::sync::watch::channel(endpoint);
+        // Resolved once here rather than per keypress: the Hub tab needs to say up front
+        // that it cannot download, not discover it when someone presses d.
+        let hf_cli = crate::hub::locate_cli(&config, ft.as_ref().map(|f| f.program.as_path())).ok();
         let mut app = Self {
             config,
             profiles,
@@ -510,6 +539,8 @@ impl App {
             cost_store_warned: false,
             serve,
             models_view: ModelsView::default(),
+            hf_cli,
+            hf_installing: false,
             hub_view: HubView { revision: "main".into(), ..Default::default() },
             templates_view: TemplatesView::default(),
             serve_view: ServeView::default(),
@@ -712,6 +743,16 @@ impl App {
 
     pub fn handle(&mut self, msg: Message) {
         match msg {
+            Message::HfInstalled(res) => {
+                self.hf_installing = false;
+                match res {
+                    Ok(path) => {
+                        self.success(format!("installed the hf CLI at {}", path.display()));
+                        self.hf_cli = Some(path);
+                    }
+                    Err(e) => self.error(format!("could not install the hf CLI: {e}")),
+                }
+            }
             Message::Telemetry(t) => self.on_telemetry(*t),
             Message::Hardware { gpus, host } => {
                 if self.bench_profile.is_none() && self.gpus.is_empty() && !gpus.is_empty() {
@@ -756,15 +797,35 @@ impl App {
                 self.hub_view.loading_info = false;
                 match *res {
                     Ok(info) => {
+                        self.hub_view.layout = crate::variants::analyze(&info.siblings);
                         self.hub_view.files =
                             crate::hub::select_files(&info.siblings, &self.config.hub.ignore);
+                        self.hub_view.variant_sel = Selection::default();
+                        self.hub_view.custom_selection = false;
+                        // A repo offering one build needs no question asked; one offering
+                        // eleven must not pre-tick an 82 GB answer on the reader's behalf.
+                        self.hub_view.variant = None;
+                        if self.hub_view.layout.is_multi() {
+                            for f in &mut self.hub_view.files {
+                                f.wanted = false;
+                            }
+                            self.hub_view.focus = HubFocus::Variants;
+                        } else if let Some(only) =
+                            self.hub_view.layout.weights().next().map(|v| v.label.clone())
+                        {
+                            self.hub_view.variant = Some(only);
+                        }
                         // Do NOT clear the compatibility verdict here. Both responses
                         // arrive from one keypress and either can land first; clearing a
                         // stale verdict belongs where the request is made, which is
                         // synchronous and cannot race.
                         self.hub_view.file_sel = Selection::default();
+                        // Informational now rather than a destination to edit: the
+                        // download goes into the Hugging Face cache, which files a repo
+                        // under its org and name so two orgs publishing the same model
+                        // name cannot collide.
                         let target =
-                            crate::hub::default_target(&self.config.library.download_dir, &info.id);
+                            crate::hub::cache_repo_dir(&self.config.library.hub_cache(), &info.id);
                         self.hub_view.target.set(target.display().to_string());
                         self.hub_view.info = Some(info);
                     }
@@ -1059,10 +1120,11 @@ impl App {
             return;
         }
         self.models_view.scanning = true;
-        let roots = self.config.library.roots.clone();
+        let roots = self.config.library.effective_roots();
+        let ftw_dir = self.config.library.ftw_dir();
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let models = crate::models::scan(&roots);
+            let models = crate::models::scan(&roots, &ftw_dir);
             let _ = tx.send(Message::Models(models));
         });
     }

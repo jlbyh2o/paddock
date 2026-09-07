@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::ui::app::App;
+use crate::ui::app::{App, HubFocus};
 use crate::util::{bytes, count, truncate};
 
 pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
@@ -29,12 +29,72 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
 
     results(f, app, cols[0]);
 
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(9)])
-        .split(cols[1]);
-    files(f, app, right[0]);
-    target(f, app, right[1]);
+    // The quantization pane only appears when there is a choice to make. A plain
+    // safetensors checkpoint should not be given a list of one, and the space it would
+    // take is the file list's on a small terminal.
+    if app.hub_view.layout.is_multi() {
+        let right = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(9), Constraint::Min(4), Constraint::Length(9)])
+            .split(cols[1]);
+        quantizations(f, app, right[0]);
+        files(f, app, right[1]);
+        target(f, app, right[2]);
+    } else {
+        let right = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(9)])
+            .split(cols[1]);
+        files(f, app, right[0]);
+        target(f, app, right[1]);
+    }
+}
+
+/// The quantization list: the question this tab exists to ask.
+fn quantizations(f: &mut Frame, app: &mut App, area: Rect) {
+    let t = &app.theme;
+    let focused = app.hub_view.focus == HubFocus::Variants;
+    let rows: Vec<(String, u64, usize)> =
+        app.hub_view.layout.weights().map(|v| (v.label.clone(), v.bytes, v.file_count())).collect();
+
+    let chosen = (!app.hub_view.custom_selection).then(|| app.hub_view.variant.clone()).flatten();
+    let title = match &chosen {
+        Some(v) => format!("Quantization — {v}"),
+        None => format!("Quantization — {} available, none chosen", rows.len()),
+    };
+    let block = t.pane(title, focused);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    app.hub_view.variant_sel.clamp(rows.len());
+    let height = inner.height as usize;
+    let range = app.hub_view.variant_sel.window(rows.len(), height);
+    let selected = app.hub_view.variant_sel.index;
+    let name_w = inner.width.saturating_sub(24) as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+    for i in range {
+        let (label, size, count) = &rows[i];
+        let is_sel = i == selected && focused;
+        let is_chosen = chosen.as_deref() == Some(label.as_str());
+        let mark_style = if is_chosen { Style::default().fg(t.good) } else { t.muted() };
+        let name_style = match (is_sel, is_chosen) {
+            (true, _) => t.selected(),
+            (false, true) => t.text(),
+            (false, false) => t.muted(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(if is_sel { "▌" } else { " " }, Style::default().fg(t.accent)),
+            Span::styled(if is_chosen { "◉ " } else { "○ " }, mark_style),
+            Span::styled(format!("{:<name_w$}", truncate(label, name_w)), name_style),
+            Span::styled(format!("{:>10}", bytes(*size)), t.muted()),
+            Span::styled(
+                format!("{:>5}", if *count == 1 { "1 pt".into() } else { format!("{count} pts") }),
+                t.muted(),
+            ),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn search_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -61,7 +121,7 @@ fn search_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn results(f: &mut Frame, app: &mut App, area: Rect) {
     let t = &app.theme;
-    let focused = !app.hub_view.in_files && !app.hub_view.editing;
+    let focused = app.hub_view.focus == HubFocus::Results && !app.hub_view.editing;
     let block = t.pane(format!("Results ({})", app.hub_view.results.len()), focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -134,7 +194,7 @@ fn results(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn files(f: &mut Frame, app: &mut App, area: Rect) {
     let t = &app.theme;
-    let focused = app.hub_view.in_files;
+    let focused = app.hub_view.focus == HubFocus::Files;
 
     let (selected_bytes, selected_count) = app
         .hub_view
@@ -284,21 +344,40 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(app.hub_view.target.line(t, false, "—"));
 
+    // Said here rather than at the keypress: a download button that fails after the fact
+    // teaches nothing, and the fix is one key away.
+    if app.hf_cli.is_none() {
+        lines.push(Line::from(Span::styled(
+            if app.hf_installing {
+                "Installing the Hugging Face CLI…".to_string()
+            } else {
+                "The hf CLI is not installed — downloads need it. Press i to install.".to_string()
+            },
+            Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
+        )));
+    }
+
     let selected: u64 = app.hub_view.files.iter().filter(|x| x.wanted).map(|x| x.size).sum();
     if selected > 0 {
-        let disk = crate::hub::disk_free(&app.hub_view.target.value);
+        let disk = crate::hub::disk_free_at(&app.hub_view.target.value);
         let mut spans = vec![Span::styled(format!("{} to download", bytes(selected)), t.muted())];
-        if let Some(free_disk) = disk {
+        if let Some((measured, free_disk)) = disk {
             let color = if selected > free_disk { t.bad } else { t.dim };
+            // Named, not "that filesystem": the figure is only meaningful with the path it
+            // was taken from, and a wrong path is invisible without it.
             spans.push(Span::styled(
-                format!("   {} free on that filesystem", bytes(free_disk)),
+                format!("   {} free on {}", bytes(free_disk), measured.display()),
                 Style::default().fg(color),
             ));
         }
         lines.push(Line::from(spans));
     } else if app.hub_view.compat.is_none() {
         lines.push(Line::from(Span::styled(
-            "Select files with space, then press d to download.",
+            if app.hub_view.layout.is_multi() {
+                "Pick a quantization with Enter, then press d to download."
+            } else {
+                "Select files with space, then press d to download."
+            },
             t.muted(),
         )));
     }

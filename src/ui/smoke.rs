@@ -156,6 +156,8 @@ fn populate(app: &mut App) {
     app.models = vec![
         crate::models::Model {
             name: "Qwen3.6-35B-A3B".into(),
+            repo: None,
+            variant: None,
             path: "/models/Qwen3.6-35B-A3B".into(),
             format: crate::models::Format::Hf,
             size_bytes: 70_000_000_000,
@@ -172,6 +174,8 @@ fn populate(app: &mut App) {
         },
         crate::models::Model {
             name: "Qwen3.6-35B-A3B-ftw".into(),
+            repo: None,
+            variant: None,
             path: "/models/Qwen3.6-35B-A3B-ftw".into(),
             format: crate::models::Format::Ftw,
             size_bytes: 69_000_000_000,
@@ -538,7 +542,7 @@ async fn overlays_and_secondary_panes_render() {
     a.requests_view.show_details = true;
     a.logs_view.wrap = true;
     a.logs_view.errors_only = true;
-    a.hub_view.in_files = true;
+    a.hub_view.focus = crate::ui::app::HubFocus::Files;
     a.jobs_view.in_output = true;
     a.templates_view.pane = crate::ui::app::TemplatePane::Remote;
     a.templates_view.preflight = Some((
@@ -907,7 +911,7 @@ async fn toggling_hub_files_updates_the_selection() {
     let mut a = app().await;
     populate(&mut a);
     a.tab = Tab::Hub;
-    a.hub_view.in_files = true;
+    a.hub_view.focus = crate::ui::app::HubFocus::Files;
 
     let before = a.hub_view.files.iter().filter(|f| f.wanted).count();
     press(&mut a, KeyCode::Char('n'));

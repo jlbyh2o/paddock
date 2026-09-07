@@ -12,9 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use futures_util::StreamExt;
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------- API types
@@ -396,15 +394,117 @@ impl Download {
 
 static NEXT_DOWNLOAD_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Start downloading `files` from `repo` into `target`, `concurrency` at a time.
+/// Locate the `hf` CLI.
 ///
-/// Sizes missing from the repo listing are filled in with a HEAD first, so the progress
-/// bar has a real denominator from the outset rather than growing as it goes.
+/// Order: an explicit `hub.cli`, then the FreeToken venv — FreeToken depends on
+/// `huggingface_hub`, so `hf` is installed right beside `ft` — then beside an explicitly
+/// configured `ft` binary, then PATH.
+pub fn locate_cli(
+    cfg: &crate::config::Config,
+    ft_program: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(p) = &cfg.hub.cli {
+        let p = crate::models::expand_tilde(p);
+        if crate::ft::locate::is_executable(&p) {
+            return Ok(p);
+        }
+        return Err(format!("hub.cli is set to {}, which is not an executable", p.display()));
+    }
+    if let Some(venv) = &cfg.freetoken.venv {
+        let hf = crate::models::expand_tilde(venv).join("bin/hf");
+        if crate::ft::locate::is_executable(&hf) {
+            return Ok(hf);
+        }
+    }
+    if let Some(sibling) = ft_program.and_then(|p| p.parent()).map(|d| d.join("hf")) {
+        if crate::ft::locate::is_executable(&sibling) {
+            return Ok(sibling);
+        }
+    }
+    if let Some(p) = crate::ft::locate::which("hf") {
+        return Ok(p);
+    }
+    Err(format!(
+        "could not find the `hf` CLI (looked in the FreeToken venv, beside the `ft` binary, and \
+         on PATH). It ships with huggingface_hub; set hub.cli in {} to point at it.",
+        crate::config::config_path().display()
+    ))
+}
+
+/// Hugging Face's own installer for the `hf` CLI, exactly as their CLI guide documents it
+/// under "Standalone installer (Recommended)".
+///
+/// Deliberately not a hand-rolled `pip install` into some virtualenv ft-man picked: which
+/// environment a CLI belongs in is the packager's decision, not this tool's, and an
+/// invented install path is one more thing to be wrong about when it moves.
+///
+/// `--exclude-skill` is theirs too. The installer otherwise also writes agent skills into
+/// `~/.agents/skills`, which is a surprising thing for "ft-man could not find a downloader"
+/// to do to someone's home directory.
+pub const INSTALL_COMMAND: &str =
+    "curl -LsSf https://hf.co/cli/install.sh | bash -s -- --exclude-skill";
+
+/// Run the documented installer, returning where `hf` ended up.
+///
+/// The script installs into `~/.local/bin`, which is not necessarily on the PATH ft-man
+/// inherited, so the result is looked for there explicitly rather than trusting a
+/// subsequent PATH lookup to find it.
+pub async fn install_cli() -> Result<PathBuf, String> {
+    let out = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(INSTALL_COMMAND)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("could not run the installer: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!(
+            "the installer exited {}: {}",
+            out.status.code().unwrap_or(-1),
+            last_line(&err)
+        ));
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    for candidate in [home.join(".local/bin/hf"), home.join(".cargo/bin/hf")] {
+        if crate::ft::locate::is_executable(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    crate::ft::locate::which("hf").ok_or_else(|| {
+        "the installer reported success but `hf` is still not on PATH; open a new shell and \
+         restart ft-man, or set hub.cli in the config"
+            .to_string()
+    })
+}
+
+/// The cache directory a repo occupies: `<cache>/models--org--name`.
+pub fn cache_repo_dir(cache: &Path, repo: &str) -> PathBuf {
+    cache.join(format!("models--{}", repo.replace('/', "--")))
+}
+
+/// Start downloading `files` from `repo` into the Hugging Face hub cache.
+///
+/// The transfer is delegated to `hf download` rather than reimplemented. The cache layout
+/// is not merely a directory naming scheme — it is blobs addressed by hash, a snapshot of
+/// symlinks per revision, refs, and `.incomplete` staging — and a second implementation of
+/// it that is subtly wrong yields a cache every other tool quietly disagrees with. `hf` is
+/// the reference implementation, and it is already present because FreeToken depends on
+/// `huggingface_hub`.
+///
+/// Progress stays real, and stays in bytes. `hf` reports only a file count on stderr
+/// (`Fetching 12 files:  25%`), which on a repo of two 40 GiB shards is a bar that sits at
+/// zero for an hour and then jumps to done. So the byte count is observed from the cache
+/// instead: files already resolved through the snapshot, plus the `.incomplete` blobs
+/// `huggingface_hub` stages an in-flight file in.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_download(
     hub: Hub,
+    cli: PathBuf,
+    cache_dir: PathBuf,
+    token: Option<String>,
     repo: String,
     revision: String,
-    target: PathBuf,
     files: Vec<RepoFile>,
     concurrency: usize,
     events: mpsc::UnboundedSender<DownloadEvent>,
@@ -413,47 +513,68 @@ pub async fn start_download(
     let mut wanted: Vec<RepoFile> = files.into_iter().filter(|f| f.wanted).collect();
     anyhow::ensure!(!wanted.is_empty(), "no files selected");
 
+    // `hf` moves the bytes, but the denominator is still ft-man's problem: a size missing
+    // from the repo listing is filled in with a HEAD, so the bar starts against a real
+    // total rather than one that grows as it goes.
     for f in wanted.iter_mut().filter(|f| f.size == 0) {
         if let Some(size) = hub.head_size(&repo, &revision, &f.path).await {
             f.size = size;
         }
     }
 
-    std::fs::create_dir_all(&target).with_context(|| format!("creating {}", target.display()))?;
-
+    let repo_dir = cache_repo_dir(&cache_dir, &repo);
     let total: u64 = wanted.iter().map(|f| f.size).sum();
-    let done = Arc::new(AtomicU64::new(0));
-    let cancel = Arc::new(AtomicBool::new(false));
     let file_count = wanted.len();
+    let start = sample(&repo_dir, &wanted, total);
+    let done = Arc::new(AtomicU64::new(start.bytes));
+    let cancel = Arc::new(AtomicBool::new(false));
 
-    // Count bytes already on disk from an earlier run so resuming does not restart the
-    // progress bar at zero.
+    let mut cmd = tokio::process::Command::new(&cli);
+    cmd.arg("download")
+        .arg(&repo)
+        .arg("--revision")
+        .arg(&revision)
+        .arg("--max-workers")
+        .arg(concurrency.max(1).to_string())
+        .arg("--format")
+        .arg("json");
+    // Exact filenames rather than `--include` globs: the selection is already exact, and a
+    // glob would have to be escaped for filenames containing metacharacters.
     for f in &wanted {
-        let dest = target.join(&f.path);
-        if let Ok(meta) = std::fs::metadata(&dest) {
-            if meta.len() == f.size && f.size > 0 {
-                done.fetch_add(f.size, Ordering::Relaxed);
-            }
-        }
+        cmd.arg(&f.path);
+    }
+    cmd.env("HF_HUB_CACHE", &cache_dir)
+        // Only read for diagnostics, so the bars are noise that would interleave with the
+        // one line that matters when a download fails.
+        .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // In the environment, never as `--token`: an argument is visible to every user on the
+    // machine in `ps`, and this one is a credential.
+    if let Some(t) = token {
+        cmd.env("HF_TOKEN", t);
     }
 
-    let task = DownloadTask {
+    let child = cmd.spawn().with_context(|| format!("running {}", cli.display()))?;
+
+    tokio::spawn(run_download(DownloadWatch {
         id,
-        hub: hub.clone(),
-        repo: repo.clone(),
-        revision: revision.clone(),
-        target: target.clone(),
+        child,
+        repo_dir: repo_dir.clone(),
+        wanted,
+        total,
+        files_done: start.files_done,
         done: done.clone(),
         cancel: cancel.clone(),
         events: events.clone(),
-    };
-    tokio::spawn(run_download(task, wanted, concurrency.max(1)));
+    }));
 
     Ok(Download {
         id,
         repo,
         revision,
-        target,
+        target: repo_dir,
         total_bytes: total,
         done_bytes: done,
         file_count,
@@ -468,136 +589,156 @@ pub async fn start_download(
     })
 }
 
-struct DownloadTask {
+struct DownloadWatch {
     id: u64,
-    hub: Hub,
-    repo: String,
-    revision: String,
-    target: PathBuf,
+    child: tokio::process::Child,
+    repo_dir: PathBuf,
+    wanted: Vec<RepoFile>,
+    total: u64,
+    files_done: usize,
     done: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
     events: mpsc::UnboundedSender<DownloadEvent>,
 }
 
-async fn run_download(task: DownloadTask, files: Vec<RepoFile>, concurrency: usize) {
-    let task = Arc::new(task);
-    let results = futures_util::stream::iter(files.into_iter().map(|f| {
-        let task = task.clone();
-        async move {
-            if task.cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let res = fetch_file(&task, &f).await;
-            if res.is_ok() {
-                let _ = task.events.send(DownloadEvent::FileDone { id: task.id });
-            }
-            res
-        }
-    }))
-    .buffer_unordered(concurrency)
-    .collect::<Vec<Result<()>>>()
-    .await;
+/// Supervise one `hf download`, sampling the cache for byte progress until it exits.
+async fn run_download(mut watch: DownloadWatch) {
+    let stdout = watch.child.stdout.take();
+    let stderr = watch.child.stderr.take();
+    let mut pending = String::new();
 
-    let outcome = if task.cancel.load(Ordering::Relaxed) {
-        Err("canceled".to_string())
-    } else {
-        match results.into_iter().collect::<Result<Vec<_>>>() {
-            Ok(_) => Ok(task.target.clone()),
-            Err(e) => Err(format!("{e:#}")),
+    let mut ticker = tokio::time::interval(Duration::from_millis(500));
+    let status = loop {
+        tokio::select! {
+            res = watch.child.wait() => break res,
+            _ = ticker.tick() => {
+                if watch.cancel.load(Ordering::Relaxed) {
+                    // The child owns the partial `.incomplete` blobs. Killing it leaves
+                    // them in place, which is exactly what the next run resumes from.
+                    let _ = watch.child.start_kill();
+                    let _ = watch.child.wait().await;
+                    let _ = watch.events.send(DownloadEvent::Finished {
+                        id: watch.id,
+                        result: Err("canceled".into()),
+                    });
+                    return;
+                }
+                let now = sample(&watch.repo_dir, &watch.wanted, watch.total);
+                // Monotonic on purpose: completing a blob is a rename, and for an instant
+                // it is counted by neither the snapshot pass nor the `.incomplete` sweep.
+                if now.bytes > watch.done.load(Ordering::Relaxed) {
+                    watch.done.store(now.bytes, Ordering::Relaxed);
+                }
+                for _ in watch.files_done..now.files_done {
+                    let _ = watch.events.send(DownloadEvent::FileDone { id: watch.id });
+                }
+                watch.files_done = watch.files_done.max(now.files_done);
+                // `hf` runs several workers at once, so there is no single current file.
+                // Naming the first one still outstanding is approximate and says more than
+                // a blank field.
+                if now.pending != pending {
+                    pending = now.pending.clone();
+                    let _ = watch.events.send(DownloadEvent::Progress {
+                        id: watch.id,
+                        current: now.pending,
+                    });
+                }
+            }
         }
     };
-    let _ = task.events.send(DownloadEvent::Finished { id: task.id, result: outcome });
+
+    let out = read_all(stdout).await;
+    let err = read_all(stderr).await;
+
+    let result = match status {
+        Ok(s) if s.success() => {
+            watch.done.store(watch.total, Ordering::Relaxed);
+            // `--format json` prints `{"path": "<snapshot dir>"}` — the revision actually
+            // materialized, which is what the rest of ft-man needs to act on.
+            match serde_json::from_str::<DownloadReport>(out.trim()) {
+                Ok(r) => Ok(PathBuf::from(r.path)),
+                Err(_) => Ok(watch.repo_dir.clone()),
+            }
+        }
+        Ok(s) => Err(format!("hf download exited {}: {}", s.code().unwrap_or(-1), last_line(&err))),
+        Err(e) => Err(format!("hf download: {e}")),
+    };
+    let _ = watch.events.send(DownloadEvent::Finished { id: watch.id, result });
 }
 
-/// Fetch one file, resuming a partial `.part` if there is one.
-async fn fetch_file(task: &DownloadTask, file: &RepoFile) -> Result<()> {
-    let dest = task.target.join(&file.path);
-    if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
+#[derive(Debug, Deserialize)]
+struct DownloadReport {
+    path: String,
+}
 
-    // Already complete from an earlier run.
-    if let Ok(meta) = tokio::fs::metadata(&dest).await {
-        if file.size > 0 && meta.len() == file.size {
-            return Ok(());
+async fn read_all<R: tokio::io::AsyncRead + Unpin>(reader: Option<R>) -> String {
+    use tokio::io::AsyncReadExt;
+    let Some(mut r) = reader else { return String::new() };
+    let mut buf = String::new();
+    let _ = r.read_to_string(&mut buf).await;
+    buf
+}
+
+/// The most informative line of a failure: `hf` puts the reason last.
+fn last_line(text: &str) -> String {
+    text.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("no output").to_string()
+}
+
+/// What the cache says about a download in progress.
+struct Sample {
+    bytes: u64,
+    files_done: usize,
+    /// The first wanted file not yet complete, or empty when none remain.
+    pending: String,
+}
+
+/// Measure how much of `wanted` is already in the cache.
+///
+/// Completed files are counted through the snapshot, so a file cached before this download
+/// counts immediately and a resumed transfer does not restart the bar at zero. In-flight
+/// bytes come from the `.incomplete` blobs `huggingface_hub` stages each file in.
+fn sample(repo_dir: &Path, wanted: &[RepoFile], total: u64) -> Sample {
+    let snapshot = crate::models::cache_snapshot(repo_dir);
+    let mut bytes = 0u64;
+    let mut files_done = 0usize;
+    let mut pending = String::new();
+    for f in wanted {
+        // Follows the symlink into `blobs/` deliberately: the link itself is a few bytes.
+        let complete = snapshot
+            .as_ref()
+            .and_then(|s| std::fs::metadata(s.join(&f.path)).ok())
+            .is_some_and(|m| m.len() == f.size && f.size > 0);
+        if complete {
+            bytes += f.size;
+            files_done += 1;
+        } else if pending.is_empty() {
+            pending = f.path.clone();
         }
     }
-
-    let part = dest.with_extension(format!(
-        "{}part",
-        dest.extension().map(|e| format!("{}.", e.to_string_lossy())).unwrap_or_default()
-    ));
-    let resume_from = tokio::fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
-
-    let url = task.hub.resolve_url(&task.repo, &task.revision, &file.path);
-    let mut req = task.hub.http.get(&url);
-    if let Some(t) = &task.hub.token {
-        req = req.bearer_auth(t);
+    if let Ok(rd) = std::fs::read_dir(repo_dir.join("blobs")) {
+        bytes += rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "incomplete"))
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum::<u64>();
     }
-    if resume_from > 0 {
-        req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
-    }
-
-    let resp = req
-        .timeout(Duration::from_secs(60 * 60 * 6))
-        .send()
-        .await
-        .with_context(|| format!("downloading {}", file.path))?;
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("{}: HTTP {status}", file.path);
-    }
-    // A server that ignored the Range header sends 200 and the whole body; restart the
-    // part file rather than appending a second copy onto the first.
-    let appending = resume_from > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
-    if resume_from > 0 && appending {
-        task.done.fetch_add(resume_from, Ordering::Relaxed);
-    }
-
-    let mut out = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(appending)
-        .truncate(!appending)
-        .open(&part)
-        .await
-        .with_context(|| format!("opening {}", part.display()))?;
-
-    let _ = task.events.send(DownloadEvent::Progress { id: task.id, current: file.path.clone() });
-
-    let mut stream = resp.bytes_stream();
-    let mut since_report = 0u64;
-    while let Some(chunk) = stream.next().await {
-        if task.cancel.load(Ordering::Relaxed) {
-            out.flush().await.ok();
-            anyhow::bail!("canceled");
-        }
-        let chunk = chunk.with_context(|| format!("reading {}", file.path))?;
-        out.write_all(&chunk).await.with_context(|| format!("writing {}", part.display()))?;
-        let n = chunk.len() as u64;
-        task.done.fetch_add(n, Ordering::Relaxed);
-        since_report += n;
-        if since_report >= 1 << 20 {
-            since_report = 0;
-            let _ = task
-                .events
-                .send(DownloadEvent::Progress { id: task.id, current: file.path.clone() });
-        }
-    }
-    out.flush().await.ok();
-    drop(out);
-
-    tokio::fs::rename(&part, &dest)
-        .await
-        .with_context(|| format!("finalizing {}", dest.display()))?;
-    Ok(())
+    Sample { bytes: bytes.min(total), files_done, pending }
 }
 
 /// Free bytes on the filesystem holding `path`, walking up to the nearest existing
 /// ancestor so a not-yet-created target directory still reports something useful.
 pub fn disk_free(path: &str) -> Option<u64> {
+    disk_free_at(path).map(|(_, free)| free)
+}
+
+/// As [`disk_free`], but also returns the existing directory that was actually measured.
+///
+/// Worth surfacing: the walk up to an existing ancestor means a wrong target silently
+/// reports a completely different filesystem. A cache path misresolved to the home
+/// directory measured a 32 GB container root and read as "18 GB free" beside a 310 GB
+/// dataset, with nothing on screen to say which one it meant.
+pub fn disk_free_at(path: &str) -> Option<(PathBuf, u64)> {
     let mut p = Path::new(path);
     loop {
         if p.exists() {
@@ -605,16 +746,11 @@ pub fn disk_free(path: &str) -> Option<u64> {
         }
         p = p.parent()?;
     }
+    let measured = p.to_path_buf();
     let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).ok()?;
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
     (unsafe { libc::statvfs(c.as_ptr(), &mut stat) } == 0)
-        .then(|| stat.f_bavail as u64 * stat.f_frsize as u64)
-}
-
-/// Where a repo lands by default: `<download_dir>/<repo basename>`.
-pub fn default_target(download_dir: &Path, repo: &str) -> PathBuf {
-    let name = repo.rsplit('/').next().unwrap_or(repo);
-    crate::models::expand_tilde(download_dir).join(name)
+        .then(|| (measured, stat.f_bavail as u64 * stat.f_frsize as u64))
 }
 
 #[cfg(test)]
@@ -675,11 +811,18 @@ mod tests {
         assert_eq!(urlencode("main"), "main");
     }
 
+    /// The cache keys on organization *and* name. The scheme this replaced used only the
+    /// basename, so `unsloth/Qwen3-GGUF` and `bartowski/Qwen3-GGUF` landed in one
+    /// directory and silently merged.
     #[test]
-    fn target_uses_the_repo_basename() {
+    fn a_repo_maps_to_an_org_qualified_cache_directory() {
         assert_eq!(
-            default_target(Path::new("/models"), "Qwen/Qwen3.6-35B-A3B"),
-            PathBuf::from("/models/Qwen3.6-35B-A3B")
+            cache_repo_dir(Path::new("/hf/hub"), "Qwen/Qwen3.6-35B-A3B"),
+            PathBuf::from("/hf/hub/models--Qwen--Qwen3.6-35B-A3B")
+        );
+        assert_ne!(
+            cache_repo_dir(Path::new("/hf/hub"), "unsloth/Qwen3-GGUF"),
+            cache_repo_dir(Path::new("/hf/hub"), "bartowski/Qwen3-GGUF")
         );
     }
 }

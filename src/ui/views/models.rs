@@ -48,20 +48,26 @@ fn list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
 
     if count == 0 {
-        let roots: Vec<String> = app
-            .config
-            .library
-            .roots
-            .iter()
-            .map(|r| crate::models::expand_tilde(r).display().to_string())
-            .collect();
         let msg = if app.models_view.scanning {
             "Scanning…".to_string()
         } else if app.models.is_empty() {
+            // Each root is marked present or missing. An empty library and a library
+            // pointed at a directory that does not exist look identical otherwise, and
+            // they need completely different fixes.
+            let listed: Vec<String> = app
+                .config
+                .library
+                .effective_roots()
+                .iter()
+                .map(|r| {
+                    let missing = if r.is_dir() { "" } else { "   (does not exist)" };
+                    format!("  {}{missing}", r.display())
+                })
+                .collect();
             format!(
-                "No checkpoints found under:\n  {}\n\nDownload one from the Hub tab, or add a \
-                 directory to library.roots in {}.",
-                roots.join("\n  "),
+                "No checkpoints found under:\n{}\n\nDownload one from the Hub tab, or set \
+                 library.roots / library.hub_cache in {}.",
+                listed.join("\n"),
                 crate::config::config_path().display()
             )
         } else {

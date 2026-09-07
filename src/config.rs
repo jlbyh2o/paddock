@@ -115,18 +115,103 @@ pub fn poll_host(host: &str) -> &str {
 #[serde(default, deny_unknown_fields)]
 pub struct LibraryCfg {
     /// Directories scanned for checkpoints. Each is searched one level deep, plus the
-    /// two-level `org/model` layout the Hugging Face cache and mirrors use.
+    /// two-level `org/model` layout `hf download --local-dir` and mirrors produce. An
+    /// entry named `models--org--name` is recognized as a Hugging Face hub cache entry
+    /// and resolved through its ref, so a cache directory can be listed here directly.
     pub roots: Vec<PathBuf>,
-    /// Where Hub downloads land, and the default parent for `ft checkpoint --out`.
+    /// Where a plain (non-cache) download lands. Downloads from the Hub tab go to the
+    /// hub cache instead; this remains the home for checkpoints placed by hand.
     pub download_dir: PathBuf,
+    /// The Hugging Face hub cache to read and download into.
+    ///
+    /// Set this when the cache is not where the environment says it is — which is most of
+    /// the time on a server. `HF_HOME` is exported by a shell profile, so it reaches an
+    /// interactive login and nothing else: not a session opened before the profile was
+    /// written, not a systemd unit, not a terminal an editor spawned. ft-man would then
+    /// silently read an empty cache in the home directory and report a library of nothing,
+    /// and price a download against the wrong filesystem's free space.
+    pub hub_cache: Option<PathBuf>,
+    /// Where FTW builds are written. Defaults to [`Self::download_dir`].
+    ///
+    /// Never beside the source checkpoint: a hub-cache checkpoint's sibling is inside
+    /// `snapshots/`, and that tree belongs to `huggingface_hub` -- a directory it did not
+    /// write is invisible to `hf cache scan` and at risk from `hf cache delete`.
+    pub ftw_dir: Option<PathBuf>,
 }
 
 impl Default for LibraryCfg {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let models = home.join("models");
-        Self { roots: vec![models.clone()], download_dir: models }
+        Self { roots: vec![models.clone()], download_dir: models, hub_cache: None, ftw_dir: None }
     }
+}
+
+impl LibraryCfg {
+    /// Every root actually scanned: the configured ones plus the Hugging Face hub cache,
+    /// which is where anything downloaded by `hf`, `from_pretrained`, or another engine
+    /// on this machine already is. Added implicitly so the common case needs no config,
+    /// and deduplicated so listing it explicitly is harmless.
+    pub fn effective_roots(&self) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> =
+            self.roots.iter().map(|r| crate::models::expand_tilde(r)).collect();
+        let cache = self.hub_cache();
+        if !roots.contains(&cache) {
+            roots.push(cache);
+        }
+        roots
+    }
+
+    /// The hub cache this run reads and downloads into.
+    ///
+    /// Configuration first, deliberately. Everything else here is inherited from an
+    /// environment that may or may not have been set up, and a tool that behaves
+    /// differently depending on how its terminal was started is a tool nobody can debug.
+    pub fn hub_cache(&self) -> PathBuf {
+        match &self.hub_cache {
+            Some(dir) => crate::models::expand_tilde(dir),
+            None => hub_cache_dir(),
+        }
+    }
+
+    /// Where FTW builds go.
+    pub fn ftw_dir(&self) -> PathBuf {
+        crate::models::expand_tilde(self.ftw_dir.as_ref().unwrap_or(&self.download_dir))
+    }
+}
+
+/// Where `huggingface_hub` keeps the token `hf auth login` writes.
+///
+/// `HF_TOKEN_PATH`, then `$HF_HOME/token`, then the default `HF_HOME`. Hardcoding
+/// `~/.cache/huggingface/token` is wrong the moment `HF_HOME` moves — which it does on any
+/// machine pointing its cache at shared storage — and the failure is silent in the worst
+/// way: the token is plainly on disk, ft-man reports none, and gated downloads 401 for no
+/// visible reason.
+pub fn hf_token_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("HF_TOKEN_PATH") {
+        return PathBuf::from(path);
+    }
+    if let Some(home) = std::env::var_os("HF_HOME") {
+        return PathBuf::from(home).join("token");
+    }
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".cache/huggingface/token")
+}
+
+/// The hub cache as the *environment* describes it.
+///
+/// Resolution matches `huggingface_hub`'s own — `HF_HUB_CACHE`, then `$HF_HOME/hub`, then
+/// the documented default — so ft-man agrees with the rest of the ecosystem when those are
+/// set. Prefer [`LibraryCfg::hub_cache`], which lets configuration override all of it:
+/// getting this wrong is otherwise invisible, and the library simply looks empty on a
+/// machine holding hundreds of gigabytes.
+pub fn hub_cache_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("HF_HUB_CACHE") {
+        return PathBuf::from(dir);
+    }
+    if let Some(home) = std::env::var_os("HF_HOME") {
+        return PathBuf::from(home).join("hub");
+    }
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".cache/huggingface/hub")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,10 +221,13 @@ pub struct HubCfg {
     pub endpoint: String,
     /// Access token for gated or private repos. `HF_TOKEN` in the environment wins.
     pub token: Option<String>,
-    /// Concurrent file downloads.
+    /// Concurrent file downloads, passed to `hf download --max-workers`.
     pub concurrency: usize,
     /// Glob-ish suffixes skipped by default (duplicate weight formats, mostly).
     pub ignore: Vec<String>,
+    /// Explicit path to the `hf` CLI. Overrides discovery, which looks in the FreeToken
+    /// venv (it ships `huggingface_hub`) before falling back to PATH.
+    pub cli: Option<PathBuf>,
 }
 
 impl Default for HubCfg {
@@ -147,6 +235,7 @@ impl Default for HubCfg {
         Self {
             endpoint: "https://huggingface.co".into(),
             token: None,
+            cli: None,
             concurrency: 4,
             ignore: vec![
                 "*.bin".into(),
@@ -187,8 +276,7 @@ impl HubCfg {
         if let Some(t) = self.token.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
             return Some(HubToken { value: t.to_string(), source: "hub.token in the config" });
         }
-        let raw =
-            std::fs::read_to_string(dirs::home_dir()?.join(".cache/huggingface/token")).ok()?;
+        let raw = std::fs::read_to_string(hf_token_path()).ok()?;
         let t = raw.trim();
         (!t.is_empty())
             .then(|| HubToken { value: t.to_string(), source: "the token cached by the hf CLI" })
@@ -407,6 +495,26 @@ mod tests {
         assert_eq!(cfg.resolve_token().unwrap().value, "hf_from_config");
 
         std::env::remove_var("HF_TOKEN");
+
+        // The on-disk token follows HF_HOME. Pointing a machine's cache at shared storage
+        // is exactly when this used to break: `hf auth login` writes $HF_HOME/token, and
+        // ft-man read ~/.cache/huggingface/token and reported no token at all.
+        let dir = std::env::temp_dir().join(format!("ft-man-hfhome-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("token"), "hf_from_disk\n").unwrap();
+        cfg.token = None;
+        std::env::set_var("HF_HOME", &dir);
+        let resolved = cfg.resolve_token().expect("a token under HF_HOME must be found");
+        assert_eq!(resolved.value, "hf_from_disk");
+
+        // HF_TOKEN_PATH wins over HF_HOME, as it does for huggingface_hub.
+        std::fs::write(dir.join("other"), "hf_explicit").unwrap();
+        std::env::set_var("HF_TOKEN_PATH", dir.join("other"));
+        assert_eq!(cfg.resolve_token().unwrap().value, "hf_explicit");
+
+        std::env::remove_var("HF_TOKEN_PATH");
+        std::env::remove_var("HF_HOME");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -427,5 +535,38 @@ mod tests {
         let err = toml::from_str::<Config>("[hub]\ntoken = \"x\"\nhf_token = \"y\"\n")
             .expect_err("an unknown key must not be ignored");
         assert!(err.to_string().contains("hf_token"), "{err}");
+    }
+
+    /// The failure this exists to prevent: `HF_HOME` is exported by a shell profile, so a
+    /// session opened before that profile was written — or a systemd unit, or a terminal an
+    /// editor spawned — sees none of it. ft-man then read an empty cache under $HOME and
+    /// reported a library of nothing on a machine holding 100 GB of weights.
+    #[test]
+    fn a_configured_cache_beats_the_environment() {
+        let mut lib = LibraryCfg::default();
+
+        // With nothing configured, the environment decides, matching huggingface_hub.
+        std::env::remove_var("HF_HUB_CACHE");
+        std::env::set_var("HF_HOME", "/env/hf");
+        assert_eq!(lib.hub_cache(), PathBuf::from("/env/hf/hub"));
+        std::env::set_var("HF_HUB_CACHE", "/env/explicit");
+        assert_eq!(lib.hub_cache(), PathBuf::from("/env/explicit"));
+
+        // Configured, it wins — that is the whole point. A tool that behaves differently
+        // depending on how its terminal was started cannot be debugged.
+        lib.hub_cache = Some(PathBuf::from("/workspace/huggingface/hub"));
+        assert_eq!(lib.hub_cache(), PathBuf::from("/workspace/huggingface/hub"));
+
+        // And it is scanned, whether or not it was also listed as a root.
+        assert!(lib.effective_roots().contains(&PathBuf::from("/workspace/huggingface/hub")));
+        lib.roots = vec![PathBuf::from("/workspace/huggingface/hub")];
+        assert_eq!(
+            lib.effective_roots().iter().filter(|r| r.ends_with("hub")).count(),
+            1,
+            "listing the cache explicitly must not scan it twice"
+        );
+
+        std::env::remove_var("HF_HOME");
+        std::env::remove_var("HF_HUB_CACHE");
     }
 }
