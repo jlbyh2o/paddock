@@ -48,6 +48,17 @@ compiler, so a clean `cargo clippy --all-targets -- -D warnings` locally means a
 
 ## Install
 
+A prebuilt Linux x86_64 binary is attached to each [release](https://github.com/jlbyh2o/ft-man-tui/releases).
+It needs glibc 2.35 or newer — Debian 12, Ubuntu 22.04, RHEL 9 and anything later — and no
+Rust toolchain:
+
+```bash
+tar xzf ft-man-<version>-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 ft-man-*/ft-man ~/.local/bin/ft-man
+```
+
+Or build it yourself:
+
 ```bash
 git clone https://github.com/jlbyh2o/ft-man-tui && cd ft-man-tui
 cargo build --release

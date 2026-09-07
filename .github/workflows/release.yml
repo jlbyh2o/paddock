@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets the whole thing be rehearsed without cutting a tag: it builds and checks, and
+  # only skips the publish step.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: linux x86_64
+    # 22.04 deliberately, not ubuntu-latest. The binary links against the builder's glibc,
+    # and 24.04 would stamp a 2.39 floor on it -- excluding Debian 12, Ubuntu 22.04 and
+    # RHEL 9, all perfectly plausible hosts for a GPU box. 22.04 gives a 2.35 floor.
+    #
+    # Static musl would be the usual portability answer and is wrong here: ft-man dlopens
+    # libnvidia-ml, and a fully static musl binary cannot dlopen, so a musl build would
+    # silently lose every piece of GPU telemetry.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Same pin as ci.yml and mise.toml, so a release is built by the compiler that
+      # tested it.
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml: $crate   tag: $tag"
+          if [ "$crate" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate" >&2
+            exit 1
+          fi
+
+      - run: cargo build --release --locked
+
+      - name: Check it runs and demands no more glibc than promised
+        run: |
+          ./target/release/ft-man --version
+          floor="$(objdump -T target/release/ft-man | grep -oE 'GLIBC_[0-9.]+' \
+                   | sort -uV | tail -1 | sed 's/GLIBC_//')"
+          echo "highest glibc symbol required: $floor"
+          # Fails loudly if a toolchain or runner change quietly raises the floor, rather
+          # than shipping a binary that will not start on the distros we claim to support.
+          if [ "$(printf '%s\n2.35\n' "$floor" | sort -V | tail -1)" != "2.35" ]; then
+            echo "::error::binary requires glibc $floor, above the 2.35 this job promises" >&2
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          name="ft-man-${ver}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/$name"
+          cp target/release/ft-man README.md LICENSE "dist/$name/"
+          tar -C dist -czf "dist/${name}.tar.gz" "$name"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -lh dist
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*.tar.gz dist/*.sha256
