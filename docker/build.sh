@@ -101,6 +101,7 @@ Pushed ${REMOTE}:${TAG}
 On Vast, rent a host with driver r580+ (CUDA 13), then:
   image          ${REMOTE}:${TAG}
   launch mode    Jupyter notebook + SSH   (Entrypoint gives no sshd, so no way in)
+  on-start       entrypoint.sh            (required: this mode replaces the entrypoint)
   PORTAL_CONFIG  append  localhost:18919:1919:/:FreeToken API
   ports          do NOT map 1919 - ft serve has no auth; Caddy publishes it on 18919
   env            HF_TOKEN=<token>   (only for gated or private repos)

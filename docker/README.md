@@ -51,7 +51,7 @@ and the failure arrives at weight load rather than at boot. Filter offers on CUD
 |---|---|
 | Image | `<account>/freetoken-ftman:latest` |
 | Launch mode | **Jupyter-python notebook + SSH** (or Interactive shell server) |
-| On-start script | not needed — see below |
+| On-start script | `entrypoint.sh` |
 | `PORTAL_CONFIG` | append `localhost:18919:1919:/:FreeToken API` to the template's value |
 | Ports | **do not map 1919** — see below |
 | Environment | `HF_TOKEN=<token>`, only for gated or private repos |
@@ -61,13 +61,19 @@ because Vast injects one, which it does in the Jupyter and Interactive-shell mod
 Entrypoint mode. Entrypoint mode would leave you reaching the box only through the portal's
 browser terminal.
 
-The mode does *not* affect startup. `boot_default.sh` walks `/etc/vast_boot.d/` in every mode
-— propagating SSH keys, exporting the instance environment, generating a TLS certificate, and
-launching supervisor, which starts Caddy, the Instance Portal and this image's own
-`freetoken-setup` program. The boot scripts detect the mode from the `/.launch` file Vast
-writes and adapt: `jupyter.sh` stands down when Vast is managing Jupyter, and `10-prep-env.sh`
-adds or strips the Jupyter portal entries to match. Nothing needs to go in the on-start
-field.
+**Put `entrypoint.sh` in the on-start field.** These modes replace the image's `ENTRYPOINT`
+with Vast's own startup, so the base image's boot sequence does not run on its own — you
+re-invoke it. `entrypoint.sh` resolves on `PATH` to `/opt/instance-tools/bin/entrypoint.sh`,
+which is exactly what this image's inherited `ENTRYPOINT` points at, so the on-start field
+runs the same thing Entrypoint mode would have. This is what Vast's own templates do.
+
+It then walks `/etc/vast_boot.d/` — propagating SSH keys, exporting the instance environment,
+generating a TLS certificate, and launching supervisor, which starts Caddy, the Instance
+Portal and this image's `freetoken-setup` program. The boot scripts read the `/.launch` file
+Vast writes to tell which mode they are in and adapt: `jupyter.sh` stands down when Vast is
+managing Jupyter, and `10-prep-env.sh` adds or strips the Jupyter portal entries to match.
+Leave the field empty and you get an instance with SSH but no portal, no Caddy, and no
+`/workspace` layout.
 
 ### Do not expose port 1919
 
