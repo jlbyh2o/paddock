@@ -386,11 +386,30 @@ pub fn footer(f: &mut Frame, theme: &Theme, area: Rect, hints: &[(&str, &str)]) 
     for (key, what) in hints {
         spans.extend(theme.key_hint(key, what));
     }
+    // Measured before rendering, so the version can be placed only where it will not land
+    // on top of a hint. The hints are context-sensitive and the terminal may be 40 columns
+    // wide; both change how much room is left.
+    let hints_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+
     f.render_widget(
         Paragraph::new(Line::from(spans)).block(
             Block::default().borders(Borders::TOP).border_style(Style::default().fg(theme.border)),
         ),
         area,
+    );
+
+    // Bottom-right, on the hint line rather than the border row above it.
+    let version = concat!("v", env!("CARGO_PKG_VERSION"));
+    let width = version.chars().count() as u16;
+    if area.height < 2 || hints_width + version.chars().count() + 2 > area.width as usize {
+        return;
+    }
+    let rect =
+        Rect { x: area.x + area.width - width - 1, y: area.y + area.height - 1, width, height: 1 };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(version, theme.muted())))
+            .alignment(Alignment::Right),
+        rect,
     );
 }
 

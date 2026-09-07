@@ -1179,6 +1179,37 @@ async fn a_template_is_applied_to_the_ftw_build_as_well() {
     crate::templates::remove("sharp-ftw").ok();
 }
 
+/// The version belongs in the bottom-right corner, and must yield to the hints rather than
+/// overwrite them when the terminal is narrow.
+#[tokio::test]
+async fn the_version_sits_in_the_bottom_right_corner() {
+    let mut a = app().await;
+    let expected = concat!("v", env!("CARGO_PKG_VERSION"));
+
+    let screen = render_text(&mut a, Tab::Dashboard, 120, 30);
+    let last = screen.lines().last().expect("there is a footer").trim_end();
+    assert!(last.ends_with(expected), "the last line should end with {expected}:\n{last:?}");
+
+    // It is the corner, not merely somewhere on the line: nothing may follow it.
+    assert_eq!(last.matches(expected).count(), 1, "{last:?}");
+
+    // On a narrow terminal the hints matter more, so the version stands down instead of
+    // being drawn over them.
+    let narrow = render_text(&mut a, Tab::Serve, 40, 12);
+    let last_narrow = narrow.lines().last().expect("there is a footer").trim_end();
+    assert!(
+        !last_narrow.contains(&format!("{expected}{expected}")),
+        "it must never double-draw:\n{last_narrow:?}"
+    );
+
+    // And every tab keeps its hints legible, whatever the width.
+    for tab in Tab::ALL {
+        for (w, h) in [(40u16, 12u16), (80, 24), (200, 60)] {
+            let _ = render_text(&mut a, tab, w, h);
+        }
+    }
+}
+
 /// Regression, reported as a hard crash: applying a template to a GGUF checkpoint that
 /// lives in the Hugging Face cache panicked with "index out of bounds: the len is 0".
 ///
