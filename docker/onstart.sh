@@ -20,7 +20,7 @@ log() { printf '[ft-onstart] %s\n' "$*"; }
 # survives, which is why the FTW build belongs in a private HF repo — see docker/README.md.
 mkdir -p \
   "$WORKSPACE/models" \
-  "$WORKSPACE/hf" \
+  "$WORKSPACE/hf/hub" \
   "$WORKSPACE/cache" \
   "$WORKSPACE/state/ft-man" \
   "$WORKSPACE/config/ft-man"
@@ -62,8 +62,19 @@ if [ ! -f "$CFG" ]; then
 venv = "/opt/freetoken/venv"
 
 [library]
+# Pinned, not inherited from HF_HOME. Vast's documentation is explicit that instance
+# environment variables are NOT visible inside SSH, tmux or Jupyter sessions, and the same
+# is true of a session opened before this file was written. A cache derived from the
+# environment therefore resolves to an empty one under $HOME, and ft-man reports a library
+# of nothing on an instance holding hundreds of gigabytes -- while pricing a download
+# against the container's root filesystem instead of /workspace.
+hub_cache = "/workspace/hf/hub"
 roots = ["/workspace/models"]
 download_dir = "/workspace/models"
+# FTW builds. Deliberately outside the cache: that tree belongs to huggingface_hub, and a
+# directory it did not write is invisible to `hf cache scan` and at risk from
+# `hf cache delete`.
+ftw_dir = "/workspace/models"
 
 [server]
 # Loopback, deliberately. `ft serve` has no authentication of any kind, so a wildcard bind

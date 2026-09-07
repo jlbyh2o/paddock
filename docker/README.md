@@ -131,12 +131,19 @@ Convert once, then keep the FTW build somewhere you control:
 
 ```bash
 # first rental only
-ft-man                                  # Hub tab: download; Jobs tab: convert to FTW
-hf upload <you>/<model>-ftw /workspace/models/<model>-ftw --repo-type model --private
+ft-man                                  # Hub tab: pick a quantization and download;
+                                        # Jobs tab: convert to FTW
+hf upload <you>/<model>-ftw /workspace/models/<dir> --repo-type model --private
 
 # every rental after
-hf download <you>/<model>-ftw --local-dir /workspace/models/<model>-ftw
+hf download <you>/<model>-ftw --local-dir /workspace/models/<dir>
 ```
+
+`<dir>` is what ft-man named the build, shown on the Models tab: the repo id with `/`
+replaced by `--`, plus the quantization when the repo ships more than one — so
+`unsloth--Qwen3.8-Flash-Next-GGUF--UD-IQ3_XXS-ftw`. The organization and quantization are
+in the name because two organizations publish the same model name often enough, and two
+quantizations of one repo would otherwise convert into the same directory.
 
 `hf` is already on `PATH` — `huggingface_hub` is a FreeToken dependency, so the CLI comes
 along with the engine. It reads the same `HF_TOKEN` the bridge exports.
