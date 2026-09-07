@@ -18,7 +18,7 @@ jobs:
     name: linux x86_64
     # 22.04 deliberately, not ubuntu-latest. The binary links against the builder's glibc,
     # and 24.04 would stamp a 2.39 floor on it -- excluding Debian 12, Ubuntu 22.04 and
-    # RHEL 9, all perfectly plausible hosts for a GPU box. 22.04 gives a 2.35 floor.
+    # RHEL 9, all perfectly plausible hosts for a GPU box. 22.04 builds to a 2.34 floor.
     #
     # Static musl would be the usual portability answer and is wrong here: ft-man dlopens
     # libnvidia-ml, and a fully static musl binary cannot dlopen, so a musl build would
@@ -51,10 +51,12 @@ jobs:
           floor="$(objdump -T target/release/ft-man | grep -oE 'GLIBC_[0-9.]+' \
                    | sort -uV | tail -1 | sed 's/GLIBC_//')"
           echo "highest glibc symbol required: $floor"
-          # Fails loudly if a toolchain or runner change quietly raises the floor, rather
-          # than shipping a binary that will not start on the distros we claim to support.
-          if [ "$(printf '%s\n2.35\n' "$floor" | sort -V | tail -1)" != "2.35" ]; then
-            echo "::error::binary requires glibc $floor, above the 2.35 this job promises" >&2
+          # 2.34, not 2.35: RHEL 9 ships 2.34, and the README lists it as supported. Pinning
+          # the gate to the number actually promised means the two cannot drift apart -- a
+          # toolchain or runner change that raises the floor fails here rather than shipping
+          # a binary that will not start on a distro the README claims.
+          if [ "$(printf '%s\n2.34\n' "$floor" | sort -V | tail -1)" != "2.34" ]; then
+            echo "::error::binary requires glibc $floor, above the 2.34 the README promises" >&2
             exit 1
           fi
 

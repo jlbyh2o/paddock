@@ -49,7 +49,7 @@ compiler, so a clean `cargo clippy --all-targets -- -D warnings` locally means a
 ## Install
 
 A prebuilt Linux x86_64 binary is attached to each [release](https://github.com/jlbyh2o/ft-man-tui/releases).
-It needs glibc 2.35 or newer — Debian 12, Ubuntu 22.04, RHEL 9 and anything later — and no
+It needs glibc 2.34 or newer — RHEL 9, Ubuntu 22.04, Debian 12 and anything later — and no
 Rust toolchain:
 
 ```bash
