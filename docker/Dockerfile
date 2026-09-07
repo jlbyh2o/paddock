@@ -134,10 +134,16 @@ RUN "$VENV/bin/ft" --version && "$VENV/bin/hf" version
 # --- final -------------------------------------------------------------------------
 FROM ${VASTAI_IMAGE}
 
-# No ENTRYPOINT and no sshd here. The base image owns both: its entrypoint bootstraps
-# boot_default.sh, which brings up supervisor, sshd, Caddy and the Instance Portal. Setup
-# hooks in as a supervisor program instead (see docker/supervisor/). docker/entrypoint.sh
-# is kept for running this image outside Vast: `--entrypoint /opt/ft/entrypoint.sh`.
+# No ENTRYPOINT here. The base image owns it: its entrypoint bootstraps boot_default.sh,
+# which walks /etc/vast_boot.d and launches supervisor, which brings up Caddy, the Instance
+# Portal and this image's freetoken-setup program. That happens in every Vast launch mode --
+# the boot scripts detect the mode from /.launch and adapt -- so setup hooks in as a
+# supervisor program (see docker/supervisor/) rather than fighting for PID 1.
+#
+# Neither this image nor the base ships an sshd; Vast injects one, but only in the launch
+# modes that offer SSH. Entrypoint mode therefore leaves no way in but the browser terminal.
+# docker/entrypoint.sh is kept for running this image outside Vast:
+# `--entrypoint /opt/ft/entrypoint.sh`.
 #
 # nvcc and g++ are already present -- this base is cudnn-devel -- so the JIT fallback needs
 # nothing installed. Verified: a real FreeToken kernel compiles on it.

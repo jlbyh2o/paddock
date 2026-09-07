@@ -50,19 +50,24 @@ and the failure arrives at weight load rather than at boot. Filter offers on CUD
 | Field | Value |
 |---|---|
 | Image | `<account>/freetoken-ftman:latest` |
-| Launch mode | **Entrypoint** |
+| Launch mode | **Jupyter-python notebook + SSH** (or Interactive shell server) |
 | On-start script | not needed — see below |
 | `PORTAL_CONFIG` | append `localhost:18919:1919:/:FreeToken API` to the template's value |
 | Ports | **do not map 1919** — see below |
 | Environment | `HF_TOKEN=<token>`, only for gated or private repos |
 
-**Use Entrypoint launch mode.** The base image's entrypoint runs `boot_default.sh`, which
-walks `/etc/vast_boot.d/` — propagating your SSH keys, exporting the instance environment,
-generating a TLS certificate, and finally launching supervisor. Supervisor is what starts
-Caddy, the Instance Portal, and this image's own `freetoken-setup` program. SSH and Jupyter
-launch modes replace that entrypoint, which would leave the portal and the setup unstarted.
-If you use one anyway, put `bash /opt/ft/onstart.sh` in the on-start field to get at least
-the workspace layout and the ft-man config.
+**Pick a launch mode that gives you SSH.** The base image contains no sshd; SSH exists only
+because Vast injects one, which it does in the Jupyter and Interactive-shell modes and not in
+Entrypoint mode. Entrypoint mode would leave you reaching the box only through the portal's
+browser terminal.
+
+The mode does *not* affect startup. `boot_default.sh` walks `/etc/vast_boot.d/` in every mode
+— propagating SSH keys, exporting the instance environment, generating a TLS certificate, and
+launching supervisor, which starts Caddy, the Instance Portal and this image's own
+`freetoken-setup` program. The boot scripts detect the mode from the `/.launch` file Vast
+writes and adapt: `jupyter.sh` stands down when Vast is managing Jupyter, and `10-prep-env.sh`
+adds or strips the Jupyter portal entries to match. Nothing needs to go in the on-start
+field.
 
 ### Do not expose port 1919
 
