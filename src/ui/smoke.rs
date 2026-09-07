@@ -1179,6 +1179,75 @@ async fn a_template_is_applied_to_the_ftw_build_as_well() {
     crate::templates::remove("sharp-ftw").ok();
 }
 
+/// Regression, reported as a hard crash: applying a template to a GGUF checkpoint that
+/// lives in the Hugging Face cache panicked with "index out of bounds: the len is 0".
+///
+/// `targets` had been filtering cache paths out, so a cache-resident model with no FTW
+/// build — which `ft checkpoint` cannot produce for a GGUF anyway — produced an empty
+/// target list. The confirmation then named no directories, the apply reported success for
+/// zero writes, and indexing that empty list took the whole TUI down.
+#[tokio::test]
+async fn applying_to_a_cache_resident_checkpoint_writes_it_and_does_not_panic() {
+    let mut a = app().await;
+    a.config.templates.preflight = false;
+
+    // Shaped like a real cache entry, because that shape is what the bug turned on.
+    let root = std::env::temp_dir().join(format!(
+        "ft-man-cache-tpl-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let dir = root.join("models--acme--M-GGUF/snapshots/abc123/Q4_K_M");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.json"), r#"{"model_type":"qwen3_moe"}"#).unwrap();
+    std::fs::write(dir.join("model-Q4_K_M.gguf"), b"x").unwrap();
+
+    let mut model = crate::models::inspect(&dir).expect("the checkpoint should be recognized");
+    model.name = "acme/M-GGUF:Q4_K_M".into();
+    model.repo = Some("acme/M-GGUF".into());
+    model.variant = Some("Q4_K_M".into());
+    // No FTW build: a GGUF has none, which is exactly the case that crashed.
+    model.converted_to = None;
+    a.models = vec![model];
+    a.models_view.sel.index = 0;
+
+    with_stored_template(&mut a, "sharp-cache", SHARP);
+    a.tab = Tab::Templates;
+
+    press(&mut a, KeyCode::Char('a'));
+    let confirm = a.confirm.as_ref().expect("applying must still be confirmed");
+    let body = confirm.body.join("\n");
+    assert!(body.contains(&dir.display().to_string()), "it must name a directory:\n{body}");
+    // And say that this directory is not private to ft-man.
+    assert!(
+        body.contains("Hugging Face cache"),
+        "the reader must be told other tools see this too:\n{body}"
+    );
+
+    press(&mut a, KeyCode::Right);
+    press(&mut a, KeyCode::Enter);
+
+    assert_eq!(
+        std::fs::read_to_string(dir.join(crate::templates::TEMPLATE_FILE)).unwrap(),
+        SHARP,
+        "the template must actually be written, not reported as applied to nothing"
+    );
+    assert!(
+        a.toasts.iter().any(|t| t.text.contains("applied")),
+        "and reported: {:?}",
+        a.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+    );
+
+    press(&mut a, KeyCode::Char('u'));
+    press(&mut a, KeyCode::Right);
+    press(&mut a, KeyCode::Enter);
+    assert!(!dir.join(crate::templates::TEMPLATE_FILE).exists(), "u must undo it");
+
+    std::fs::remove_dir_all(&root).ok();
+    crate::templates::remove("sharp-cache").ok();
+}
+
 #[tokio::test]
 async fn reverting_a_model_with_no_override_is_refused_not_silently_ignored() {
     let mut a = app().await;

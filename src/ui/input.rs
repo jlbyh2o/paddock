@@ -1180,6 +1180,10 @@ fn apply_template(app: &mut App) {
     let model_name = model.name.clone();
     let model_path = model.path.clone();
     let targets = crate::templates::targets(model);
+    if targets.is_empty() {
+        app.error(format!("{model_name} has no directory to write a template into"));
+        return;
+    }
     let status = app.template_status(model);
 
     let mut body = vec![
@@ -1207,6 +1211,18 @@ fn apply_template(app: &mut App) {
             format!("This replaces the override '{}'. The checkpoint's original stays backed up.", a.name)
         }
     });
+    // A cache directory is shared with every other tool reading it, so the reader needs to
+    // know that this reaches further than the model in front of them.
+    if targets.iter().any(|t| crate::templates::is_hub_cache_path(t)) {
+        body.push(String::new());
+        body.push(
+            "That is inside the Hugging Face cache, which other tools on this machine read \
+             too — they will see this template as well. A later `hf download` of the repo \
+             may replace it. The checkpoint's own template is backed up either way, and u \
+             restores it."
+                .into(),
+        );
+    }
     if app.engine.is_live() {
         body.push(String::new());
         body.push(
@@ -1254,6 +1270,15 @@ fn write_template(app: &mut App, template_name: &str, model_path: &std::path::Pa
             }
         }
     }
+    // Writing nothing is a failure, not a quiet success. Reporting "applied to 0
+    // directories" and then indexing the empty list is how this last went wrong.
+    let Some(first) = written.first().cloned() else {
+        app.error(format!(
+            "nothing to apply '{}' to — {} has no writable directory",
+            template.name, model.name
+        ));
+        return;
+    };
     app.success(format!(
         "applied '{}' to {} director{}",
         template.name,
@@ -1265,7 +1290,7 @@ fn write_template(app: &mut App, template_name: &str, model_path: &std::path::Pa
     }
     // Verify against the real tokenizer now that it is in place.
     if app.config.templates.preflight {
-        run_preflight(app, &template.name, &written[0], &template.path);
+        run_preflight(app, &template.name, &first, &template.path);
     }
 }
 
@@ -1316,6 +1341,10 @@ fn revert_template(app: &mut App, model_path: &std::path::Path) {
         }
     }
     app.templates_view.preflight = None;
+    if reverted == 0 {
+        app.error("found no override to restore");
+        return;
+    }
     app.success(format!("restored the built-in template in {reverted} director(ies)"));
     if app.engine.is_live() {
         app.warn("restart the engine for the change to take effect");
