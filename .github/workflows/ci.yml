@@ -13,8 +13,13 @@ jobs:
     name: fmt, clippy, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      # Pinned, not "stable", and pinned to the same version as mise.toml so a local run
+      # and a CI run are the same compiler. Tracking stable meant clippy could gain a lint
+      # overnight and fail a build nobody had touched -- which is exactly what happened on
+      # the first run of this workflow. Bumping is now deliberate: change both files, fix
+      # what the new clippy finds, push once.
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -28,7 +33,7 @@ jobs:
     name: rust 1.88 (declared MSRV)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       # check, not test: this job exists to prove the crate still compiles on the version

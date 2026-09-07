@@ -41,6 +41,11 @@ supervision that keeps a serve alive across sessions.
 `ft-man` drives FreeToken's own CLI and HTTP API; it does not link against or vendor any
 of it, and it needs no Python of its own.
 
+1.88 is the floor the dependency tree actually imposes; CI proves it still holds. Day-to-day
+development uses the exact toolchain CI runs, pinned in `mise.toml` — with
+[mise](https://mise.jdx.dev) installed, `mise install` in this directory gets you the same
+compiler, so a clean `cargo clippy --all-targets -- -D warnings` locally means a green CI.
+
 ## Install
 
 ```bash
