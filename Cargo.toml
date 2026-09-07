@@ -2,11 +2,11 @@
 name = "ft-man"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A terminal UI for managing FreeToken: models, conversion, serving, tuning, and telemetry"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/jlbyh2o/ft-man"
+repository = "https://github.com/jlbyh2o/ft-man-tui"
 keywords = ["tui", "freetoken", "llm", "moe", "inference"]
 categories = ["command-line-utilities"]
 

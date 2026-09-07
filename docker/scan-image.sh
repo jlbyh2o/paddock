@@ -27,9 +27,25 @@ note() { printf '  %s\n' "$*"; }
 bad()  { printf '%sFAIL%s %s\n' "$RED" "$RST" "$*"; fail_count=$((fail_count + 1)); }
 ok()   { printf '%s ok %s %s\n' "$GRN" "$RST" "$*"; }
 
-# Identity: these cannot legitimately appear anywhere in the image, so they are scanned
-# over every byte of it with no exceptions.
-IDENTITY='jlbyh2o|/home/jeremy'
+# Identity: strings that cannot legitimately appear anywhere in the image, scanned over every
+# byte of it with no exceptions.
+#
+# These live OUTSIDE the repository, in docker/scan-identity, which is gitignored. Publishing
+# a scanner whose source lists your username, real name and mail domain would leak exactly the
+# thing the scanner exists to catch -- and would leak it in the one file guaranteed to be read
+# by anyone auditing the tool. Copy docker/scan-identity.example and fill it in.
+IDENTITY_FILE="${SCAN_IDENTITY_FILE:-$(dirname "$0")/scan-identity}"
+if [ -f "$IDENTITY_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$IDENTITY_FILE"
+fi
+if [ -z "${IDENTITY:-}" ] || [ -z "${WEAK:-}" ]; then
+  printf '%sFAIL%s no identity patterns configured\n' "$RED" "$RST" >&2
+  printf '  Expected IDENTITY and WEAK to be set by %s\n' "$IDENTITY_FILE" >&2
+  printf '  Create it from docker/scan-identity.example. Refusing to scan without it, because\n' >&2
+  printf '  an empty identity pattern would pass every image silently.\n' >&2
+  exit 2
+fi
 # Credentials: scanned everywhere EXCEPT third-party site-packages. Upstream packages
 # legitimately ship credential-shaped constants -- cryptography's PEM parser holds
 # "-----BEGIN OPENSSH PRIVATE KEY-----" as a literal, and transformers ships a public
@@ -39,8 +55,7 @@ IDENTITY='jlbyh2o|/home/jeremy'
 # does modify, freetoken, is scanned explicitly below.
 CREDENTIAL='\bhf_[A-Za-z0-9]{30,}|\bghp_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bsk-ant-[A-Za-z0-9_-]{20,}|\bAKIA[0-9A-Z]{16}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 STRONG="$IDENTITY|$CREDENTIAL"
-# Weak: real signals in files we wrote, noise everywhere else.
-WEAK='jeremy|bywater|gmail\.com|github\.com/jlbyh2o'
+# WEAK (real signals in files we wrote, noise everywhere else) also comes from that file.
 # Paths this build authored. Everything else in the image came from upstream.
 AUTHORED='/opt/ft /usr/local/bin/ft-man /etc/profile.d /opt/supervisor-scripts/freetoken-setup.sh /etc/supervisor/conf.d/freetoken-setup.conf /opt/freetoken/venv/lib/python3.12/site-packages/freetoken'
 

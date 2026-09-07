@@ -125,7 +125,7 @@ Cheap detector check (~3s, no GPU, no weights):
 from freetoken.utils import cached_load_hf_config
 from freetoken.models.qwen3_5_moe.config import parse_config
 from freetoken.models.qwen3_5_moe.weight import _select_expert_source_spec
-p = "/home/jeremy/models/Ornith-1.5-35B-A3B-NVFP4"
+p = "~/models/Ornith-1.5-35B-A3B-NVFP4"
 c = parse_config(cached_load_hf_config(p))
 print(c.expert_quant, c.attn_quant, c.linear_attn_quant, c.dense_quant, c.lm_head_quant)
 print(_select_expert_source_spec(p).desc)
@@ -145,7 +145,7 @@ from freetoken.utils import cached_load_hf_config
 from freetoken.models.qwen3_5_moe.config import parse_config
 from freetoken.models.qwen3_5_moe.model import Qwen3_5MoEForCausalLM
 
-FTW = "/home/jeremy/ftw-test/ornith-test-ftw"
+FTW = "~/ftw-test/ornith-test-ftw"
 cfg = dataclasses.replace(parse_config(cached_load_hf_config(FTW)), moe_backend="offload")
 set_rope_device(torch.device("cpu"))
 with torch.device("cpu"):

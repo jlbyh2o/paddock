@@ -36,7 +36,7 @@ supervision that keeps a serve alive across sessions.
 
 - Linux x86_64 (developed against Debian 13), NVIDIA GPU
 - A working FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md)
-- Rust 1.85+ to build
+- Rust 1.88+ to build
 
 `ft-man` drives FreeToken's own CLI and HTTP API; it does not link against or vendor any
 of it, and it needs no Python of its own.
@@ -44,7 +44,7 @@ of it, and it needs no Python of its own.
 ## Install
 
 ```bash
-git clone https://github.com/jlbyh2o/ft-man && cd ft-man
+git clone https://github.com/jlbyh2o/ft-man-tui && cd ft-man-tui
 cargo build --release
 install -Dm755 target/release/ft-man ~/.local/bin/ft-man
 ```

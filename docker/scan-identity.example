@@ -1,0 +1,14 @@
+# Identity patterns for docker/scan-image.sh. Copy to docker/scan-identity and fill in.
+#
+# docker/scan-identity is gitignored on purpose: it holds the strings that identify you, and
+# committing them would publish exactly what the scanner exists to keep out of an image.
+#
+# Sourced as shell, so these are extended-regex alternations in single quotes.
+
+# Strings that must never appear ANYWHERE in a published image. Scanned over every byte.
+# Your registry handle, your username, your home directory, your mail address.
+IDENTITY='myhandle|/home/myuser'
+
+# Weaker signals: real when they appear in files the build wrote, noise in third-party
+# packages. Scanned only in authored paths. Your real name, your mail domain, forge URLs.
+WEAK='firstname|lastname|example\.com|github\.com/myhandle'

@@ -2,3 +2,6 @@
 /vendor-freetoken
 **/*.rs.bk
 *.pdb
+
+# Personal identity patterns for docker/scan-image.sh; never committed.
+docker/scan-identity
