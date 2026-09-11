@@ -175,19 +175,17 @@ pub fn evaluate(
 
     // ---- can FreeToken resolve the routed experts? ----
     //
-    // This is the failure that motivated the whole check, and it is worth stating
-    // precisely because the obvious reading is wrong: the architecture is registered and
-    // the checkpoint is fine. What breaks is expert-quantization detection.
-    //
-    // Verified empirically against Ornith-1.5-35B-A3B-NVFP4: patching the config so the
-    // detector resolved nvfp4 got past it and then failed deeper, in nvfp4_banks.py,
-    // with KeyError on the per-expert global-scale lookup — because the loader wanted
-    // modelopt's `weight_scale_2` and the checkpoint has compressed-tensors'
-    // `weight_global_scale`. So no config edit fixes it; the translation has to exist in
-    // FreeToken, and today only the GLM-5-Next family carries it.
+    // Historically this was a blocker: FreeToken's Qwen3.5-MoE family carried its own
+    // expert-quantization detector that never looked at `format`, so an llm-compressor
+    // (compressed-tensors) export resolved to "none" and died deep in the bank loader.
+    // FreeToken #418/#427/#438 replaced every family-local detector with one QuantConfig
+    // layer that reads each module's scheme by name, in either dialect, so that whole
+    // class of failure is gone. What remains is the one case a config can still get
+    // wrong on its own terms: a modelopt MIXED_PRECISION allow-list that never names the
+    // experts.
     if r.is_moe {
-        if let Some(reason) = unresolvable_experts(quant_block, r.arch.as_deref()) {
-            note(Level::Blocker, reason);
+        if let Some((level, reason)) = unresolvable_experts(quant_block) {
+            note(level, reason);
         }
     }
 
@@ -268,16 +266,18 @@ pub fn evaluate(
     r
 }
 
-/// Whether FreeToken will fail to resolve a MoE checkpoint's routed-expert quantization.
+/// Whether FreeToken will struggle to resolve a MoE checkpoint's routed-expert
+/// quantization.
 ///
-/// Mirrors the detector FreeToken actually uses for the Qwen3.5-MoE family: it reads
-/// `quant_algo`/`quant_method` and, for a modelopt `MIXED_PRECISION` export, the
-/// `quantized_layers` map — and notably never looks at `format`. An llm-compressor
-/// export therefore resolves to "none" however clearly its `format` says `nvfp4`.
+/// Mirrors `QuantConfig`: a dialect is chosen from `quant_method`/`quant_algo`, and each
+/// module's scheme is then looked up by name. compressed-tensors and plain modelopt
+/// exports both answer for themselves, so the only shape still worth flagging is a
+/// modelopt `MIXED_PRECISION` allow-list with no entry covering the experts — the
+/// checkpoint's own config saying the experts are unquantized when its tensors are not.
 ///
-/// Returns the reason when the experts cannot be resolved, `None` when they can or when
-/// there is not enough evidence to say.
-fn unresolvable_experts(quant: Option<&Value>, arch: Option<&str>) -> Option<String> {
+/// Returns the severity and the reason, or `None` when the experts resolve or there is
+/// not enough evidence to say.
+fn unresolvable_experts(quant: Option<&Value>) -> Option<(Level, String)> {
     let quant = quant?;
     let get = |k: &str| quant.get(k).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
     let algo = {
@@ -307,23 +307,17 @@ fn unresolvable_experts(quant: Option<&Value>, arch: Option<&str>) -> Option<Str
             })
         });
         return (!experts_covered).then(|| {
-            "the checkpoint is a MIXED_PRECISION export but its quantized_layers map lists no              .mlp.experts entry, so FreeToken resolves the routed experts as unquantized and              the expert loader looks for tensors that are not there"
-                .to_string()
-        });
-    }
-
-    // llm-compressor: FreeToken's expert-bank loader wants modelopt tensor names, and only
-    // the GLM-5-Next family translates compressed-tensors' names into them.
-    if algo.contains("compressed-tensors") {
-        let translated = arch.is_some_and(|a| a.starts_with("Glm5Next"));
-        return (!translated).then(|| {
-            format!(
-                "this is an llm-compressor (compressed-tensors) export, whose expert tensors are                  named weight_packed/weight_global_scale. FreeToken's NVFP4 expert-bank loader                  for {} expects nvidia/modelopt names (weight/weight_scale_2); only the                  GLM-5-Next family carries that translation, so conversion and serving fail with                  'Missing MoE expert source layers'",
-                arch.unwrap_or("this architecture")
+            (
+                Level::Caution,
+                "the checkpoint is a MIXED_PRECISION export but its quantized_layers map lists                  no .mlp.experts entry, so FreeToken reads the routed experts as unquantized.                  If the tensors are in fact quantized, the loader rejects the checkpoint for                  disagreeing with its own quant config"
+                    .to_string(),
             )
         });
     }
 
+    // compressed-tensors (llm-compressor) exports are read natively: the dialect declares
+    // its own tensor names (weight_packed / weight_global_scale) and whether the stored
+    // global is the quant-side scale, so no family needs to carry a translation.
     None
 }
 
@@ -368,14 +362,13 @@ mod tests {
         assert!(r.notes[0].1.contains("not in FreeToken's model registry"));
     }
 
-    /// The checkpoint that cost a 23 GiB download and two failed conversions.
-    ///
-    /// The architecture IS registered and the config is well-formed; what breaks is that
-    /// FreeToken's expert-quantization detector never looks at `format`, so an
-    /// llm-compressor export resolves to "none". Saying "unsupported architecture" would
-    /// send someone looking in entirely the wrong place.
+    /// An llm-compressor (compressed-tensors) NVFP4 MoE export. FreeToken used to resolve
+    /// its experts as unquantized and die in the bank loader; since the QuantConfig layer
+    /// (#418/#427/#438) it reads the dialect natively, so flagging it would now steer
+    /// someone away from a checkpoint that serves. This is the Ornith-1.5-35B-A3B-NVFP4
+    /// shape that motivated the original check.
     #[test]
-    fn an_llm_compressor_moe_export_is_caught_with_the_real_reason() {
+    fn an_llm_compressor_moe_export_is_served_natively() {
         let cfg = json!({
             "architectures": ["Qwen3_5MoeForConditionalGeneration"],
             "model_type": "qwen3_5_moe",
@@ -390,21 +383,17 @@ mod tests {
             }
         });
         let r = evaluate(&cfg, 23 << 30, Some(&archs()), roomy());
-        assert_eq!(r.verdict(), Verdict::Unsupported);
+        assert_eq!(r.verdict(), Verdict::Supported, "{:?}", r.notes);
         assert!(!r.notes.iter().any(|(_, m)| m.contains("model registry")));
-        let msg = &r.notes[0].1;
-        assert!(msg.contains("compressed-tensors"), "{msg}");
-        assert!(msg.contains("weight_scale_2"), "name the mismatch it actually hits: {msg}");
-        assert!(msg.contains("Missing MoE expert source layers"), "{msg}");
         // Fields still resolve through text_config.
         assert_eq!(r.num_experts, Some(256));
         assert_eq!(r.num_layers, Some(40));
     }
 
-    /// GLM-5-Next is the one family that translates compressed-tensors names, so the same
-    /// export shape must not be flagged there.
+    /// The dialect is read per module, not per family, so a compressed-tensors export is
+    /// unflagged on every architecture -- not just the one that once carried a translation.
     #[test]
-    fn the_family_that_can_read_compressed_tensors_is_not_flagged() {
+    fn compressed_tensors_is_not_flagged_on_any_family() {
         let cfg = json!({
             "architectures": ["Glm5NextForConditionalGeneration"],
             "quantization_config": {"quant_method": "compressed-tensors", "format": "nvfp4-pack-quantized"},
@@ -443,7 +432,7 @@ mod tests {
             "text_config": {"num_experts": 256}
         });
         let r = evaluate(&bare, 20 << 30, Some(&archs()), roomy());
-        assert_eq!(r.verdict(), Verdict::Unsupported);
+        assert_eq!(r.verdict(), Verdict::Caution, "{:?}", r.notes);
         assert!(r.notes[0].1.contains("quantized_layers"), "{:?}", r.notes);
     }
 

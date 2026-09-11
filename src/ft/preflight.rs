@@ -121,14 +121,13 @@ pub async fn run(argv: Vec<String>, env: &[(String, String)]) -> Outcome {
 /// Resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
 /// concluded against what the checkpoint declares.
 ///
-/// The mismatch worth catching: FreeToken has two expert-quantization detectors, and the
-/// Qwen3.5-MoE family uses its own, written for nvidia/modelopt. It reads `quant_algo`,
-/// `quant_method` and the `quantized_layers` map, and never looks at `format` — so an
-/// llm-compressor export settles on "none" however plainly its format says
-/// `nvfp4-pack-quantized`. The converter then takes the unquantized expert path, folds the
-/// packed tensors into the dense pass, and finally raises `Missing MoE expert source
-/// layers` — minutes later, having written most of the model. See
-/// `docs/freetoken-compressed-tensors-moe.md`.
+/// The mismatch worth catching: a checkpoint that declares a quantization which FreeToken
+/// then resolves to `expert_quant=none`. FreeToken reads every dialect through one
+/// `QuantConfig` now, so this no longer fires for a whole export format the way it once
+/// did for llm-compressor (see `docs/freetoken-compressed-tensors-moe.md`). What still
+/// reaches it is a config wrong on its own terms — a modelopt `MIXED_PRECISION`
+/// allow-list with no entry covering `.mlp.experts`. Cheap to ask, and the alternative is
+/// finding out minutes into a conversion.
 const CONVERT_SCRIPT: &str = r#"
 import sys, json, os
 model_dir = sys.argv[1]
@@ -172,9 +171,9 @@ def run():
     declared = declared_quant(model_dir)
     if is_moe and quant == "none" and declared:
         return ("WARN the checkpoint declares %s but FreeToken resolved its experts as "
-                "unquantized (expert_quant=none), so the converter will look for the "
-                "wrong expert tensors and is likely to fail with 'Missing MoE expert "
-                "source layers'. %s" % (declared, summary))
+                "unquantized (expert_quant=none). If the expert tensors really are "
+                "quantized, the loader rejects the checkpoint for disagreeing with its "
+                "own quant config. %s" % (declared, summary))
     if is_moe and experts == 0:
         return "WARN %s -- no experts resolved; the expert pass has nothing to pack" % summary
     return "OK " + summary

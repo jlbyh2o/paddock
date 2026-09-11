@@ -1401,14 +1401,12 @@ async fn the_hub_reports_an_incompatible_repo_before_any_download() {
     let mut a = app().await;
     populate(&mut a);
 
-    // The exact config that cost a 23 GiB download and two failed conversions.
+    // An architecture FreeToken does not register: nothing to serve it with, and no
+    // amount of flags changes that, so it is the blocker worth showing before a download.
     a.hub_view.compat = Some(crate::compat::evaluate(
         &serde_json::json!({
-            "architectures": ["Qwen3_5MoeForConditionalGeneration"],
-            "quantization_config": {
-                "quant_method": "compressed-tensors",
-                "format": "nvfp4-pack-quantized"
-            },
+            "architectures": ["SomeNewThingForCausalLM"],
+            "model_type": "some_new_thing",
             "text_config": {"num_experts": 256, "num_hidden_layers": 40}
         }),
         23 << 30,
@@ -1422,10 +1420,10 @@ async fn the_hub_reports_an_incompatible_repo_before_any_download() {
 
     let screen = render_text(&mut a, Tab::Hub, 130, 34);
     assert!(screen.contains("not supported"), "the verdict must be visible:\n{screen}");
-    assert!(screen.contains("compressed-tensors"), "and say why:\n{screen}");
+    assert!(screen.contains("registry"), "and say why:\n{screen}");
     // The verdict must not run into the summary beside it.
     assert!(
-        !screen.contains("not supportedQwen"),
+        !screen.contains("not supportedSome"),
         "verdict and summary need a separator:\n{screen}"
     );
 }

@@ -169,9 +169,11 @@ pub static KNOBS: &[Knob] = &[
         "KV token floor held back before --moe-cache-auto spends the rest of VRAM on experts."),
 
     // ---- MoE -------------------------------------------------------------
-    knob!("moe_backend", "--moe-backend", "MoE backend", Group::Moe,
+    // Recent FreeToken renamed this to --moe-strategy and keeps --moe-backend as a warning
+    // alias; older builds only know --moe-backend, so that is what ft-man emits.
+    knob!("moe_backend", "--moe-backend", "MoE strategy", Group::Moe,
         Kind::Choice(&["auto", "offload", "hybrid", "cpu", "fused"]), "auto",
-        "fused keeps experts resident on GPU; offload streams misses over PCIe; cpu computes them on the host; hybrid splits the two. auto never picks fused."),
+        "fused keeps experts resident on GPU; offload streams misses over PCIe; cpu computes them on the host; hybrid splits the two. auto never picks fused. Newer FreeToken spells this --moe-strategy."),
     knob!("moe_cache_size", "--moe-cache-size", "MoE cache size (slots)", Group::Moe,
         Kind::Int { min: Some(0), max: None }, "auto",
         "Absolute number of GPU expert slots.", excl = MOE_CACHE_EXCL),
@@ -188,13 +190,17 @@ pub static KNOBS: &[Knob] = &[
         Kind::Int { min: Some(0), max: None }, "physical cores",
         "Worker threads for the cpu and hybrid executors. 0 means one per physical core."),
     knob!("moe_cpu_layers", "--moe-cpu-layers", "MoE CPU layers", Group::Moe, Kind::Text,
-        "auto", "With offload or hybrid: which MoE layers decode on the CPU. An id list ('3,7,11'), a count ('8'), or a fraction ('0.5'). '0' forces every layer onto the GPU."),
+        "every layer on GPU",
+        "With offload or hybrid: which MoE layers decode on the CPU. An id list ('3,7,11'), a count ('8'), a fraction ('0.5'), or 'auto'. 'auto' is for Windows/WSL, where CUDA pinned memory is capped, and needs an expert format the CPU executor serves (bf16, nvfp4, mxfp4) -- not fp8."),
     knob!("moe_hybrid_max_fetch", "--moe-hybrid-max-fetch", "Hybrid max fetch", Group::Moe,
         Kind::Int { min: Some(-1), max: None }, "-1 (auto)",
         "With hybrid: experts fetched over PCIe per layer per step; the rest go to the CPU. -1 reads the bandwidth profile, 0 never fetches."),
+    // Newer FreeToken folds this into --quant-backend (moe.nvfp4=<marlin|b12x|triton>, where
+    // b12x is the old flashinfer) and keeps --nvfp4-backend as a warning alias. The two are
+    // mutually exclusive there, so a --quant-backend knob must exclude this one.
     knob!("nvfp4_backend", "--nvfp4-backend", "NVFP4 GEMM backend", Group::Moe,
         Kind::Choice(&["triton", "auto", "marlin", "flashinfer"]), "triton",
-        "Routed-expert GEMM kernel for NVFP4 checkpoints. Forcing one fails loudly if it cannot run."),
+        "Routed-expert GEMM kernel for NVFP4 checkpoints. Forcing one fails loudly if it cannot run. Newer FreeToken spells this --quant-backend moe.nvfp4=<kernel>."),
     knob!("expert_load", "--expert-load", "Expert bank load", Group::Moe,
         Kind::Choice(&["auto", "parallel", "serial"]), "auto",
         "How expert banks are read into host RAM. 'serial' is the low-memory path; 'parallel' is faster but needs room for a whole-shard buffer."),

@@ -47,9 +47,10 @@ RUN touch src/main.rs && cargo build --release --locked && /build/target/release
 FROM ${CUDA_IMAGE} AS freetoken-builder
 
 ARG FREETOKEN_REPO=https://github.com/FlashML-org/FreeToken.git
-# The exact commit the NVFP4 MoE fix was written and verified against. Pinned rather than
-# tracking main: the patch below applies to this tree and no other.
-ARG FREETOKEN_SHA=af71ba43206e124f5ff6419b47ee36c6e9981078
+# Pinned rather than tracking main so a rebuild is reproducible. This tree is plain
+# upstream: the compressed-tensors NVFP4 MoE fix ft-man used to carry as a patch landed
+# upstream in #418/#427/#438, which read every checkpoint layout through a QuantConfig.
+ARG FREETOKEN_SHA=0ffd5c8b2941974ed64dec09170b19259e2ba5aa
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -73,18 +74,14 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local
 # does not copy, leaving a venv whose interpreter symlink dangles.
 RUN uv venv "$VENV" --python /usr/bin/python3
 
-# Upstream, at the pinned commit, plus the fix as a patch. Cloned from upstream rather
-# than from a fork so the image carries the change without carrying its provenance.
-# A depth-1 fetch of one SHA rather than a full clone: ~40 MB instead of ~400 MB.
+# Upstream at the pinned commit, unmodified. A depth-1 fetch of one SHA rather than a
+# full clone: ~40 MB instead of ~400 MB.
 RUN mkdir -p /src/freetoken \
  && cd /src/freetoken \
  && git init -q \
  && git remote add origin "$FREETOKEN_REPO" \
  && git fetch -q --depth 1 origin "$FREETOKEN_SHA" \
  && git checkout -q FETCH_HEAD
-
-COPY docker/freetoken-nvfp4-moe.patch /tmp/freetoken-nvfp4-moe.patch
-RUN git -C /src/freetoken apply --verbose /tmp/freetoken-nvfp4-moe.patch
 
 # Provenance pins for the two packages whose cu130 builds live off PyPI, plus flashinfer's
 # own index. Copied from upstream's install.sh, including the reasoning: unsafe-best-match

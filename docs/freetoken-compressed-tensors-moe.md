@@ -1,13 +1,21 @@
 # FreeToken and compressed-tensors NVFP4 MoE checkpoints (Qwen3.5-MoE family)
 
-**Status: repaired in the fork.** Not upstream, not pushed, no PR opened. Everything below
-marked **VERIFIED** was executed and observed on the server; **UNVERIFIED** means reasoned
-but not run.
+**Status: fixed upstream; this is history.** FreeToken #418/#427/#438 replaced every
+family-local quantization detector with one `QuantConfig` layer that reads each module's
+scheme by name, in either dialect. That covers this failure and more, so the local fork and
+its patch were abandoned on 2026-09-11 and both ft-man and the container image now track
+plain upstream. Kept because it records why ft-man's compatibility checks exist and what
+they were built against.
 
-- **Written:** 2026-09-05. **Rewritten:** 2026-09-06, when the fix was implemented and tested.
-- **FreeToken:** v0.1.2, upstream commit `af71ba43206e124f5ff6419b47ee36c6e9981078`
-- **Fork:** `git@github.com:jlbyh2o/FreeToken.git`; branch
-  `fix/qwen3-5-moe-compressed-tensors-nvfp4-experts`, local only, uncommitted
+Everything below marked **VERIFIED** was executed and observed on the server;
+**UNVERIFIED** means reasoned but not run. All of it describes FreeToken as of `af71ba4`.
+
+- **Written:** 2026-09-05. **Rewritten:** 2026-09-06, when the fix was implemented and
+  tested. **Superseded:** 2026-09-11, when upstream's QuantConfig layer landed.
+- **FreeToken then:** v0.1.2, upstream commit `af71ba43206e124f5ff6419b47ee36c6e9981078`
+- **FreeToken now:** upstream `0ffd5c8`, no local changes
+- **Fork (abandoned):** `git@github.com:jlbyh2o/FreeToken.git`; branch
+  `fix/qwen3-5-moe-compressed-tensors-nvfp4-experts`
 - **Test checkpoint:** `~/models/Ornith-1.5-35B-A3B-NVFP4` (23.3 GiB,
   `Qwen3_5MoeForConditionalGeneration`, 256 experts x 40 layers, `nvfp4-pack-quantized`)
 

@@ -29,7 +29,7 @@ FreeToken's engine resolves almost everything automatically, which is the right 
 and also means the knobs that matter are invisible until you need them. `ft-man` puts the
 whole surface in one place: every flag with its type, range, default and what it actually
 does; the elastic cache resize that otherwise takes a hand-written `curl`; the bandwidth
-profile that decides `--moe-backend auto` between offload and hybrid; and the process
+profile that decides `--moe-backend auto` (spelled `--moe-strategy` on newer FreeToken) between offload and hybrid; and the process
 supervision that keeps a serve alive across sessions.
 
 ## Requirements
