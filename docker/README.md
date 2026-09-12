@@ -32,7 +32,7 @@ docker/build.sh                                    # build + scan, no push
 DOCKER_NAMESPACE=<account> docker/build.sh --push  # build + scan + push
 ```
 
-Tags come from what is actually inside the built image — `ft0.1.2-man0.1.0-cu13` — read
+Tags come from what is actually inside the built image — `ft0.1.2-man0.2.1-cu13` — read
 back out of it after the build rather than assumed beforehand, so a tag cannot claim a
 version the image does not have. `:latest` moves with every push.
 
@@ -206,7 +206,7 @@ On an RTX 4060 Laptop (sm_89, driver 610.57.04), inside the built image:
 
 | | |
 |---|---|
-| `ft` / `ft-man` | freetoken 0.1.2 / ft-man 0.1.0 |
+| `ft` / `ft-man` | freetoken 0.1.2 / ft-man 0.2.1 |
 | `ft-man --doctor` | resolves the venv via config, `/workspace` paths, and NVML (names the GPU, VRAM and UUID) |
 | torch | 2.11.0+cu130, `cuda.is_available()` true, bf16 matmul on device returns finite values |
 | accel stack | `flashinfer` 0.6.18.post1, `flashinfer_cubin`, `flashinfer_jit_cache`, `sgl_kernel` all import; cubins resolve to the packaged directory |
@@ -215,7 +215,7 @@ On an RTX 4060 Laptop (sm_89, driver 610.57.04), inside the built image:
 | NVFP4 quant config (shipped module) | exercised against the installed package, not the source tree: a compressed-tensors MoE export resolves to `nvfp4`, a dense one to `none`, and MXFP4 geometry raises rather than misrouting into the NVFP4 loader |
 | Env bridge | `HF_TOKEN` recovered in login *and* interactive shells with it absent from the child environment |
 | Scan | clean |
-| Size | 30.9 GB on disk, 10.14 GB compressed total — **4.46 GB incremental** over the cached base |
+| Size | 30.9 GB on disk, 10.18 GB compressed total — **4.49 GB incremental** over the cached base |
 
 Not verified: an actual model load or serve. The local card holds 8 GB, and the target
 checkpoint is 23 GiB, so the first real serve necessarily happens on rented hardware.
