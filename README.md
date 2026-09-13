@@ -29,21 +29,26 @@ FreeToken's engine resolves almost everything automatically, which is the right 
 and also means the knobs that matter are invisible until you need them. `ft-man` puts the
 whole surface in one place: every flag with its type, range, default and what it actually
 does; the elastic cache resize that otherwise takes a hand-written `curl`; the bandwidth
-profile that decides `--moe-backend auto` (spelled `--moe-strategy` on newer FreeToken) between offload and hybrid; and the process
+profile that decides `--moe-strategy auto` between offload and hybrid; and the process
 supervision that keeps a serve alive across sessions.
 
 ## Requirements
 
 - Linux x86_64 (developed against Debian 13), NVIDIA GPU
-- A working FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md).
+- A current FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md).
   Its virtualenv also supplies the `hf` CLI that Hub downloads are delegated to
 - Rust 1.88+ to build
 
 `ft-man` drives FreeToken's own CLI and HTTP API; it does not link against or vendor any
-of it. It also shells out to `hf` for Hub downloads — that is `huggingface_hub`'s own CLI,
-which FreeToken already depends on, so it is normally present in the same virtualenv as
-`ft`. If it is not, the Hub tab says so up front rather than failing at the keypress, and
-`i` offers to run [Hugging Face's own installer](https://huggingface.co/docs/huggingface_hub/en/guides/cli)
+of it. It tracks the CLI as it stands rather than supporting several versions at once:
+when FreeToken renames a flag, ft-man emits the new spelling and stops emitting the old
+one, and a profile saved against the old name is translated the first time it is loaded.
+Pair it with a FreeToken you keep current.
+
+It also shells out to `hf` for Hub downloads — that is `huggingface_hub`'s own CLI, which
+FreeToken already depends on, so it is normally present in the same virtualenv as `ft`. If
+it is not, the Hub tab says so up front rather than failing at the keypress, and `i` offers
+to run [Hugging Face's own installer](https://huggingface.co/docs/huggingface_hub/en/guides/cli)
 — the method their guide lists as recommended, not one invented here. `hub.cli` points at
 it if it lives somewhere else.
 
@@ -137,7 +142,7 @@ Dashboard puts both numbers on one line and says which is real.
 from what the engine measured — `cache_budget_bytes` and the per-unit KV and expert costs
 from `/v1/cache/status` — and works out the `--kv-reserve-tokens` that buys back the
 context, what it costs in expert slots, and whether the card can reach the ceiling at all.
-It also makes the two calls `auto` will not: `--moe-backend fused` when every expert
+It also makes the two calls `auto` will not: `--moe-strategy fused` when every expert
 demonstrably fits in VRAM alongside full-context KV (the engine refuses to guess, because
 a wrong guess is an OOM at weight load; ft-man has NVML and the geometry, so it is
 arithmetic), and hybrid-vs-offload from the `ft bench bw` profile. Every line says why,
@@ -179,7 +184,7 @@ to a host with no headroom — hybrid's CPU executor needs working room on top o
 and a faster backend that cannot allocate is not faster.
 
 **A missing bandwidth profile is a speed ceiling with no symptom.** Without
-`~/.cache/freetoken/benchbw/<gpu-uuid>.json`, `--moe-backend auto` can only ever resolve
+`~/.cache/freetoken/benchbw/<gpu-uuid>.json`, `--moe-strategy auto` can only ever resolve
 to `offload`, and `--moe-hybrid-max-fetch auto` falls back to a fixed cap of 1 instead of
 the bandwidth-matched split. `--doctor` and the plan both say so, and the benchmark is one
 key on the Jobs tab.
@@ -344,7 +349,7 @@ CLI flags override the config file for that run and are not written back.
    every other tool on the machine can already see it.
 2. **Models** → select it → `c`. Converts to FTW under `library.ftw_dir`. Watch it on
    **Jobs**.
-3. **Jobs** → `b`. Runs `ft bench bw` once for this machine, so `--moe-backend auto` can
+3. **Jobs** → `b`. Runs `ft bench bw` once for this machine, so `--moe-strategy auto` can
    choose hybrid over offload when your RAM bandwidth justifies it.
 4. **Models** → select the checkpoint → Enter. It loads the FTW build into **Serve**.
 5. **Serve** → adjust anything; `p` shows the exact command line → `g` to start.

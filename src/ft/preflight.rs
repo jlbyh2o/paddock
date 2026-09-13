@@ -72,8 +72,12 @@ fn command(ft: &Freetoken, script: &str, args: &[String]) -> Option<Vec<String>>
 }
 
 /// Ask FreeToken what it makes of a checkpoint, before converting it.
-pub fn convert_command(ft: &Freetoken, model_dir: &Path, moe_backend: &str) -> Option<Vec<String>> {
-    command(ft, CONVERT_SCRIPT, &[model_dir.display().to_string(), moe_backend.to_string()])
+pub fn convert_command(
+    ft: &Freetoken,
+    model_dir: &Path,
+    moe_strategy: &str,
+) -> Option<Vec<String>> {
+    command(ft, CONVERT_SCRIPT, &[model_dir.display().to_string(), moe_strategy.to_string()])
 }
 
 /// List the model architectures FreeToken can load. Needs no checkpoint at all — the
@@ -131,7 +135,7 @@ pub async fn run(argv: Vec<String>, env: &[(String, String)]) -> Outcome {
 const CONVERT_SCRIPT: &str = r#"
 import sys, json, os
 model_dir = sys.argv[1]
-moe_backend = sys.argv[2] if len(sys.argv) > 2 else "offload"
+moe_strategy = sys.argv[2] if len(sys.argv) > 2 else "offload"
 
 def declared_quant(path):
     """What the checkpoint says about itself, wherever the key happens to live."""
@@ -154,7 +158,7 @@ def run():
     if try_get_tp_info() is None:
         set_tp_info(rank=0, size=1)
     cfg = EngineConfig(model_path=model_dir, tp_info=DistributedInfo(0, 1),
-                       dtype=torch.bfloat16, moe_backend=moe_backend)
+                       dtype=torch.bfloat16, moe_strategy=moe_strategy)
     mc = cfg.model_config
     is_moe = bool(getattr(mc, "is_moe", False))
     experts = int(getattr(mc, "num_experts", 0) or 0)

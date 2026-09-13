@@ -299,7 +299,7 @@ fn output(f: &mut Frame, app: &mut App, area: Rect) {
 
 /// With nothing selected, the output pane shows the machine's bandwidth profile.
 ///
-/// This is the measurement that decides `--moe-backend auto` between `offload` and
+/// This is the measurement that decides `--moe-strategy auto` between `offload` and
 /// `hybrid`, and it is otherwise buried in a JSON file under `~/.cache/freetoken`. Since
 /// it is also what the `b` key on this screen produces, it belongs here.
 fn bench_profile_lines<'a>(app: &App, width: usize) -> Vec<Line<'a>> {
@@ -311,7 +311,7 @@ fn bench_profile_lines<'a>(app: &App, width: usize) -> Vec<Line<'a>> {
             Line::from(Span::styled(
                 "Press b to run `ft bench bw`. It measures host-RAM versus PCIe bandwidth with \
                  the real MoE kernels and writes a per-GPU profile, which is what lets \
-                 --moe-backend auto choose hybrid over offload.",
+                 --moe-strategy auto choose hybrid over offload.",
                 t.muted(),
             )),
         ];

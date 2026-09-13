@@ -629,7 +629,7 @@ pub fn on_convert_preflight(
 /// `triton` keeps them dense for resident serving. Matching the Serve configuration's MoE
 /// backend keeps the output usable by the configuration that asked for it.
 fn convert_moe_backend(app: &App) -> &'static str {
-    match app.serve.get("moe_backend") {
+    match app.serve.get("moe_strategy") {
         Some("fused") => "triton",
         _ => "offload",
     }
@@ -671,6 +671,13 @@ fn start_conversion(app: &mut App, source: &std::path::Path) {
         "--moe-backend".to_string(),
         moe_backend.to_string(),
     ];
+    // The expert banks are physically packed for the kernel that will read them, and the
+    // FTW records which one in `quant_format`, so a conversion that ignores the serve
+    // configuration's --quant-backend bakes in a layout the serve will not ask for.
+    if let Some(quant) = app.serve.get("quant_backend") {
+        args.push("--quant-backend".into());
+        args.push(quant.to_string());
+    }
     if let Some(gpu) = app.serve.get("gpu") {
         args.push("--gpu".into());
         args.push(gpu.to_string());

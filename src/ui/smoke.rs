@@ -336,7 +336,7 @@ fn populate(app: &mut App) {
         serve: {
             let mut c = ServeConfig::new();
             c.set("model", "/models/Qwen3.6-35B-A3B-ftw");
-            c.set("moe_backend", "hybrid");
+            c.set("moe_strategy", "hybrid");
             c
         },
     }];
@@ -370,7 +370,7 @@ fn populate(app: &mut App) {
     ));
 
     app.serve.set("model", "/models/Qwen3.6-35B-A3B-ftw");
-    app.serve.set("moe_backend", "hybrid");
+    app.serve.set("moe_strategy", "hybrid");
     app.serve.set("memory_ratio", "0.92");
     app.serve.set("enable_cache_report", "true");
 }
@@ -842,15 +842,15 @@ async fn cycling_a_choice_knob_wraps_through_unset() {
     let mut a = app().await;
     a.tab = Tab::Serve;
     a.serve_view.group = crate::knobs::Group::Moe;
-    a.serve_view.sel.index = 0; // moe_backend
+    a.serve_view.sel.index = 0; // moe_strategy
 
     let options = ["auto", "offload", "hybrid", "cpu", "fused"];
     for expected in options {
         press(&mut a, KeyCode::Char(' '));
-        assert_eq!(a.serve.get("moe_backend"), Some(expected));
+        assert_eq!(a.serve.get("moe_strategy"), Some(expected));
     }
     press(&mut a, KeyCode::Char(' '));
-    assert!(!a.serve.is_set("moe_backend"), "cycling past the end returns to the default");
+    assert!(!a.serve.is_set("moe_strategy"), "cycling past the end returns to the default");
 }
 
 #[tokio::test]
@@ -973,7 +973,7 @@ async fn saving_and_loading_a_profile_round_trips_the_configuration() {
     let mut a = app().await;
     a.tab = Tab::Serve;
     a.serve.set("model", "/models/test");
-    a.serve.set("moe_backend", "cpu");
+    a.serve.set("moe_strategy", "cpu");
 
     press(&mut a, KeyCode::Char('S'));
     assert!(a.serve_view.naming);
@@ -982,13 +982,13 @@ async fn saving_and_loading_a_profile_round_trips_the_configuration() {
 
     let saved = a.profiles.items.iter().find(|p| p.name.ends_with('X'));
     let saved = saved.expect("the profile should be saved");
-    assert_eq!(saved.serve.get("moe_backend"), Some("cpu"));
+    assert_eq!(saved.serve.get("moe_strategy"), Some("cpu"));
 
     a.serve = ServeConfig::new();
     a.serve_view.profile_sel.index =
         a.profiles.items.iter().position(|p| p.name.ends_with('X')).unwrap();
     press(&mut a, KeyCode::Char('P'));
-    assert_eq!(a.serve.get("moe_backend"), Some("cpu"));
+    assert_eq!(a.serve.get("moe_strategy"), Some("cpu"));
     assert_eq!(a.serve.get("model"), Some("/models/test"));
 }
 

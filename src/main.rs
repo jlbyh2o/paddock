@@ -213,7 +213,7 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
         );
     }
 
-    // Without a bandwidth profile `--moe-backend auto` can only ever resolve to offload
+    // Without a bandwidth profile `--moe-strategy auto` can only ever resolve to offload
     // and `--moe-hybrid-max-fetch auto` falls back to a fixed cap of 1 — a speed ceiling
     // with no symptom, so it is worth naming here rather than leaving to be discovered.
     println!();
@@ -222,7 +222,7 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
         None => println!(
             "bench profile  NOT FOUND\n  \
              `ft bench bw --dtype all` measures CPU vs PCIe bandwidth for this card. \
-             Until it has run,\n  --moe-backend auto cannot select hybrid and \
+             Until it has run,\n  --moe-strategy auto cannot select hybrid and \
              --moe-hybrid-max-fetch auto uses a fixed cap of 1."
         ),
     }

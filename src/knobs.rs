@@ -162,18 +162,17 @@ pub static KNOBS: &[Knob] = &[
         Kind::Choice(&["radix", "naive"]), "radix",
         "'radix' reuses shared prefixes across requests (SWA- and GDN-aware variants are picked automatically); 'naive' opts out."),
     knob!("attention_backend", "--attention-backend", "Attention backend", Group::Memory,
-        Kind::Choice(&["auto", "trtllm", "fi", "fa", "triton", "dsv4_sparse", "dsa"]), "auto",
-        "Attention kernel. A 'prefill,decode' pair is also accepted; type it in the free-text override if you need one."),
+        Kind::Choice(&["auto", "trtllm", "fi", "fa", "triton", "dsv4_sparse", "dsa", "m3_sparse",
+                       "qsa_sparse"]), "auto",
+        "Attention kernel. Each backend serves one attention type, so 'auto' is almost always right: m3_sparse is MiniMax-M3's block-sparse kernel, qsa_sparse Qwen3.8-Flash-Next's, dsa and dsv4_sparse DeepSeek's."),
     knob!("kv_reserve_tokens", "--kv-reserve-tokens", "KV reserve tokens", Group::Memory,
         Kind::Int { min: Some(0), max: None }, "8192",
         "KV token floor held back before --moe-cache-auto spends the rest of VRAM on experts."),
 
     // ---- MoE -------------------------------------------------------------
-    // Recent FreeToken renamed this to --moe-strategy and keeps --moe-backend as a warning
-    // alias; older builds only know --moe-backend, so that is what ft-man emits.
-    knob!("moe_backend", "--moe-backend", "MoE strategy", Group::Moe,
+    knob!("moe_strategy", "--moe-strategy", "MoE strategy", Group::Moe,
         Kind::Choice(&["auto", "offload", "hybrid", "cpu", "fused"]), "auto",
-        "fused keeps experts resident on GPU; offload streams misses over PCIe; cpu computes them on the host; hybrid splits the two. auto never picks fused. Newer FreeToken spells this --moe-strategy."),
+        "fused keeps experts resident on GPU; offload streams misses over PCIe; cpu computes them on the host; hybrid splits the two. auto never picks fused."),
     knob!("moe_cache_size", "--moe-cache-size", "MoE cache size (slots)", Group::Moe,
         Kind::Int { min: Some(0), max: None }, "auto",
         "Absolute number of GPU expert slots.", excl = MOE_CACHE_EXCL),
@@ -195,12 +194,12 @@ pub static KNOBS: &[Knob] = &[
     knob!("moe_hybrid_max_fetch", "--moe-hybrid-max-fetch", "Hybrid max fetch", Group::Moe,
         Kind::Int { min: Some(-1), max: None }, "-1 (auto)",
         "With hybrid: experts fetched over PCIe per layer per step; the rest go to the CPU. -1 reads the bandwidth profile, 0 never fetches."),
-    // Newer FreeToken folds this into --quant-backend (moe.nvfp4=<marlin|b12x|triton>, where
-    // b12x is the old flashinfer) and keeps --nvfp4-backend as a warning alias. The two are
-    // mutually exclusive there, so a --quant-backend knob must exclude this one.
-    knob!("nvfp4_backend", "--nvfp4-backend", "NVFP4 GEMM backend", Group::Moe,
-        Kind::Choice(&["triton", "auto", "marlin", "flashinfer"]), "triton",
-        "Routed-expert GEMM kernel for NVFP4 checkpoints. Forcing one fails loudly if it cannot run. Newer FreeToken spells this --quant-backend moe.nvfp4=<kernel>."),
+    // Replaced --nvfp4-backend, which reached only the routed-expert NVFP4 table. Kept in
+    // this group because that table is still what it is overwhelmingly used for, even
+    // though the flag also reaches the dense linear kernels.
+    knob!("quant_backend", "--quant-backend", "Quant kernels", Group::Moe, Kind::Text,
+        "automatic per table",
+        "Which kernel serves each quantized layer type: comma-separated layer[.kind]=name entries, e.g. 'moe.nvfp4=marlin' or 'linear=triton'. A bare layer applies to every one of its kinds whose table lists that kernel; unlisted tables stay automatic. Forcing a kernel fails loudly if it cannot run here."),
     knob!("expert_load", "--expert-load", "Expert bank load", Group::Moe,
         Kind::Choice(&["auto", "parallel", "serial"]), "auto",
         "How expert banks are read into host RAM. 'serial' is the low-memory path; 'parallel' is faster but needs room for a whole-shard buffer."),
@@ -231,6 +230,74 @@ pub static KNOBS: &[Knob] = &[
         "Report prefix-cache hits in each response's usage block. On /v1/messages this also makes input_tokens exclude the cached prefix."),
 ];
 
+/// The kernel tables `--quant-backend` can name: `(layer, kind, kernels)`, mirroring the
+/// `candidates` lists in FreeToken's `layers/quantization/{linear,moe}/*.py`. The order is
+/// FreeToken's own, which is also its auto-selection order: the first kernel that can run
+/// here and is worth it wins, so naming one only ever overrides that search.
+///
+/// `moe.mxfp8` is deliberately absent: its method registers an empty candidate table, so
+/// FreeToken accepts no kernel name for it either.
+static QUANT_TABLES: &[(&str, &str, &[&str])] = &[
+    ("linear", "none", &["torch"]),
+    ("linear", "fp8_tensor", &["torch", "triton", "emulation"]),
+    ("linear", "fp8_block", &["dsv4", "triton"]),
+    ("linear", "mxfp8", &["triton", "emulation"]),
+    ("linear", "nvfp4", &["triton", "marlin", "emulation"]),
+    ("moe", "none", &["fused"]),
+    ("moe", "fp8_block", &["triton"]),
+    ("moe", "mxfp4", &["triton", "triton_gptoss"]),
+    ("moe", "nvfp4", &["triton", "marlin", "b12x"]),
+];
+
+/// Every kernel name a `layer[.kind]` key accepts. A bare layer takes the union of its
+/// kinds, which is how FreeToken resolves a layer-wide entry.
+fn quant_kernels(layer: &str, kind: Option<&str>) -> Vec<&'static str> {
+    // First occurrence wins, so the union keeps FreeToken's search order; a plain `dedup`
+    // would not, because the same kernel serves several kinds without being adjacent.
+    let mut names: Vec<&'static str> = Vec::new();
+    for kernel in QUANT_TABLES
+        .iter()
+        .filter(|(l, k, _)| *l == layer && kind.is_none_or(|want| *k == want))
+        .flat_map(|(_, _, kernels)| kernels.iter().copied())
+    {
+        if !names.contains(&kernel) {
+            names.push(kernel);
+        }
+    }
+    names
+}
+
+/// Check one `--quant-backend` value, mirroring `QuantBackend.parse`. FreeToken rejects a
+/// bad entry with a usage error before it does any work, so catching it here turns a
+/// failed launch into a red field.
+fn validate_quant_backend(value: &str) -> Option<String> {
+    for item in value.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let Some((key, name)) = item.split_once('=') else {
+            return Some(format!("{item:?} is not layer[.kind]=name"));
+        };
+        let (layer, kind) = match key.trim().split_once('.') {
+            Some((l, k)) => (l.trim(), Some(k.trim())),
+            None => (key.trim(), None),
+        };
+        if layer != "linear" && layer != "moe" {
+            return Some(format!("no layer {layer:?}; expected linear or moe"));
+        }
+        let kernels = quant_kernels(layer, kind);
+        if kernels.is_empty() {
+            return Some(format!("{layer} has no {} table", kind.unwrap_or_default()));
+        }
+        let name = name.trim().to_lowercase();
+        if !kernels.contains(&name.as_str()) {
+            return Some(format!("no {key} kernel {name:?}; known: {}", kernels.join(", ")));
+        }
+    }
+    None
+}
+
 pub fn knob(key: &str) -> Option<&'static Knob> {
     KNOBS.iter().find(|k| k.key == key)
 }
@@ -244,10 +311,41 @@ pub fn knobs_in(group: Group) -> impl Iterator<Item = &'static Knob> {
 /// An edited set of knob values. Only knobs the user actually set are stored, so a
 /// profile records intent ("leave the MoE backend on auto") rather than a snapshot of
 /// today's defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ServeConfig {
     values: BTreeMap<String, String>,
+}
+
+impl<'de> Deserialize<'de> for ServeConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self { values: migrate(BTreeMap::deserialize(d)?) })
+    }
+}
+
+/// Carry a profile written against an older FreeToken forward onto the current flag
+/// names. ft-man follows the CLI it is installed next to rather than supporting several
+/// at once, so a renamed flag has to be translated on the way in — otherwise loading an
+/// existing profile would quietly drop the setting as an unknown knob.
+fn migrate(mut values: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    // --moe-backend became --moe-strategy in FreeToken #418, with the same value space.
+    if let Some(v) = values.remove("moe_backend") {
+        values.entry("moe_strategy".into()).or_insert(v);
+    }
+    // --nvfp4-backend became a single --quant-backend entry in the same release. Mirrors
+    // FreeToken's own `_nvfp4_entry`: "auto" stood for "no entry at all", and the kernel
+    // that was called flashinfer is now called b12x.
+    if let Some(v) = values.remove("nvfp4_backend") {
+        let kernel = match v.as_str() {
+            "auto" => "",
+            "flashinfer" => "b12x",
+            other => other,
+        };
+        if !kernel.is_empty() {
+            values.entry("quant_backend".into()).or_insert(format!("moe.nvfp4={kernel}"));
+        }
+    }
+    values
 }
 
 impl ServeConfig {
@@ -374,6 +472,9 @@ pub fn validate_value(k: &Knob, value: &str) -> Option<String> {
     if v.is_empty() {
         return None;
     }
+    if k.key == "quant_backend" {
+        return validate_quant_backend(v);
+    }
     match k.kind {
         Kind::Text => None,
         Kind::Flag => (v != "true" && v != "false").then(|| "must be true or false".to_string()),
@@ -447,6 +548,51 @@ mod tests {
             cfg.to_args(),
             vec!["--model", "/models/qwen", "--port", "1920", "--enable-cache-report"]
         );
+    }
+
+    #[test]
+    fn a_quant_backend_entry_is_checked_against_the_real_kernel_tables() {
+        let k = knob("quant_backend").unwrap();
+        for good in [
+            "moe.nvfp4=marlin",
+            "moe.nvfp4=b12x",
+            "moe.mxfp4=triton_gptoss",
+            "linear.fp8_block=dsv4",
+            "linear=marlin",
+            "linear=marlin,moe.nvfp4=triton",
+        ] {
+            assert_eq!(validate_value(k, good), None, "{good} should be accepted");
+        }
+        // b12x is a routed-expert kernel; the dense linear table has no such entry.
+        assert!(validate_value(k, "linear=b12x").is_some());
+        // "flashinfer" was the old --nvfp4-backend spelling of b12x and is gone.
+        assert!(validate_value(k, "moe.nvfp4=flashinfer").is_some());
+        // moe.mxfp8 registers an empty candidate table, so no name is valid for it.
+        assert!(validate_value(k, "moe.mxfp8=triton").is_some());
+        assert!(validate_value(k, "attention=fa").is_some());
+        assert!(validate_value(k, "moe.nvfp4").is_some());
+        // A layer-wide key names the union of its kinds, each kernel once and in
+        // FreeToken's own search order.
+        assert_eq!(
+            validate_value(k, "linear=nope").as_deref(),
+            Some("no linear kernel \"nope\"; known: torch, triton, emulation, dsv4, marlin"),
+        );
+    }
+
+    /// A profile saved against the pre-#418 CLI still has to load with its settings
+    /// intact, because the knob keys it names no longer exist.
+    #[test]
+    fn a_profile_written_against_the_old_flag_names_is_carried_forward() {
+        let old: ServeConfig =
+            toml::from_str("moe_backend = 'hybrid'\nnvfp4_backend = 'flashinfer'").unwrap();
+        assert_eq!(old.get("moe_strategy"), Some("hybrid"));
+        assert_eq!(old.get("quant_backend"), Some("moe.nvfp4=b12x"));
+        assert!(!old.is_set("moe_backend"));
+        assert!(old.validate().iter().all(|(k, _)| k != "moe_strategy" && k != "quant_backend"));
+
+        // "auto" meant "let FreeToken choose", which is now simply an absent flag.
+        let auto: ServeConfig = toml::from_str("nvfp4_backend = 'auto'").unwrap();
+        assert!(!auto.is_set("quant_backend"));
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! back is `--kv-reserve-tokens`: set it to the context you actually want and the
 //! MoE-first split reserves that first.
 //!
-//! **`--moe-backend auto` never picks `fused`**, because the engine cannot know whether
+//! **`--moe-strategy auto` never picks `fused`**, because the engine cannot know whether
 //! the experts would fit in HBM and a wrong guess is a weight-load OOM rather than a
 //! slower-but-working run. ft-man does know — it has NVML and the model's own geometry —
 //! so it is the right place to offer the choice the engine will not make.
@@ -567,7 +567,7 @@ fn plan_host_memory(plan: &mut Plan, machine: &Machine, costs: Option<&Costs>) {
             Level::Warning,
             format!(
                 "host RAM is nearly spoken for: {} free of {}, with about {} of it \
-                 pinned expert banks. That rules out --moe-backend hybrid (its CPU \
+                 pinned expert banks. That rules out --moe-strategy hybrid (its CPU \
                  executor needs working room) and makes --expert-load parallel risky, \
                  since it buffers a whole shard.",
                 crate::util::bytes(machine.host_ram_available),
@@ -729,7 +729,7 @@ fn plan_backend(
         if ceiling > 0 && with_full_ctx <= costs.net_budget() {
             plan.push(Step::set(
                 Level::Advice,
-                "moe_backend",
+                "moe_strategy",
                 "fused",
                 format!(
                     "every expert fits in VRAM ({}) alongside {} of KV, inside the engine's \
@@ -745,12 +745,12 @@ fn plan_backend(
     }
 
     // Otherwise it is the offload family, and the profile decides offload vs hybrid.
-    let explicit = serve.get("moe_backend").filter(|v| *v != "auto");
+    let explicit = serve.get("moe_strategy").filter(|v| *v != "auto");
     let Some(bench) = bench else {
         plan.push(Step::note(
             Level::Warning,
             format!(
-                "no `ft bench bw` profile for {}, so --moe-backend auto can only ever pick \
+                "no `ft bench bw` profile for {}, so --moe-strategy auto can only ever pick \
                  offload and --moe-hybrid-max-fetch auto falls back to a fixed cap of 1. \
                  Run a bandwidth benchmark from the Jobs tab{}.",
                 machine.gpu_name.as_deref().unwrap_or("this GPU"),
@@ -793,10 +793,10 @@ fn plan_backend(
             } else if explicit == Some(verdict.as_str()) {
                 plan.push(Step::note(
                     Level::Info,
-                    format!("--moe-backend is already {verdict}; {detail}"),
+                    format!("--moe-strategy is already {verdict}; {detail}"),
                 ));
             } else {
-                plan.push(Step::set(Level::Advice, "moe_backend", verdict.clone(), detail));
+                plan.push(Step::set(Level::Advice, "moe_strategy", verdict.clone(), detail));
             }
         }
         None => plan.push(Step::note(
@@ -1271,7 +1271,7 @@ mod tests {
             &ServeConfig::new(),
         );
         assert!(
-            !plan.edits().iter().any(|(k, v)| *k == "moe_backend" && v == "hybrid"),
+            !plan.edits().iter().any(|(k, v)| *k == "moe_strategy" && v == "hybrid"),
             "hybrid must not be recommended into a host that cannot feed it"
         );
         assert!(plan.steps.iter().any(|s| s.reason.contains("stays on offload")));
@@ -1288,7 +1288,7 @@ mod tests {
             Some(&bench),
             &ServeConfig::new(),
         );
-        assert!(plan.edits().iter().any(|(k, v)| *k == "moe_backend" && v == "hybrid"));
+        assert!(plan.edits().iter().any(|(k, v)| *k == "moe_strategy" && v == "hybrid"));
     }
 
     #[test]
@@ -1460,7 +1460,7 @@ mod tests {
         let plan =
             build(&target(), &machine(), Some(&moe_costs()), Some(&bench), &ServeConfig::new());
         assert_eq!(
-            plan.edits().iter().find(|(k, _)| *k == "moe_backend").map(|(_, v)| v.as_str()),
+            plan.edits().iter().find(|(k, _)| *k == "moe_strategy").map(|(_, v)| v.as_str()),
             Some("hybrid"),
         );
     }
@@ -1470,10 +1470,10 @@ mod tests {
         let mut bench = BenchProfile::default();
         bench.dtypes.insert("nvfp4".into(), Some("hybrid".into()));
         let mut serve = ServeConfig::new();
-        serve.set("moe_backend", "hybrid");
+        serve.set("moe_strategy", "hybrid");
 
         let plan = build(&target(), &machine(), Some(&moe_costs()), Some(&bench), &serve);
-        assert!(!plan.edits().iter().any(|(k, _)| *k == "moe_backend"));
+        assert!(!plan.edits().iter().any(|(k, _)| *k == "moe_strategy"));
         assert!(plan.steps.iter().any(|s| s.reason.contains("already hybrid")));
     }
 
@@ -1489,7 +1489,7 @@ mod tests {
         };
         let plan = build(&target(), &machine(), Some(&costs), None, &ServeConfig::new());
         assert_eq!(
-            plan.edits().iter().find(|(k, _)| *k == "moe_backend").map(|(_, v)| v.as_str()),
+            plan.edits().iter().find(|(k, _)| *k == "moe_strategy").map(|(_, v)| v.as_str()),
             Some("fused"),
         );
     }
@@ -1499,7 +1499,7 @@ mod tests {
         let t = Target { is_moe: false, ..target() };
         let costs = Costs { moe_bytes_per_expert: 0, total_experts: 0, ..moe_costs() };
         let plan = build(&t, &machine(), Some(&costs), None, &ServeConfig::new());
-        assert!(!plan.edits().iter().any(|(k, _)| *k == "moe_backend"));
+        assert!(!plan.edits().iter().any(|(k, _)| *k == "moe_strategy"));
         assert!(!plan.steps.iter().any(|s| s.reason.contains("bench bw")));
     }
 
