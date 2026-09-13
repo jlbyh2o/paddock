@@ -116,10 +116,28 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
         note={engine.gpu_busy_reason ?? undefined}
         actions={
           <>
-            <button type="button" className="btn" onClick={start} disabled={engine.is_live}>
+            <button
+              type="button"
+              className="btn"
+              onClick={start}
+              disabled={engine.is_live}
+              // A disabled control that does not say why is a dead end: the terminal
+              // answers the same question with a toast, which a greyed button cannot.
+              title={
+                engine.is_live
+                  ? "an engine is already running; stop it first"
+                  : (engine.gpu_busy_reason ?? "start the engine with the Serve configuration")
+              }
+            >
               Start <span className="dim">(e)</span>
             </button>
-            <button type="button" className="btn" onClick={stop} disabled={!engine.is_live}>
+            <button
+              type="button"
+              className="btn"
+              onClick={stop}
+              disabled={!engine.is_live}
+              title={engine.is_live ? "stop the engine" : "no engine is running"}
+            >
               Stop <span className="dim">(s)</span>
             </button>
             <button
@@ -127,6 +145,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
               className="btn danger"
               onClick={forceStop}
               disabled={!engine.is_live}
+              title={engine.is_live ? "SIGKILL the engine" : "no engine is running"}
             >
               Force-stop <span className="dim">(S)</span>
             </button>
@@ -135,6 +154,11 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
               className="btn"
               onClick={smoke}
               disabled={!engine.server_reachable}
+              title={
+                engine.server_reachable
+                  ? "send one /generate request"
+                  : "the server is not answering"
+              }
             >
               Smoke test <span className="dim">(t)</span>
             </button>

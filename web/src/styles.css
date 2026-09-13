@@ -601,6 +601,25 @@ table.grid tr.row.selected td {
   color: color-mix(in srgb, var(--selection-fg) 70%, transparent);
 }
 
+/*
+ * A tone on a sub-line has to beat the dim `.row-sub` sets, selected or not. Without
+ * these the two places that depend on it — a knob's inline validation error (§4.8) and
+ * a job's `failure_reason` (§5.8, "in red when failed") — came out the same gray as the
+ * ordinary second line, which is exactly the distinction they exist to make.
+ */
+.row-sub.bad,
+.row.selected .row-sub.bad {
+  color: var(--bad);
+}
+.row-sub.warn,
+.row.selected .row-sub.warn {
+  color: var(--warn);
+}
+.row-sub.good,
+.row.selected .row-sub.good {
+  color: var(--good);
+}
+
 .tag {
   display: inline-block;
   padding: 0 5px;
@@ -659,6 +678,17 @@ table.grid tr.row.selected td {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--panel);
+}
+
+/*
+ * The key hint inside a button is `.dim`, which is a gray tuned for the panel
+ * background and vanishes on the accent one. On a filled button it is the same ink as
+ * the label, just quieter.
+ */
+.btn.primary .dim,
+.btn.danger.primary .dim {
+  color: inherit;
+  opacity: 0.72;
 }
 
 .btn.danger {
@@ -763,6 +793,12 @@ input.error {
   overflow-wrap: anywhere;
 }
 
+/* A single wrapped block rather than a list of lines: the Serve command preview. */
+.loglist.wrap-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .logline.err,
 .logline.bad {
   color: var(--bad);
@@ -786,9 +822,14 @@ input.error {
 
 /* ---------------------------------------------------------------- toasts */
 
+/*
+ * Bottom right, above the footer, newest last — §5.1, and where the terminal draws
+ * them too. Top right put them over the first row of panes: a toast that covers the
+ * title of the pane the action just changed hides the thing it is reporting on.
+ */
 .toasts {
   position: fixed;
-  top: 54px;
+  bottom: 44px;
   right: 12px;
   z-index: 60;
   display: flex;

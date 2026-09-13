@@ -1,0 +1,663 @@
+{
+  "groups": [
+    {
+      "group": "model",
+      "title": "Model"
+    },
+    {
+      "group": "server",
+      "title": "Server"
+    },
+    {
+      "group": "runtime",
+      "title": "Runtime & scheduling"
+    },
+    {
+      "group": "memory",
+      "title": "KV cache & memory"
+    },
+    {
+      "group": "moe",
+      "title": "MoE offload"
+    },
+    {
+      "group": "api",
+      "title": "API behavior"
+    }
+  ],
+  "knobs": [
+    {
+      "default": "(required)",
+      "exclusive_with": [],
+      "flag": "--model",
+      "group": "model",
+      "help": "Local directory, Hugging Face repo id, or an FTW directory. FTW is auto-detected.",
+      "key": "model",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Model path or repo id"
+    },
+    {
+      "default": "basename of --model",
+      "exclusive_with": [],
+      "flag": "--served-model-name",
+      "group": "model",
+      "help": "The id reported by /v1/models and expected in request bodies.",
+      "key": "served_model_name",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Served model name"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [],
+      "flag": "--dtype",
+      "group": "model",
+      "help": "Data type for weights and activations. 'auto' takes the checkpoint's own dtype.",
+      "key": "dtype",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "auto",
+          "bfloat16",
+          "float16",
+          "float32"
+        ]
+      },
+      "label": "Weight dtype"
+    },
+    {
+      "default": "huggingface",
+      "exclusive_with": [],
+      "flag": "--model-source",
+      "group": "model",
+      "help": "Where a bare repo id is fetched from when --model is not a local path.",
+      "key": "model_source",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "huggingface",
+          "modelscope"
+        ]
+      },
+      "label": "Download source"
+    },
+    {
+      "default": "127.0.0.1",
+      "exclusive_with": [],
+      "flag": "--host",
+      "group": "server",
+      "help": "Interface the API server binds. Use 0.0.0.0 to expose it beyond localhost.",
+      "key": "host",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Bind address"
+    },
+    {
+      "default": "1919",
+      "exclusive_with": [],
+      "flag": "--port",
+      "group": "server",
+      "help": "TCP port for the OpenAI, Anthropic and Responses APIs.",
+      "key": "port",
+      "kind": {
+        "kind": "int",
+        "max": 65535,
+        "min": 1
+      },
+      "label": "Bind port"
+    },
+    {
+      "default": "GPU 0",
+      "exclusive_with": [],
+      "flag": "--gpu",
+      "group": "server",
+      "help": "A GPU UUID (GPU-xxxx..., as nvidia-smi -L prints) or an nvidia-smi index. A unique UUID prefix is enough.",
+      "key": "gpu",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "GPU"
+    },
+    {
+      "default": "local Tauri/Vite origins",
+      "exclusive_with": [],
+      "flag": "--cors-origins",
+      "group": "server",
+      "help": "Comma-separated allow-list for browser clients. Empty disables CORS headers; '*' allows any origin.",
+      "key": "cors_origins",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "CORS origins"
+    },
+    {
+      "default": "4",
+      "exclusive_with": [],
+      "flag": "--max-running-requests",
+      "group": "runtime",
+      "help": "How many requests the scheduler runs concurrently. Raising it costs KV cache.",
+      "key": "max_running_requests",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Max running requests"
+    },
+    {
+      "default": "32768",
+      "exclusive_with": [],
+      "flag": "--max-output-tokens",
+      "group": "runtime",
+      "help": "Output budget applied to requests that do not specify one.",
+      "key": "max_output_tokens",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Default max output tokens"
+    },
+    {
+      "default": "from checkpoint",
+      "exclusive_with": [],
+      "flag": "--max-seq-len-override",
+      "group": "runtime",
+      "help": "Override the context length taken from the checkpoint's rotary config.",
+      "key": "max_seq_len_override",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Max sequence length"
+    },
+    {
+      "default": "8192",
+      "exclusive_with": [],
+      "flag": "--max-prefill-length",
+      "group": "runtime",
+      "help": "Chunked-prefill chunk size in tokens. Larger chunks prefill faster but delay decode.",
+      "key": "max_prefill_length",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Prefill chunk size"
+    },
+    {
+      "default": "= max running requests",
+      "exclusive_with": [],
+      "flag": "--cuda-graph-max-bs",
+      "group": "runtime",
+      "help": "Largest batch size captured as a CUDA graph. Capture cost grows with the value.",
+      "key": "cuda_graph_max_bs",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "CUDA graph max batch"
+    },
+    {
+      "default": "40",
+      "exclusive_with": [],
+      "flag": "--decode-log-interval",
+      "group": "runtime",
+      "help": "Emit one scheduler status line every N decode forwards.",
+      "key": "decode_log_interval",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Decode log interval"
+    },
+    {
+      "default": "0",
+      "exclusive_with": [],
+      "flag": "--num-tokenizer",
+      "group": "runtime",
+      "help": "Dedicated tokenizer processes. 0 shares the tokenizer with the detokenizer.",
+      "key": "num_tokenizer",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 0
+      },
+      "label": "Tokenizer processes"
+    },
+    {
+      "default": "1",
+      "exclusive_with": [],
+      "flag": "--tensor-parallel-size",
+      "group": "runtime",
+      "help": "TP degree. Give one --gpu entry per rank; single-GPU serving leaves this at 1.",
+      "key": "tensor_parallel_size",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Tensor parallel size"
+    },
+    {
+      "default": "off",
+      "exclusive_with": [],
+      "flag": "--disable-pynccl",
+      "group": "runtime",
+      "help": "Turn off PyNCCL for tensor parallelism and fall back to the default collectives.",
+      "key": "disable_pynccl",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "Disable PyNCCL"
+    },
+    {
+      "default": "off",
+      "exclusive_with": [],
+      "flag": "--enable-special-token-ckpt",
+      "group": "runtime",
+      "help": "Preserve a decode reuse point just after a tool-call opener, so rewriting an echoed tool call only invalidates the call body.",
+      "key": "enable_special_token_ckpt",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "Special-token checkpoints"
+    },
+    {
+      "default": "0.9",
+      "exclusive_with": [],
+      "flag": "--memory-ratio",
+      "group": "memory",
+      "help": "Fraction of free VRAM the engine may use for weights, MoE cache and KV combined.",
+      "key": "memory_ratio",
+      "kind": {
+        "kind": "float",
+        "max": 1.0,
+        "min": 0.05
+      },
+      "label": "Memory ratio"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [
+        "num_pages",
+        "num_tokens"
+      ],
+      "flag": "--num-pages",
+      "group": "memory",
+      "help": "Fix KV capacity in pages instead of sizing it from leftover VRAM.",
+      "key": "num_pages",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "KV capacity (pages)"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [
+        "num_pages",
+        "num_tokens"
+      ],
+      "flag": "--num-tokens",
+      "group": "memory",
+      "help": "Fix KV capacity in tokens. Must be a multiple of the resolved page size.",
+      "key": "num_tokens",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "KV capacity (tokens)"
+    },
+    {
+      "default": "1",
+      "exclusive_with": [],
+      "flag": "--page-size",
+      "group": "memory",
+      "help": "KV page granularity. DSV4 forces 128, the TRTLLM backend needs 16/32/64, SWA models require 1.",
+      "key": "page_size",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "KV page size"
+    },
+    {
+      "default": "radix",
+      "exclusive_with": [],
+      "flag": "--cache-type",
+      "group": "memory",
+      "help": "'radix' reuses shared prefixes across requests (SWA- and GDN-aware variants are picked automatically); 'naive' opts out.",
+      "key": "cache_type",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "radix",
+          "naive"
+        ]
+      },
+      "label": "KV cache strategy"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [],
+      "flag": "--attention-backend",
+      "group": "memory",
+      "help": "Attention kernel. Each backend serves one attention type, so 'auto' is almost always right: m3_sparse is MiniMax-M3's block-sparse kernel, qsa_sparse Qwen3.8-Flash-Next's, dsa and dsv4_sparse DeepSeek's.",
+      "key": "attention_backend",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "auto",
+          "trtllm",
+          "fi",
+          "fa",
+          "triton",
+          "dsv4_sparse",
+          "dsa",
+          "m3_sparse",
+          "qsa_sparse"
+        ]
+      },
+      "label": "Attention backend"
+    },
+    {
+      "default": "8192",
+      "exclusive_with": [],
+      "flag": "--kv-reserve-tokens",
+      "group": "memory",
+      "help": "KV token floor held back before --moe-cache-auto spends the rest of VRAM on experts.",
+      "key": "kv_reserve_tokens",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 0
+      },
+      "label": "KV reserve tokens"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [],
+      "flag": "--moe-strategy",
+      "group": "moe",
+      "help": "fused keeps experts resident on GPU; offload streams misses over PCIe; cpu computes them on the host; hybrid splits the two. auto never picks fused.",
+      "key": "moe_strategy",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "auto",
+          "offload",
+          "hybrid",
+          "cpu",
+          "fused"
+        ]
+      },
+      "label": "MoE strategy"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [
+        "moe_cache_size",
+        "moe_cache_rate",
+        "moe_cache_auto"
+      ],
+      "flag": "--moe-cache-size",
+      "group": "moe",
+      "help": "Absolute number of GPU expert slots.",
+      "key": "moe_cache_size",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 0
+      },
+      "label": "MoE cache size (slots)"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [
+        "moe_cache_size",
+        "moe_cache_rate",
+        "moe_cache_auto"
+      ],
+      "flag": "--moe-cache-rate",
+      "group": "moe",
+      "help": "Fraction of all experts to keep cached on GPU.",
+      "key": "moe_cache_rate",
+      "kind": {
+        "kind": "float",
+        "max": 1.0,
+        "min": 0.0
+      },
+      "label": "MoE cache rate"
+    },
+    {
+      "default": "on for offload-family backends",
+      "exclusive_with": [
+        "moe_cache_size",
+        "moe_cache_rate",
+        "moe_cache_auto"
+      ],
+      "flag": "--moe-cache-auto",
+      "group": "moe",
+      "help": "Size the expert cache from free VRAM, giving MoE priority over KV down to the reserve floor.",
+      "key": "moe_cache_auto",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "MoE cache auto-size"
+    },
+    {
+      "default": "lru",
+      "exclusive_with": [],
+      "flag": "--moe-cache-policy",
+      "group": "moe",
+      "help": "Eviction policy for the unified expert slot cache.",
+      "key": "moe_cache_policy",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "lru"
+        ]
+      },
+      "label": "MoE eviction policy"
+    },
+    {
+      "default": "physical cores",
+      "exclusive_with": [],
+      "flag": "--moe-cpu-threads",
+      "group": "moe",
+      "help": "Worker threads for the cpu and hybrid executors. 0 means one per physical core.",
+      "key": "moe_cpu_threads",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 0
+      },
+      "label": "MoE CPU threads"
+    },
+    {
+      "default": "every layer on GPU",
+      "exclusive_with": [],
+      "flag": "--moe-cpu-layers",
+      "group": "moe",
+      "help": "With offload or hybrid: which MoE layers decode on the CPU. An id list ('3,7,11'), a count ('8'), a fraction ('0.5'), or 'auto'. 'auto' is for Windows/WSL, where CUDA pinned memory is capped, and needs an expert format the CPU executor serves (bf16, nvfp4, mxfp4) -- not fp8.",
+      "key": "moe_cpu_layers",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "MoE CPU layers"
+    },
+    {
+      "default": "-1 (auto)",
+      "exclusive_with": [],
+      "flag": "--moe-hybrid-max-fetch",
+      "group": "moe",
+      "help": "With hybrid: experts fetched over PCIe per layer per step; the rest go to the CPU. -1 reads the bandwidth profile, 0 never fetches.",
+      "key": "moe_hybrid_max_fetch",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": -1
+      },
+      "label": "Hybrid max fetch"
+    },
+    {
+      "default": "automatic per table",
+      "exclusive_with": [],
+      "flag": "--quant-backend",
+      "group": "moe",
+      "help": "Which kernel serves each quantized layer type: comma-separated layer[.kind]=name entries, e.g. 'moe.nvfp4=marlin' or 'linear=triton'. A bare layer applies to every one of its kinds whose table lists that kernel; unlisted tables stay automatic. Forcing a kernel fails loudly if it cannot run here.",
+      "key": "quant_backend",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Quant kernels"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [],
+      "flag": "--expert-load",
+      "group": "moe",
+      "help": "How expert banks are read into host RAM. 'serial' is the low-memory path; 'parallel' is faster but needs room for a whole-shard buffer.",
+      "key": "expert_load",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "auto",
+          "parallel",
+          "serial"
+        ]
+      },
+      "label": "Expert bank load"
+    },
+    {
+      "default": "disk",
+      "exclusive_with": [],
+      "flag": "--ple-backend",
+      "group": "moe",
+      "help": "Where a PLE n-gram table lives. 'pinned' preloads it into page-locked host RAM, which is fast but costs tens of GiB.",
+      "key": "ple_backend",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "disk",
+          "pinned"
+        ]
+      },
+      "label": "PLE table backend"
+    },
+    {
+      "default": "off",
+      "exclusive_with": [],
+      "flag": "--moe-prefill-hit-d2d",
+      "group": "moe",
+      "help": "During prefill, copy cache-resident experts device-side and stream only misses. Needs CUDA 13 and a cache larger than 2x the per-layer expert count.",
+      "key": "moe_prefill_hit_d2d",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "Prefill hit D2D copy"
+    },
+    {
+      "default": "overlap on",
+      "exclusive_with": [],
+      "flag": "--disable-moe-prefill-overlap",
+      "group": "moe",
+      "help": "Turn off the two-buffer overlap for prefill expert copies.",
+      "key": "disable_moe_prefill_overlap",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "Disable prefill overlap"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [],
+      "flag": "--tool-call-parser",
+      "group": "api",
+      "help": "Grammar used to parse tool calls out of the model's output. 'auto' infers it from the model family.",
+      "key": "tool_call_parser",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "auto",
+          "llama3",
+          "qwen",
+          "qwen25",
+          "qwen3_coder",
+          "mistral",
+          "deepseekv32",
+          "gemma4",
+          "glm47",
+          "minimax",
+          "minimax_m3",
+          "muse_glimmer",
+          "gpt_oss"
+        ]
+      },
+      "label": "Tool-call parser"
+    },
+    {
+      "default": "auto",
+      "exclusive_with": [],
+      "flag": "--reasoning-parser",
+      "group": "api",
+      "help": "Splits chain-of-thought into reasoning_content. 'off' leaves it inline in the message.",
+      "key": "reasoning_parser",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "auto",
+          "off",
+          "qwen3",
+          "glm",
+          "deepseekv32",
+          "gpt_oss",
+          "minimax",
+          "minimax_m3",
+          "muse_glimmer",
+          "gemma4"
+        ]
+      },
+      "label": "Reasoning parser"
+    },
+    {
+      "default": "model",
+      "exclusive_with": [],
+      "flag": "--sampling-defaults",
+      "group": "api",
+      "help": "'model' fills unspecified temperature/top_k/top_p from the checkpoint's generation_config.json, which reasoning models generally need.",
+      "key": "sampling_defaults",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "model",
+          "none"
+        ]
+      },
+      "label": "Sampling defaults"
+    },
+    {
+      "default": "off",
+      "exclusive_with": [],
+      "flag": "--enable-cache-report",
+      "group": "api",
+      "help": "Report prefix-cache hits in each response's usage block. On /v1/messages this also makes input_tokens exclude the cached prefix.",
+      "key": "enable_cache_report",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "Report cache hits"
+    }
+  ]
+}

@@ -22,7 +22,10 @@ export function ConfirmModal(props: {
 
   useEffect(() => {
     const target = confirm.default_index === 0 ? cancelRef.current : acceptRef.current;
-    target?.focus();
+    // preventScroll for the same reason the help overlay does it: a long confirmation
+    // body makes the overlay scrollable, and scrolling the foot into view would hide the
+    // title and the first lines of what is about to happen.
+    target?.focus({ preventScroll: true });
   }, [confirm]);
 
   const cancelLabel = confirm.options[0] ?? "Cancel";

@@ -1,7 +1,7 @@
 # freetoken-ftman container
 
-FreeToken's MoE serving engine and the `ft-man` terminal UI in one image, for running on
-a rented NVIDIA GPU.
+FreeToken's MoE serving engine and ft-man's terminal and web UIs in one image, for running
+on a rented NVIDIA GPU.
 
 ## What is pinned
 
@@ -9,9 +9,10 @@ a rented NVIDIA GPU.
 |---|---|
 | Base | builders on `nvidia/cuda:13.0.3-devel-ubuntu24.04`; final stage on `vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-08-28`, which already carries `nvcc` and `g++` for the JIT fallback |
 | FreeToken | upstream `FlashML-org/FreeToken` at `0ffd5c8`, unmodified |
-| ft-man | built from this repository's working tree |
+| ft-man | built from this repository's working tree, web interface included |
 | Python | 3.12 (the base image's), venv at `/opt/freetoken/venv` |
 | Rust | `rust:1.98.0-slim-bookworm` — bookworm's older glibc so the binary runs on the ubuntu24.04 final stage |
+| Node | `node:24-bookworm-slim` — builds `web/dist`, which `build.rs` embeds into the ft-man binary |
 
 `uv` is installed unpinned from `astral.sh/uv/install.sh`, which is the one input to this
 build that is not version-locked.
@@ -105,6 +106,32 @@ Once you are in:
 ft-man --doctor     # what it found: the ft binary, the GPU, your checkpoints
 ft-man              # the UI
 ```
+
+### Web interface
+
+`ft-man web` is already running: the `ft-man-web` supervisor program (see
+`docker/supervisor/`) starts it at boot, once `freetoken-setup` has written the config it
+needs. It binds `127.0.0.1:7979` — set in the `[web]` section `onstart.sh` writes — for the
+same reason the engine binds loopback: `ft-man web` can start and stop the engine, delete
+checkpoints and write files, and it has no authentication of its own unless you set one.
+
+Reach it the same two ways as the engine:
+
+- **SSH tunnel**, no port mapping needed: `ssh -N -L 7979:127.0.0.1:7979 <vast-ssh-target>`,
+  then open `http://127.0.0.1:7979` locally.
+- **Through Caddy**, the same as `localhost:18919:1919:/:FreeToken API` fronts the engine:
+  append an entry such as `localhost:17979:7979:/:ft-man web` to the instance's
+  `PORTAL_CONFIG` (pick any host-side port that is not already claimed by the template) and
+  the UI appears in the Instance Portal, behind the portal's TLS and authentication.
+
+To require a bearer token as well — worth doing if you go through Caddy rather than a
+tunnel — add `token = "..."` under `[web]` in
+`$WORKSPACE/config/ft-man/config.toml` and restart the program:
+`supervisorctl restart ft-man-web`.
+
+A TUI opened over SSH and the supervised web daemon can run at once: both adopt the same
+engine from `serve.json` and either can start or stop it, but a job (a conversion, a
+download, a benchmark) started in one is only visible to that process until it finishes.
 
 ### What the setup program does
 

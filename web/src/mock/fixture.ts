@@ -412,8 +412,8 @@ export const fixture: Snapshot = {
       message: null,
       uptime_s: 4212,
       maintenance: "serving",
-      phase: null,
-      progress: null,
+      phase: "experts",
+      progress: { done_bytes: 22_548_578_304, total_bytes: 22_548_578_304 },
     },
     stats: {
       model: {
@@ -532,7 +532,14 @@ export const fixture: Snapshot = {
       },
     ],
     engine_gpu_uuid: GPU_UUID,
-    reported_gpus: [],
+    reported_gpus: [
+      {
+        index: 0,
+        name: "NVIDIA GeForce RTX 5070 Ti",
+        uuid: GPU_UUID,
+        total_bytes: 16 * GIB,
+      },
+    ],
     host: {
       cpu_percent: 18.4,
       cpu_cores: 32,
@@ -939,11 +946,45 @@ export const fixture: Snapshot = {
       memory_ratio: "0.92",
       max_running_requests: "4",
       port: "1919",
+      num_pages: "16384",
+      num_tokens: "262144",
     },
-    errors: [],
+    errors: [
+      { key: "num_pages", message: "cannot be combined with --num-tokens" },
+      { key: "num_tokens", message: "cannot be combined with --num-pages" },
+    ],
     command_preview: `ft serve --model ${FTW_PATH} --served-model-name Qwen3.6-35B-A3B --port 1919 --max-running-requests 4 --memory-ratio 0.92 --kv-reserve-tokens 65536 --moe-strategy hybrid --moe-cache-auto`,
-    set_counts: { model: 2, server: 1, runtime: 1, memory: 2, moe: 2, api: 0 },
-    plan: null,
+    set_counts: { model: 2, server: 1, runtime: 1, memory: 4, moe: 2, api: 0 },
+    plan: {
+      steps: [
+        {
+          level: "advice",
+          label: "--kv-reserve-tokens 233472",
+          key: "kv_reserve_tokens",
+          value: "233472",
+          reason:
+            "16.0 GiB of VRAM with 21.0 GiB of experts offloaded leaves 9.1 GiB for KV, which holds 228k tokens at this model's page size",
+        },
+        {
+          level: "info",
+          label: "—",
+          key: null,
+          value: null,
+          reason:
+            "--moe-strategy is already hybrid; the benchmark on NVIDIA GeForce RTX 5070 Ti recommends hybrid for nvfp4 experts",
+        },
+      ],
+      fit: {
+        usable: 233_472,
+        ceiling: 262_144,
+        is_truncated: true,
+        ratio: 0.89,
+        summary: "228k of 256k",
+      },
+      unpriced: null,
+      is_empty: false,
+      edit_count: 1,
+    },
     profiles: [
       { name: "qwen-256k", notes: "", model: FTW_PATH },
       { name: "llama-dense", notes: "", model: "/workspace/ftw/Llama-4.2-11B-Instruct" },
@@ -1050,6 +1091,7 @@ export const fixture: Snapshot = {
         finished_at: null,
         log_path: "/home/jeremy/.local/state/ft-man/logs/job-3.log",
         output_path: null,
+        output_bytes: 18_432,
         failure_reason: null,
         is_running: true,
       },
@@ -1070,6 +1112,7 @@ export const fixture: Snapshot = {
         finished_at: "2026-09-02T19:41:08+01:00",
         log_path: "/home/jeremy/.local/state/ft-man/logs/job-2.log",
         output_path: "/home/jeremy/.local/state/ft-man/bench/GPU-6f2a8c31.json",
+        output_bytes: 7_104,
         failure_reason: null,
         is_running: false,
       },
@@ -1091,6 +1134,7 @@ export const fixture: Snapshot = {
         finished_at: "2026-09-11T16:03:47+01:00",
         log_path: "/home/jeremy/.local/state/ft-man/logs/job-1.log",
         output_path: null,
+        output_bytes: 2_048,
         failure_reason: "RuntimeError: not enough host memory to stage expert bank 41",
         is_running: false,
       },
@@ -1144,7 +1188,19 @@ export const fixture: Snapshot = {
     { id: 92, text: "bandwidth profile written", kind: "success", age_ms: 800, ttl_ms: 4000 },
   ],
 
-  confirm: null,
+  confirm: {
+    title: "Delete checkpoint",
+    body: [
+      "/workspace/ftw/Mixtral-8x7B-FTW.partial",
+      "",
+      "This deletes the directory and everything in it.",
+      "6.00 GiB would be freed.",
+    ],
+    options: ["Cancel", "Confirm"],
+    default_index: 0,
+    destructive: true,
+    action: { kind: "delete_model", path: "/workspace/ftw/Mixtral-8x7B-FTW.partial" },
+  },
 
   config: {
     theme: "auto",

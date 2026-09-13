@@ -10,6 +10,10 @@
 //! pushes the toast the TUI has always shown, and also returns a [`Refusal`] carrying the
 //! HTTP status the web API documents for it — so the terminal keeps behaving exactly as
 //! it did while a browser learns why nothing happened.
+//!
+//! One refusal is the exception: a knob value that fails validation belongs against the
+//! field that produced it, so [`set_knob`] only returns the `Refusal` and the terminal's
+//! own caller raises the toast. See docs/web-api.md section 4.8.
 
 use std::path::{Path, PathBuf};
 
@@ -1193,8 +1197,10 @@ pub fn set_knob(app: &mut App, key: &str, value: Option<&str>) -> Result<KnobSet
         return Ok(KnobSet::default());
     }
     if let Some(msg) = crate::knobs::validate_value(k, value) {
-        let flag = k.flag;
-        return Err(error_off(app, 409, format!("{flag}: {msg}")));
+        // No toast. A rejected value belongs against the field that produced it, and the
+        // web UI has an inline slot for it; the terminal has none, so `commit_knob_edit`
+        // raises the toast there. See docs/web-api.md section 4.8.
+        return Err(Refusal { status: 409, message: format!("{}: {msg}", k.flag) });
     }
     // `ServeConfig::set` clears whatever the new value excludes; report which, since the
     // browser's other fields have just been emptied under it.

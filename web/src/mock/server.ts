@@ -7,7 +7,8 @@
  * toast, the confirmation or the value change the real daemon would, so every
  * screen can be driven end to end with no FreeToken anywhere.
  *
- * This module is loaded dynamically, so it never reaches a production bundle.
+ * It is imported dynamically behind the `MOCK` guard, so it lands in its own chunk and
+ * a production page never fetches it.
  */
 
 import type {
@@ -29,7 +30,11 @@ type Subscriber = (snapshot: Snapshot) => void;
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-let state: Snapshot = clone(fixture);
+// The fixture carries every optional shape, the two overlays included, so the wire
+// tests have something to compare. Mock mode starts with them closed: an overlay is
+// something an action opens, not a state a page loads in.
+let state: Snapshot = { ...clone(fixture), confirm: null };
+state.serve.plan = null;
 const subscribers = new Set<Subscriber>();
 let ticker: ReturnType<typeof setInterval> | null = null;
 let toastId = 100;

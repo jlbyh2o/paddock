@@ -55,7 +55,9 @@ fn presented(headers: &HeaderMap) -> Option<String> {
     for raw in headers.get_all(header::COOKIE) {
         let Ok(text) = raw.to_str() else { continue };
         for pair in text.split(';') {
-            let (name, value) = pair.split_once('=')?;
+            // A pair with no `=` is not this cookie, and must not end the search: a
+            // browser is free to send one before ours.
+            let Some((name, value)) = pair.split_once('=') else { continue };
             if name.trim() == COOKIE {
                 return Some(value.trim().to_string());
             }

@@ -837,6 +837,10 @@ pub struct JobEntry {
     finished_at: Option<String>,
     log_path: String,
     output_path: Option<String>,
+    /// Size of the job's output file right now, so a client polling
+    /// `GET /api/jobs/{id}/output` knows there is something new without asking. `0` when
+    /// the file does not exist yet, which is also what a job that has written nothing has.
+    output_bytes: u64,
     failure_reason: Option<String>,
     is_running: bool,
 }
@@ -891,6 +895,7 @@ fn jobs(app: &App) -> JobsSnapshot {
                 finished_at: j.finished_at.map(|t| t.to_rfc3339()),
                 log_path: j.log_path.display().to_string(),
                 output_path: j.output_path.as_ref().map(|p| p.display().to_string()),
+                output_bytes: std::fs::metadata(&j.log_path).map(|m| m.len()).unwrap_or(0),
                 failure_reason: matches!(j.status, JobStatus::Failed(_))
                     .then(|| j.failure_reason())
                     .flatten(),

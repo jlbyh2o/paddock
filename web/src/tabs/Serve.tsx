@@ -184,6 +184,9 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
             ref={register}
             type="checkbox"
             checked={stored !== undefined}
+            // The visible text beside it is the state ("on", "(auto)"), which names the
+            // value rather than the knob; without this the checkbox has no usable name.
+            aria-label={knob.label}
             onChange={(e) => run(api.serveFlag(knob.key, e.target.checked))}
           />
           <span className={stored === undefined ? "dim" : ""}>
@@ -437,7 +440,13 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
           </>
         }
       >
-        {showCommand ? <pre className="loglist" style={{ maxHeight: 120 }}>{s.serve.command_preview}</pre> : null}
+        {showCommand ? (
+          // A command line is one value, not a log: wrap it rather than making the
+          // reader scroll a 120px box sideways to see the flags at the end.
+          <pre className="loglist wrap-text" style={{ maxHeight: 140 }}>
+            {s.serve.command_preview}
+          </pre>
+        ) : null}
         {s.serve.errors.slice(0, 4).map((error) => (
           <div key={`${error.key}-${error.message}`} className="bad mono">
             {knobByKey(schema, error.key)?.flag ?? error.key}: {error.message}

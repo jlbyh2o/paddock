@@ -824,6 +824,13 @@ async fn editing_a_knob_validates_before_it_commits() {
     }
     press(&mut a, KeyCode::Enter);
     assert!(!a.serve.is_set("memory_ratio"), "an out-of-range value must be rejected");
+    // The shared action stays silent so the browser can render the refusal against the
+    // field; a terminal has no inline slot, so the key path says it here.
+    assert!(
+        a.toasts.iter().any(|t| t.text == "--memory-ratio: must be between 0.05 and 1"),
+        "the terminal must still say why nothing happened: {:?}",
+        a.toasts.iter().map(|t| &t.text).collect::<Vec<_>>()
+    );
 
     press(&mut a, KeyCode::Enter);
     for c in "0.85".chars() {

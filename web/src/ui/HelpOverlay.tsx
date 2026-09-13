@@ -9,6 +9,7 @@
  * named per tab, and quitting is closing the tab.
  */
 
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 
 interface Binding {
@@ -140,6 +141,15 @@ const SECTIONS: { title: string; bindings: Binding[] }[] = [
 ];
 
 export function HelpOverlay(props: { onClose: () => void }): ReactNode {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  // Focus Close so Enter and Esc both dismiss — but without letting the browser scroll
+  // it into view. `autoFocus` did, and since this page is taller than a laptop viewport
+  // that scrolled the overlay to the bottom and cut off the first three sections.
+  useEffect(() => {
+    closeRef.current?.focus({ preventScroll: true });
+  }, []);
+
   return (
     <div className="overlay" role="presentation" onClick={props.onClose}>
       <div
@@ -170,7 +180,7 @@ export function HelpOverlay(props: { onClose: () => void }): ReactNode {
           </div>
         </div>
         <div className="dialog-foot">
-          <button type="button" className="btn" onClick={props.onClose} autoFocus>
+          <button type="button" className="btn" onClick={props.onClose} ref={closeRef}>
             Close <span className="dim">(Esc)</span>
           </button>
         </div>

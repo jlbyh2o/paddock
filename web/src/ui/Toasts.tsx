@@ -1,5 +1,5 @@
 /**
- * Toasts, top right.
+ * Toasts, bottom right, newest last (§5.1) — the corner the terminal uses too.
  *
  * Server toasts carry `age_ms` and `ttl_ms` (§2.15) so the browser can fade in step
  * with `App::expire_toasts` rather than running a timer of its own. Client-side

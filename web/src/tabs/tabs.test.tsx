@@ -7,6 +7,7 @@
 import { Suspense } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import type { Snapshot } from "../api/types.ts";
 import { fixture } from "../mock/fixture.ts";
 import { TABS } from "./index.ts";
 import { App } from "../App.tsx";
@@ -76,6 +77,41 @@ describe("tabs that fetch", () => {
       </Suspense>,
     );
     expect((await screen.findAllByText("/v1/chat/completions")).length).toBeGreaterThan(0);
+  });
+});
+
+describe("serve errors", () => {
+  /**
+   * §2.12: `serve.errors[].key` is whatever key was in the configuration, and
+   * `serve.validate` emits `("<key>", "unknown knob")` for one the schema does not
+   * know — a profile written against a newer FreeToken, or a hand-edited file. The
+   * Command pane resolves a key to its flag spelling and must fall back to the key
+   * itself rather than printing "undefined:".
+   */
+  it("prints a non-knob error key as itself", async () => {
+    const snapshot: Snapshot = {
+      ...fixture,
+      serve: {
+        ...fixture.serve,
+        errors: [
+          { key: "moe_fanout_beta", message: "unknown knob" },
+          { key: "model", message: "a model path or repo id is required" },
+        ],
+      },
+    };
+    const def = TABS.find((t) => t.id === "serve");
+    if (!def) throw new Error("no Serve tab");
+    const Body = def.Component;
+    render(
+      <Suspense fallback={<span>loading</span>}>
+        <Body snapshot={snapshot} />
+      </Suspense>,
+    );
+    // The unknown key prints verbatim; the known one resolves to its flag.
+    expect(await screen.findByText("moe_fanout_beta: unknown knob")).toBeTruthy();
+    expect(
+      await screen.findByText("--model: a model path or repo id is required"),
+    ).toBeTruthy();
   });
 });
 

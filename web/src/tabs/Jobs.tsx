@@ -41,7 +41,12 @@ export function Jobs(props: { snapshot: Snapshot }): ReactNode {
   const download =
     selected?.kind === "download" ? jobs.downloads.find((d) => d.id === selected.id) ?? null : null;
 
-  const output = useJobOutput(job ? job.id : null, true, job?.is_running ?? false);
+  const output = useJobOutput(
+    job ? job.id : null,
+    true,
+    job?.is_running ?? false,
+    job?.output_bytes ?? 0,
+  );
 
   const cancel = useCallback(() => {
     if (!selected) return;

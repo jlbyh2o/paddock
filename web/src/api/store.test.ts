@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type { JobOutputPage, LogLine, SeqPage } from "./types.ts";
+import { api } from "./client.ts";
 import {
   applyOutput,
   applyPage,
@@ -7,6 +9,7 @@ import {
   emptyOutput,
   isBehind,
   syncBuffer,
+  useJobOutput,
 } from "./store.ts";
 
 function line(seq: number, text = `line ${seq}`): LogLine {
@@ -142,5 +145,64 @@ describe("applyOutput", () => {
   it("caps the tail it keeps", () => {
     const next = applyOutput(emptyOutput(), page({ lines: ["a", "b", "c"] }), 2);
     expect(next.lines).toEqual(["b", "c"]);
+  });
+});
+
+/**
+ * §2.14 and §3.2: the job output pane used to poll on a one-second timer because the
+ * snapshot carried no counter for a job's file. `JobEntry.output_bytes` is that counter,
+ * so a fetch happens when it moves and not otherwise — plus one last read when the job
+ * stops running, because the final lines can land in the tick that sets `finished_at`.
+ */
+describe("useJobOutput", () => {
+  const emptyPage = (id: number): JobOutputPage => ({
+    id,
+    offset: 0,
+    next_offset: 0,
+    eof: true,
+    truncated: false,
+    lines: [],
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("fetches on selection, on every change of output_bytes, and once when the job stops", async () => {
+    const fetched = vi.spyOn(api, "jobOutput").mockImplementation((id: number) =>
+      Promise.resolve(emptyPage(id)),
+    );
+
+    const view = renderHook(
+      ({ running, bytes }: { running: boolean; bytes: number }) =>
+        useJobOutput(3, true, running, bytes),
+      { initialProps: { running: true, bytes: 0 } },
+    );
+    await act(async () => {});
+    expect(fetched).toHaveBeenCalledTimes(1);
+
+    // A snapshot that changed nothing about the file asks for nothing.
+    view.rerender({ running: true, bytes: 0 });
+    await act(async () => {});
+    expect(fetched).toHaveBeenCalledTimes(1);
+
+    // The file grew.
+    view.rerender({ running: true, bytes: 4096 });
+    await act(async () => {});
+    expect(fetched).toHaveBeenCalledTimes(2);
+
+    // It stopped running: one last read, even though the size did not move again.
+    view.rerender({ running: false, bytes: 4096 });
+    await act(async () => {});
+    expect(fetched).toHaveBeenCalledTimes(3);
+
+    // And then nothing, however many snapshots arrive.
+    view.rerender({ running: false, bytes: 4096 });
+    view.rerender({ running: false, bytes: 4096 });
+    await act(async () => {});
+    expect(fetched).toHaveBeenCalledTimes(3);
+
+    view.unmount();
   });
 });

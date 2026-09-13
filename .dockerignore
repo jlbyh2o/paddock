@@ -8,8 +8,10 @@
 
 !Cargo.toml
 !Cargo.lock
+!build.rs
 !src
 !docker
+!web
 
 # Re-excluded even inside the allowlist above; last match wins.
 **/.git
@@ -21,3 +23,8 @@
 **/id_rsa*
 **/.netrc
 **/*.log
+
+# The image builds its own frontend in a Node stage; a local node_modules or dist would
+# only add unused, possibly stale bytes to the build context.
+web/node_modules
+web/dist

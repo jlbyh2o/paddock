@@ -1,0 +1,243 @@
+{
+  "cache": {
+    "active_requests": 0,
+    "applying": false,
+    "budget_bytes": null,
+    "budget_ratio": null,
+    "current_bytes": null,
+    "delta_bytes": null,
+    "facts": [],
+    "has_pending": false,
+    "last_rebuild_summary": null,
+    "over_budget": false,
+    "pools": null,
+    "proposed_bytes": null,
+    "state": null
+  },
+  "config": {
+    "config_path": "/home/jeremy/.cache/tmp/ft-man-tests-1581241/config.toml",
+    "confirm_destructive": true,
+    "convert_preflight": true,
+    "disk_free": {
+      "free_bytes": 585574653952,
+      "measured_path": "/home/jeremy"
+    },
+    "download_dir": "/home/jeremy/models",
+    "ftw_dir": "/home/jeremy/models",
+    "hub_cache": "/home/jeremy/.cache/huggingface/hub",
+    "hub_concurrency": 4,
+    "hub_endpoint": "https://huggingface.co",
+    "hub_ignore": [
+      "*.bin",
+      "*.pth",
+      "*.msgpack",
+      "*.h5",
+      "*.onnx"
+    ],
+    "log_capacity": 5000,
+    "poll_ms": 1000,
+    "server_host": "0.0.0.0",
+    "server_port": 1919,
+    "state_dir": "/home/jeremy/.cache/tmp/ft-man-tests-1581241/state",
+    "template_sources": [
+      "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
+    ],
+    "templates_preflight": true,
+    "theme": "dark",
+    "tick_ms": 200
+  },
+  "confirm": null,
+  "engine": {
+    "active_downloads": 0,
+    "active_jobs": 0,
+    "adopted": false,
+    "command_line": null,
+    "completed_rate": 0.0,
+    "context_fit": null,
+    "endpoint": "http://127.0.0.1:1919",
+    "gpu_busy_reason": null,
+    "is_live": false,
+    "log_path": null,
+    "model": null,
+    "pid": null,
+    "port": null,
+    "prefix_reuse": null,
+    "server_reachable": false,
+    "state": {
+      "kind": "stopped"
+    },
+    "status_class": "dim",
+    "status_text": "not running"
+  },
+  "environment": {
+    "endpoint": "http://127.0.0.1:1919",
+    "ft_display": null,
+    "ft_error": null,
+    "ft_found": false,
+    "ft_origin": null,
+    "ft_program": null,
+    "hostname": "",
+    "hub_token_present": false,
+    "hub_token_source": null,
+    "supported_archs": null
+  },
+  "hardware": {
+    "bench_profile": null,
+    "bench_profile_path": null,
+    "bench_summary": null,
+    "engine_gpu_uuid": null,
+    "gpu_source": "NVML",
+    "gpus": [],
+    "host": {
+      "cpu_cores": 0,
+      "cpu_percent": 0.0,
+      "hostname": "",
+      "kernel": "",
+      "load_avg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "memory_free": 0,
+      "memory_ratio": 0.0,
+      "memory_total": 0,
+      "memory_used": 0,
+      "physical_cores": 0,
+      "swap_total": 0,
+      "swap_used": 0,
+      "uptime_s": 0
+    },
+    "reported_gpus": []
+  },
+  "hub": {
+    "checking_compat": false,
+    "compat": null,
+    "compat_error": null,
+    "custom_selection": false,
+    "disk_free": {
+      "free_bytes": 585574653952,
+      "measured_path": "/home/jeremy"
+    },
+    "files": [],
+    "hf_cli": "/home/jeremy/.local/bin/hf",
+    "hf_install_command": "curl -LsSf https://hf.co/cli/install.sh | bash -s -- --exclude-skill",
+    "hf_installing": false,
+    "info": null,
+    "layout": null,
+    "loading_info": false,
+    "query": "",
+    "results": [],
+    "revision": "main",
+    "searching": false,
+    "selected_bytes": 0,
+    "selected_count": 0,
+    "target": "/home/jeremy/models",
+    "variant": null
+  },
+  "jobs": {
+    "convert_checking": null,
+    "downloads": [],
+    "items": []
+  },
+  "logs": {
+    "capacity": 5000,
+    "count": 0,
+    "dropped": 0,
+    "first_seq": 0,
+    "last_seq": 0,
+    "log_path": null
+  },
+  "models": {
+    "config_path": "/home/jeremy/.cache/tmp/ft-man-tests-1581241/config.toml",
+    "items": [],
+    "roots": [
+      {
+        "exists": false,
+        "path": "/home/jeremy/models"
+      },
+      {
+        "exists": true,
+        "path": "/home/jeremy/.cache/huggingface/hub"
+      }
+    ],
+    "scanning": false
+  },
+  "requests": {
+    "count": 0,
+    "dropped": 0,
+    "engine_cursor": 0,
+    "first_seq": 0,
+    "last_seq": 0,
+    "paused": false
+  },
+  "seq": 1,
+  "series": {
+    "active": [],
+    "decode_peak": 0.0,
+    "decode_tps": [],
+    "gpu_util": [],
+    "prefill_tps": [],
+    "vram": []
+  },
+  "serve": {
+    "command_preview": "ft serve --host 0.0.0.0 --port 1919",
+    "errors": [
+      {
+        "key": "model",
+        "message": "a model path or repo id is required"
+      }
+    ],
+    "last_used_profile": null,
+    "plan": null,
+    "profiles": [],
+    "set_counts": {
+      "api": 0,
+      "memory": 0,
+      "model": 0,
+      "moe": 0,
+      "runtime": 0,
+      "server": 2
+    },
+    "values": {
+      "host": "0.0.0.0",
+      "port": "1919"
+    }
+  },
+  "telemetry": {
+    "age_ms": null,
+    "cache_status": null,
+    "error": null,
+    "health": null,
+    "health_load_ratio": null,
+    "kv_ratio": null,
+    "kv_total_tokens": null,
+    "kv_used_tokens": null,
+    "last_rebuild_summary": null,
+    "mamba_ratio": null,
+    "pool_bytes": null,
+    "stats": null,
+    "swa_ratio": null,
+    "swa_total_tokens": null,
+    "swa_used_tokens": null,
+    "total_experts": null
+  },
+  "templates": {
+    "checking": false,
+    "loading": false,
+    "preflight": null,
+    "preflight_enabled": true,
+    "preview": null,
+    "remote": [],
+    "remote_repo": null,
+    "remote_revision": null,
+    "remote_stored_names": [],
+    "repo": "peculiar-ragdoll/Qwen-Sharp-Chat-Templates",
+    "sources": [
+      "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
+    ],
+    "stored": []
+  },
+  "toasts": [],
+  "ts_ms": 1789315137388,
+  "version": "0.3.0"
+}

@@ -881,6 +881,12 @@ export interface JobEntry {
   log_path: string;
   /** Where a bench run wrote its profile. */
   output_path: string | null;
+  /**
+   * Size of the job's output file right now. It is the change counter for
+   * `GET /api/jobs/{id}/output`: poll when it moves, not on a timer. `0` when the job
+   * has written nothing yet.
+   */
+  output_bytes: number;
   /** `Job::failure_reason()` — the most informative line the process printed. */
   failure_reason: string | null;
   is_running: boolean;

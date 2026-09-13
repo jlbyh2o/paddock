@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# FreeToken's MoE serving engine plus the ft-man terminal UI, ready to run on a rented
-# NVIDIA GPU.
+# FreeToken's MoE serving engine plus ft-man's terminal and web UIs, ready to run on a
+# rented NVIDIA GPU.
 #
 # Nothing here identifies who built it: no maintainer label, no source repository, no
 # host paths, no credentials, and no fork remotes. docker/scan-image.sh proves that
@@ -13,12 +13,32 @@
 # devel is 3.97 GB compressed, runtime 1.65 GB, and the packages added below cost ~0.2 GB.
 ARG CUDA_IMAGE=nvidia/cuda:13.0.3-devel-ubuntu24.04
 ARG RUST_IMAGE=rust:1.98.0-slim-bookworm
+ARG NODE_IMAGE=node:24-bookworm-slim
 # Vast's official base. Larger than a bare CUDA runtime, but Vast hosts keep these layers
 # cached -- observed pulling near-instantly on real rentals -- so the incremental pull is
 # our layers alone. It also brings the Instance Portal, and Caddy in front of the engine
 # with TLS and authentication, which matters because `ft serve` has none of its own.
 # Its CUDA is 13.0.3 and its /usr/bin/python3 is 3.12, matching what the venv was built for.
 ARG VASTAI_IMAGE=vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-08-28
+
+
+# --- frontend ------------------------------------------------------------------------
+# Built before the Rust stage that embeds it: `build.rs` copies `web/dist` into the binary
+# via `rust-embed` and never runs `npm` itself -- a `cargo build` that shells out to a
+# package manager is a network operation in disguise. A separate Node image rather than
+# installing Node into ft-man-builder keeps that stage's cache keyed on Cargo files and
+# Rust source only.
+FROM ${NODE_IMAGE} AS frontend-builder
+
+WORKDIR /build/web
+
+# package.json and the lockfile alone first, so `npm ci` reruns only when a dependency
+# changes, not on every source edit.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
 
 
 # --- ft-man ------------------------------------------------------------------------
@@ -30,14 +50,17 @@ FROM ${RUST_IMAGE} AS ft-man-builder
 WORKDIR /build
 
 # Dependencies compile from a stub main so that editing ft-man rebuilds one crate rather
-# than the whole tree. Nothing but Cargo.toml and Cargo.lock is in the context yet.
-COPY Cargo.toml Cargo.lock ./
+# than the whole tree. build.rs comes along here too -- it embeds its placeholder page in
+# this pass, since web/dist does not exist yet -- but Cargo.lock, not source, is what pins
+# the dependency graph this step actually builds.
+COPY Cargo.toml Cargo.lock build.rs ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
  && cargo build --release --locked \
  && rm -rf src target/release/ft-man target/release/deps/ft_man-*
 
 COPY src ./src
+COPY --from=frontend-builder /build/web/dist ./web/dist
 # cargo compares mtimes, and COPY can land a file older than the stub build; touch makes
 # the rebuild unconditional so the stub can never survive into the image.
 RUN touch src/main.rs && cargo build --release --locked && /build/target/release/ft-man --version
@@ -150,7 +173,10 @@ COPY --from=ft-man-builder /build/target/release/ft-man /usr/local/bin/ft-man
 COPY docker/entrypoint.sh docker/onstart.sh /opt/ft/
 COPY docker/supervisor/freetoken-setup.conf /etc/supervisor/conf.d/freetoken-setup.conf
 COPY docker/supervisor/freetoken-setup.sh /opt/supervisor-scripts/freetoken-setup.sh
-RUN chmod 0755 /opt/ft/entrypoint.sh /opt/ft/onstart.sh /opt/supervisor-scripts/freetoken-setup.sh \
+COPY docker/supervisor/ft-man-web.conf /etc/supervisor/conf.d/ft-man-web.conf
+COPY docker/supervisor/ft-man-web.sh /opt/supervisor-scripts/ft-man-web.sh
+RUN chmod 0755 /opt/ft/entrypoint.sh /opt/ft/onstart.sh \
+      /opt/supervisor-scripts/freetoken-setup.sh /opt/supervisor-scripts/ft-man-web.sh \
  && ln -sf /opt/freetoken/venv/bin/ft /usr/local/bin/ft \
  && ln -sf /opt/freetoken/venv/bin/hf /usr/local/bin/hf
 
@@ -171,6 +197,13 @@ ENV HF_HOME=/workspace/hf \
 # drop the base image's own entries.
 EXPOSE 18919
 
+# ft-man's web interface, started by the ft-man-web supervisor program (see
+# docker/supervisor/). onstart.sh binds it to loopback too -- it can start and stop the
+# engine and delete checkpoints, the same reach SECURITY.md describes for the TUI, and it
+# has no auth of its own by default -- so reaching it the same way as the engine, through
+# Caddy or an SSH tunnel, is deliberate rather than an oversight. See docker/README.md.
+EXPOSE 7979
+
 LABEL org.opencontainers.image.title="freetoken-ftman" \
-      org.opencontainers.image.description="FreeToken MoE serving engine with the ft-man terminal UI, CUDA 13" \
+      org.opencontainers.image.description="FreeToken MoE serving engine with the ft-man terminal and web UIs, CUDA 13" \
       org.opencontainers.image.licenses="Apache-2.0"

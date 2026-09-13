@@ -83,6 +83,13 @@ ftw_dir = "/workspace/models"
 # too. Outside Vast, reach it with `ssh -N -L 1919:127.0.0.1:1919 <host>`.
 host = "127.0.0.1"
 port = 1919
+
+[web]
+# Loopback for the same reason as [server] above: ft-man web can start and stop the engine,
+# delete checkpoints and write files, and its own auth is opt-in. The ft-man-web supervisor
+# program (docker/supervisor/) serves it here; front it with Caddy the same way as the
+# engine's 1919 -- see docker/README.md -- rather than mapping 7979 directly.
+listen = "127.0.0.1:7979"
 TOML
   log "wrote $CFG"
 fi
@@ -101,4 +108,5 @@ else
 fi
 log "ft:     $(ft --version 2>&1 | head -1)"
 log "ft-man: $(ft-man --version 2>&1 | head -1)"
+log "ft-man web is supervised and listening on 127.0.0.1:7979 -- see docker/README.md to front it"
 log "ready. run: ft-man --doctor"

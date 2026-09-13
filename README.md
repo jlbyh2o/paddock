@@ -1,10 +1,10 @@
 # ft-man
 
-A terminal UI for managing [FreeToken](https://github.com/FlashML-org/FreeToken) on the
-machine it runs on. Browse and download checkpoints from Hugging Face, convert them to
-FreeToken's FTW format, configure every `ft serve` knob, launch and supervise the engine,
+A terminal UI and a browser UI for managing [FreeToken](https://github.com/FlashML-org/FreeToken)
+on the machine it runs on. Browse and download checkpoints from Hugging Face, convert them
+to FreeToken's FTW format, configure every `ft serve` knob, launch and supervise the engine,
 retune its cache pools without a restart, and watch throughput, requests and logs — from
-one screen.
+one screen, in a terminal or a browser.
 
 ```
  ft-man  1 Dashboard  2 Models  3 Hub  4 Templates  5 Serve  6 Cache  7 Jobs  8 Requests  9 Logs   ● serving · Qwen3.6-35B
@@ -37,7 +37,8 @@ supervision that keeps a serve alive across sessions.
 - Linux x86_64 (developed against Debian 13), NVIDIA GPU
 - A current FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md).
   Its virtualenv also supplies the `hf` CLI that Hub downloads are delegated to
-- Rust 1.88+ to build
+- Rust 1.88+ and Node 24 to build from source. A release tarball needs neither: the
+  frontend ships already built into the binary
 
 `ft-man` drives FreeToken's own CLI and HTTP API; it does not link against or vendor any
 of it. It tracks the CLI as it stands rather than supporting several versions at once:
@@ -68,13 +69,19 @@ tar xzf ft-man-<version>-x86_64-unknown-linux-gnu.tar.gz
 install -Dm755 ft-man-*/ft-man ~/.local/bin/ft-man
 ```
 
-Or build it yourself:
+Or build it yourself. The frontend is a separate build step — `build.rs` embeds
+`web/dist` into the binary, and it never runs `npm` itself, so build it first:
 
 ```bash
 git clone https://github.com/jlbyh2o/ft-man-tui && cd ft-man-tui
+cd web && npm ci && npm run build && cd ..
 cargo build --release
 install -Dm755 target/release/ft-man ~/.local/bin/ft-man
 ```
+
+`scripts/build-release.sh` does the same two steps inside the `rust:1.98.0-slim-bookworm`
+image, which is how the published binary is actually built — it targets an older glibc
+than most development machines have, so it runs on Debian 12, Ubuntu 22.04 and RHEL 9 too.
 
 ## Getting started
 
@@ -96,6 +103,49 @@ ft-man --venv ~/FreeToken/.venv
 ft-man --init-config
 $EDITOR ~/.config/ft-man/config.toml
 ```
+
+## The web interface
+
+```bash
+ft-man web                            # serve on [web] listen, default 0.0.0.0:7979
+ft-man web --listen 127.0.0.1:8000
+ft-man web --token secret             # every /api request must carry it
+```
+
+`ft-man web` runs the same `App` the TUI runs — the same telemetry poller, engine
+supervisor, job runner and download tracker — and serves it as a single-page application
+instead of drawing to a terminal. It is a long-lived daemon: like the TUI it never stops
+the engine on exit unless a stop was asked for, and it re-adopts a running engine from
+`serve.json` on startup. Every screen, action and confirmation is the same on both front
+ends, because both are the one `App` with two faces rather than two programs.
+
+A TUI and the web daemon can run at once on the same machine, and both can drive the same
+engine: either can start it, both poll it, and either can stop it. What they do not share
+is jobs — a conversion, a benchmark or a download started in one is a child process visible
+only to that process, though its effect (a converted checkpoint, a completed download)
+shows up in the library for the other once it finishes. The web daemon is the natural place
+to kick off a long conversion on a headless box and check on it from a TUI later.
+
+`ft serve` has no authentication of any kind, and `ft-man web` follows the same default:
+with no `[web] token` set, anything that can reach the port can start or stop the engine,
+delete checkpoints, and read everything the UI shows. That default is fine on a machine
+only you can reach. The moment the box is reachable from an untrusted network, either bind
+`--listen 127.0.0.1:...` and reach it over an SSH tunnel, or set `--token`/`[web] token` and
+put it in front of a network you don't fully trust.
+
+Building the frontend needs Node 24 (`cd web && npm ci && npm run build` before
+`cargo build`) — see [Install](#install). A release tarball ships it already built in.
+
+To run it as a service rather than a foreground command, install the provided unit:
+
+```bash
+sudo install -m644 contrib/ft-man-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ft-man-web
+```
+
+Edit `User=` (and `HF_HOME`, if your cache lives somewhere other than the unit's default)
+before installing — see the comments in the file.
 
 ## The screens
 
@@ -327,6 +377,10 @@ theme = "auto"                # auto | dark | light | mono
 tick_ms = 200
 log_capacity = 5000
 confirm_destructive = true
+
+[web]
+listen = "0.0.0.0:7979"       # also the default `ft-man web --listen`
+# token = "secret"            # or set `ft-man web --token`; unset means no auth
 ```
 
 Profiles live beside it in `profiles.toml` and are plain TOML — a profile records only the
@@ -338,9 +392,13 @@ changes what auto means.
 ```
 ft-man [--host HOST] [--port PORT] [--venv DIR] [--ft-binary PATH]
        [--models DIR]... [--theme NAME] [--tab TAB] [--doctor] [--init-config]
+       [web [--listen ADDR] [--token TOKEN]]
 ```
 
-CLI flags override the config file for that run and are not written back.
+`ft-man web` serves the browser UI instead of drawing the terminal one; every other flag
+above is a global that applies to it too (`--venv`, `--ft-binary`, `--models`, `--host` and
+`--port` for the engine it polls). CLI flags override the config file for that run and are
+not written back.
 
 ## A typical first run
 
@@ -385,15 +443,20 @@ OpenAI and Anthropic APIs.
 ## Development
 
 ```bash
-cargo test        # 215 tests, including render and input sweeps across five terminal sizes
+cargo test                    # Rust: TUI, web layer, and everything under them
+cd web && npm run check       # frontend: tsc --noEmit, then vitest
 cargo clippy --all-targets
 cargo fmt
 ```
 
-The render tests draw every view at 40×12 through 200×60, in every theme, empty and
-populated, with each overlay open — and the input tests press every printable and
-navigation key on every tab. A TUI that panics mid-draw corrupts the terminal, so that is
-the failure mode most worth spending tests on.
+`cargo test` covers the render and input sweeps — every view drawn at 40×12 through
+200×60, in every theme, empty and populated, with each overlay open, plus every printable
+and navigation key pressed on every tab, because a TUI that panics mid-draw corrupts the
+terminal — and, for the web layer, snapshot construction from a populated `App` and every
+route exercised through `tower::ServiceExt::oneshot` against an `App` with no FreeToken,
+which is the state CI runs in. `npm run check` covers the reducers and formatters on the
+frontend side and type-checks the whole thing; CI runs it, and `npm run build`, before
+`cargo test`.
 
 ## Notes
 

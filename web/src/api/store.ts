@@ -371,11 +371,20 @@ export function applyOutput(
 export const jobOutputStore = new Store<OutputBuffer>(emptyOutput());
 
 /**
- * Poll one job's output. A running job's file grows without any counter in the
- * snapshot to watch, so this ticks once a second; a finished job is read until
- * `eof` and then left alone.
+ * Poll one job's output.
+ *
+ * `JobEntry.output_bytes` (§2.14) is the change counter: it is the size of the file
+ * this route reads, so a new value means new bytes and an unchanged one means there
+ * is nothing to ask for. Selecting a job reads once; after that a fetch happens only
+ * when the size moved, plus one final read when the job stops running — the last
+ * lines can land in the same tick that sets `finished_at`.
  */
-export function useJobOutput(jobId: number | null, active: boolean, running: boolean): OutputBuffer {
+export function useJobOutput(
+  jobId: number | null,
+  active: boolean,
+  running: boolean,
+  outputBytes: number,
+): OutputBuffer {
   const buffer = useStore(jobOutputStore);
   const busy = useRef(false);
 
@@ -400,15 +409,10 @@ export function useJobOutput(jobId: number | null, active: boolean, running: boo
       return;
     }
     if (!active) return;
+    // `outputBytes` and `running` are in the dependency list rather than the body: the
+    // effect is the poll, and it re-runs exactly when one of them changed.
     void poll(jobId);
-    if (!running) return;
-    const timer = setInterval(() => {
-      void poll(jobId);
-    }, 1000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [jobId, active, running, poll]);
+  }, [jobId, active, running, outputBytes, poll]);
 
   return buffer;
 }

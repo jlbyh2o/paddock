@@ -64,6 +64,19 @@ CUDA_MAJOR="$(docker run --rm --entrypoint /bin/bash "$STAGING" \
 TAG="ft${FT_VERSION}-man${MAN_VERSION}-cu${CUDA_MAJOR}"
 echo "    freetoken $FT_VERSION, ft-man $MAN_VERSION, cuda $CUDA_MAJOR  ->  :$TAG"
 
+# build.rs embeds a placeholder page, silently, whenever web/dist/index.html is missing --
+# that keeps `cargo build` working with no Node installed, but it also means a frontend
+# stage that failed or produced nothing would still leave the Rust build, and this script,
+# looking green. Catch it by grepping the binary for the placeholder's own text (-a treats
+# it as text; no need for binutils) rather than trusting the build to have failed loudly.
+echo "==> checking the web frontend actually got embedded"
+if docker run --rm --entrypoint /bin/bash "$STAGING" \
+     -c 'grep -aq "was not built into this binary" /usr/local/bin/ft-man'; then
+  echo "ft-man shipped the frontend-not-built placeholder page. web/dist did not build." >&2
+  echo "Not tagging or pushing $STAGING." >&2
+  exit 1
+fi
+
 LOCAL="${IMAGE_NAME}:${TAG}"
 docker tag "$STAGING" "$LOCAL"
 docker tag "$STAGING" "${IMAGE_NAME}:latest"
@@ -103,6 +116,8 @@ On Vast, rent a host with driver r580+ (CUDA 13), then:
   launch mode    Jupyter notebook + SSH   (Entrypoint gives no sshd, so no way in)
   on-start       entrypoint.sh            (required: this mode replaces the entrypoint)
   PORTAL_CONFIG  append  localhost:18919:1919:/:FreeToken API
-  ports          do NOT map 1919 - ft serve has no auth; Caddy publishes it on 18919
+                 and, for the ft-man web interface, localhost:17979:7979:/:ft-man web
+  ports          do NOT map 1919 or 7979 directly - neither has auth on by default;
+                 Caddy publishes them on 18919 and 17979 instead
   env            HF_TOKEN=<token>   (only for gated or private repos)
 MSG

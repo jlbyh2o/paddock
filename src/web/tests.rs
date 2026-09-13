@@ -239,6 +239,45 @@ async fn a_guarded_daemon_refuses_every_api_route_without_a_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// Section 1.3: the stream is gated like every other route, and an unauthorized request
+/// must be answered as JSON *before* the response becomes an event stream. A `200
+/// text/event-stream` that then carries an error frame is unparseable by `EventSource`,
+/// which is why the frontend re-probes `/api/auth` on a stream error and needs a real 401
+/// to find.
+#[tokio::test]
+async fn the_event_stream_is_a_json_401_before_it_is_a_stream() {
+    let state = guarded().await;
+    let (status, body, content_type) = raw(&state, get("/api/events")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert!(!body.contains("event:"), "no SSE bytes may precede the refusal: {body}");
+    let parsed: Value = serde_json::from_str(&body).expect("the envelope is JSON");
+    assert!(parsed["error"].is_string());
+
+    // And with the cookie the browser actually sends, the stream opens.
+    let response =
+        super::router(state.clone()).oneshot(with_cookie(get("/api/events"), TOKEN)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+        Some("text/event-stream")
+    );
+}
+
+/// A cookie jar holds more than ours, and a pair with no `=` in it must not end the
+/// search before `ft_man_token` is reached.
+#[tokio::test]
+async fn an_odd_cookie_beside_ours_does_not_hide_it() {
+    let state = guarded().await;
+    let mut req = get("/api/snapshot");
+    req.headers_mut().insert(
+        header::COOKIE,
+        format!("consent; theme=dark; ft_man_token={TOKEN}").parse().unwrap(),
+    );
+    let (status, _) = send(&state, req).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn either_the_header_or_the_cookie_authorizes() {
     let state = guarded().await;
@@ -378,6 +417,41 @@ async fn a_jobs_output_page_needs_a_real_job() {
 
 /// The fixture's jobs have a log path that was never written, which is the shape a daemon
 /// restarted mid-conversion sees.
+/// Section 2.14: `output_bytes` is the change counter for `GET /api/jobs/{id}/output`.
+/// Without it the browser had no way to know a job's file had grown and polled on a
+/// timer; with it a client fetches when the number moves and not otherwise.
+#[tokio::test]
+async fn a_job_reports_the_size_of_its_output_file() {
+    let state = unguarded().await;
+    let dir = crate::config::state_dir().join("job-output-size");
+    std::fs::create_dir_all(&dir).expect("a place to write a log");
+    let log = dir.join("job.log");
+    std::fs::write(&log, "one line\n").expect("a log to measure");
+
+    state.write(|app| {
+        let mut job = crate::ft::Job::fake(
+            crate::ft::proc::JobKind::Convert,
+            "measurable",
+            crate::ft::proc::JobStatus::Running,
+            crate::ft::proc::JobProgress::default(),
+        );
+        job.log_path = log.clone();
+        app.jobs = vec![job];
+    });
+
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(snap["jobs"]["items"][0]["output_bytes"], 9);
+
+    std::fs::write(&log, "one line\nand another\n").expect("the job writes more");
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(snap["jobs"]["items"][0]["output_bytes"], 21, "a grown file moves the counter");
+
+    // A job whose file is not there yet reports zero rather than failing the snapshot.
+    state.write(|app| app.jobs[0].log_path = dir.join("never-written.log"));
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(snap["jobs"]["items"][0]["output_bytes"], 0);
+}
+
 #[tokio::test]
 async fn a_jobs_output_page_reports_a_missing_log_rather_than_panicking() {
     let state = populated().await;
@@ -797,6 +871,35 @@ async fn setting_a_knob_validates_clears_exclusions_and_unsets_on_null() {
     assert_eq!(body["error"], "no knob named 'nope'");
 }
 
+/// Section 4.8 and the exception in 1.2: a rejected knob value is the one refusal that
+/// pushes no toast. The browser renders it inline against the field, and two renderings of
+/// one problem is what the rule exists to prevent. The terminal still toasts, from
+/// `input::commit_knob_edit`, because it has no inline slot.
+#[tokio::test]
+async fn a_rejected_knob_value_is_shown_inline_and_never_toasted() {
+    let state = unguarded().await;
+    let (status, body) = send(
+        &state,
+        post("/api/serve/knob", serde_json::json!({"key": "memory_ratio", "value": "1.5"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "--memory-ratio: must be between 0.05 and 1");
+
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(
+        snap["toasts"],
+        serde_json::json!([]),
+        "a validation failure has an inline slot in the browser; it must not also toast"
+    );
+
+    // Every other refusal still does, so the rule stays one exception rather than a drift.
+    let (status, _) = send(&state, post("/api/engine/stop", serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(snap["toasts"].as_array().map(Vec::len), Some(1));
+}
+
 #[tokio::test]
 async fn flags_toggle_and_choices_cycle_through_unset() {
     let state = unguarded().await;
@@ -1078,4 +1181,94 @@ async fn the_event_stream_opens_with_a_snapshot() {
     let parsed: Value = serde_json::from_str(data).expect("the frame is one JSON line");
     assert!(parsed["seq"].as_u64().unwrap() >= 1);
     assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+}
+
+// ---------------------------------------------------------------- wire fixtures
+
+/// The frontend's wire tests read real documents rather than a hand-written imitation of
+/// one, so the two halves of the contract are compared mechanically. This test asserts
+/// the documents parse; with `FT_MAN_DUMP_SNAPSHOTS=1` it also rewrites the fixtures
+/// under `web/src/mock/`, which is how they are regenerated after a shape change.
+#[tokio::test]
+async fn the_wire_fixtures_the_frontend_reads_are_this_serialization() {
+    let dump = std::env::var("FT_MAN_DUMP_SNAPSHOTS").is_ok_and(|v| v == "1");
+    let mock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/mock");
+
+    let cases: [(&str, Shared); 2] = [
+        ("snapshot.populated.json", wire_populated().await),
+        ("snapshot.empty.json", unguarded().await),
+    ];
+    for (name, state) in cases {
+        let (status, body) = send(&state, get("/api/snapshot")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_object(), "{name} is an object");
+        write_fixture(dump, &mock.join(name), &body);
+    }
+
+    let state = unguarded().await;
+    let (status, knobs) = send(&state, get("/api/knobs")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(knobs["knobs"].as_array().is_some_and(|k| !k.is_empty()), "the schema is non-empty");
+    write_fixture(dump, &mock.join("knobs.json"), &knobs);
+}
+
+fn write_fixture(dump: bool, path: &std::path::Path, value: &Value) {
+    if !dump {
+        return;
+    }
+    let mut text = serde_json::to_string_pretty(value).expect("a fixture serializes");
+    text.push('\n');
+    std::fs::write(path, text).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+}
+
+/// `smoke::populate` fills the panes a terminal draws, but several wire shapes are only
+/// reachable through an action — a pending confirmation, a built plan, a render check, a
+/// multi-quantization layout. The frontend fixture has to carry them, because a field the
+/// populated document never produces is a field neither side can be checked against. So
+/// the dump starts from `populate` and then puts every optional structure into state.
+async fn wire_populated() -> Shared {
+    let mut app = fresh().await;
+    smoke::populate(&mut app);
+
+    app.info("engine started");
+    app.warn("the hf CLI is not installed");
+
+    app.confirm = Some(crate::ui::widgets::Confirm::new(
+        "Delete checkpoint",
+        vec!["/models/Qwen3.6-35B-A3B".into(), String::new(), "frees 21.0 GiB".into()],
+        crate::ui::widgets::ConfirmAction::DeleteModel("/models/Qwen3.6-35B-A3B".into()),
+        true,
+    ));
+
+    app.hub_view.layout = crate::variants::analyze(&[
+        crate::hub::Sibling { path: "config.json".into(), size: Some(1400) },
+        crate::hub::Sibling { path: "UD-IQ3_XXS/model-00001-of-00002.gguf".into(), size: Some(9) },
+        crate::hub::Sibling { path: "Q8_0/model.gguf".into(), size: Some(18) },
+    ]);
+    app.hub_view.variant = Some("Q8_0".into());
+
+    app.templates_view.preflight =
+        Some(("qwen-sharp".into(), crate::ft::Preflight::Ok("renders in 4 ms".into())));
+
+    if let Some(health) = app.telemetry.health.as_mut() {
+        health.phase = Some("experts".into());
+        health.progress = Some(crate::ft::types::LoadProgress {
+            done_bytes: 12_884_901_888,
+            total_bytes: 22_548_578_304,
+        });
+    }
+
+    // Name the serve after the model the engine reports, so the live geometry prices the
+    // plan and `plan.fit` is a document rather than a null.
+    app.serve.set("served_model_name", "Qwen3.6-35B-A3B");
+    // Two knobs the schema declares mutually exclusive, so `serve.errors` carries the
+    // shape the Serve tab renders inline. `ServeConfig::set` clears exclusions, so the
+    // clash is reached the way a real one is: a profile written before they collided.
+    let mut values = serde_json::to_value(&app.serve).expect("the serve config serializes");
+    values["num_pages"] = "16384".into();
+    values["num_tokens"] = "262144".into();
+    app.serve = serde_json::from_value(values).expect("the serve config round-trips");
+    app.serve_view.plan = crate::ui::views::plan::build(&app).ok();
+
+    WebState::new(app, Auth::new(None))
 }

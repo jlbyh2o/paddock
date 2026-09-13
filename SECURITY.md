@@ -28,6 +28,22 @@ address.
   requires credentials. The container in `docker/` does this with the Vast.ai Instance
   Portal's Caddy layer; see `docker/README.md`.
 
+## The web interface has no authentication by default either
+
+`ft-man web` serves the same control surface the TUI has, over HTTP, to whoever can reach
+the port: it can start and stop the engine, delete checkpoints, write files (an FTW
+conversion, a chat template override) and read every log line and request in the ring.
+Authentication is an opt-in bearer token (`[web] token` / `--token`) checked against
+`Authorization: Bearer` or a cookie the login page sets; with no token configured, anything
+that can open a TCP connection to the port has the whole surface, which is the same
+no-auth-by-default `ft serve` already has. There is no TLS — traffic, including the token
+if one is set, is plaintext.
+
+Treat it the same way as the engine: fine on a machine only you can reach, wrong the moment
+the host has a public address. Bind `[web] listen` to `127.0.0.1` and reach it over an SSH
+tunnel, or set a token and put an authenticating, TLS-terminating reverse proxy in front of
+it — do not publish port 7979 directly to the internet.
+
 ## Tokens
 
 ft-man reads a Hugging Face token from `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, `hub.token` in

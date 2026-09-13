@@ -709,7 +709,11 @@ fn commit_knob_edit(app: &mut App) {
         actions::unset_knob(app, k, false);
         return;
     }
-    let _ = actions::set_knob(app, k.key, Some(&value));
+    // A terminal has nowhere to put an inline error, so the refusal becomes a toast here
+    // rather than inside the shared action, which the web UI renders against the field.
+    if let Err(refusal) = actions::set_knob(app, k.key, Some(&value)) {
+        app.error(refusal.message);
+    }
 }
 
 fn suggested_profile_name(app: &App) -> String {

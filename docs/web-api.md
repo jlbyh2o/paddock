@@ -51,6 +51,14 @@ Rules the frontend can rely on:
   toast and changes nothing. The same toast is pushed onto `app.toasts` and arrives in the
   next snapshot, so the browser may render either the status body or the toast, but must
   not render both as two separate problems.
+* **Exceptions — refusals that push no toast.** A refusal that belongs to one field is
+  rendered against that field, and a toast beside it is the same problem twice. There is
+  one such route today:
+  | Route | Case | Why |
+  |---|---|---|
+  | `POST /api/serve/knob` | `409` from `knobs::validate_value` | The message names the flag and the browser has an inline slot under the field. The TUI has none, so `input::commit_knob_edit` raises the toast on the terminal's own side of the shared action (section 4.8) |
+  Every other refusal toasts. A client can therefore treat "409 or 503 with no new toast"
+  as belonging to the field it just submitted.
 * An action that succeeds returns `200` with a small typed reply (section 4). Any state it
   changed arrives through the snapshot stream, never in the reply.
 * A `200` does **not** always mean "done". When `ui.confirm_destructive` is on, an action
@@ -87,6 +95,18 @@ Optional, off by default, exactly as `[web] token` / `--token` describe in web-u
 
 `GET /api/events` cannot send an `Authorization` header from `EventSource`, so the cookie
 is the path a browser actually uses; the bearer header exists for `curl` and for tests.
+
+**`GET /api/events` when unauthenticated** — `401` with the ordinary JSON envelope
+(`content-type: application/json`), decided *before* the response becomes a stream. Not
+one SSE byte is written: no `retry:`, no comment, no `event: snapshot`. A `200
+text/event-stream` carrying an error frame would be worse than useless, because
+`EventSource` surfaces it as an opaque `onerror` with no status to read.
+
+`EventSource` does not expose the status code either, so the browser's recovery is to
+re-probe `GET /api/auth` (never gated) whenever the stream errors, and go to the login
+page when it answers `auth_required: true, authorized: false`. That is what `web/` does,
+and it is why the refusal must be a real `401` rather than a closed connection: a daemon
+that simply dropped the stream would be indistinguishable from one that had stopped.
 
 ### 1.4 Static assets and SPA fallback
 
@@ -538,6 +558,7 @@ mismatch is silent, so the browser must never read `cache_status.geometry.limits
 | `finished_at` | string \| null | `Job::finished_at` |
 | `log_path` | string | `Job::log_path` |
 | `output_path` | string \| null | `Job::output_path` — where a bench run wrote its profile |
+| `output_bytes` | number | The size of `log_path` right now (`fs::metadata(&job.log_path).len()`), `0` when the file does not exist yet. **This is the change counter for `GET /api/jobs/{id}/output`** — it moves when and only when there is something new to fetch, so a client polls on the number rather than on a timer. It is a `stat` per job per snapshot, which is why it is here and not a second route |
 | `failure_reason` | string \| null | **`Job::failure_reason()`** — the most informative line the process printed, preferred over the exit code. `null` unless the job failed |
 | `is_running` | boolean | `Job::is_running()` |
 
@@ -645,7 +666,7 @@ provenance (section 2.18), never as a value.
 
 | Field | Type | Source |
 |---|---|---|
-| `theme` | string | `config.ui.theme` — `auto`, `dark`, `light`, `mono` |
+| `theme` | string | `config.ui.theme` — `auto`, `dark`, `light`, `mono`. **Informational.** It names the *terminal's* palette; the web UI follows `prefers-color-scheme` with its own toggle, because a browser theme is a per-browser choice and the daemon is shared. Nothing in `web/` reads this field, and a client that wanted to could only mislead a second browser with it |
 | `confirm_destructive` | boolean | `config.ui.confirm_destructive`. When false, actions run immediately and `confirm` is never populated |
 | `tick_ms` | number | `config.ui.tick_ms` |
 | `log_capacity` | number | `config.ui.log_capacity` |
@@ -780,6 +801,12 @@ must be reconciled with what the TUI's output pane shows:
 | `eof` | boolean | True when `next_offset` is the end of the file |
 | `truncated` | boolean | True when the requested `offset` was past the end of the file (the file was rotated or removed) and the read restarted at 0 |
 | `lines` | string[] | Complete lines, progress protocol removed |
+
+**When to poll.** `JobEntry.output_bytes` (section 2.14) is the size of the very file this
+route reads. A client fetches once when it selects a job, then again whenever
+`output_bytes` differs from the value it last fetched at, and once more when the job stops
+running — the last lines can be written in the same tick that sets `finished_at`. There is
+no timer: an unchanged counter means an unchanged file.
 
 The header the output pane shows above the text — command line, log path, bench profile
 path — comes from the snapshot's `JobEntry` (`command_line`, `log_path`, `output_path`),
@@ -1162,7 +1189,14 @@ agree.
   and what committing an empty editor does. Reply `200 {"status":"ok","set":false}`.
 * Otherwise the value is trimmed and checked with **`knobs::validate_value(knob, value)`**.
   A failure is `409 {"error": "--kv-reserve-tokens: must be at least 0"}` — the flag
-  spelling followed by the message, exactly as the TUI toasts it — and nothing is stored.
+  spelling followed by the message — and nothing is stored.
+  **This refusal pushes no toast** (the exception in section 1.2). The message belongs
+  under the field that produced it, where the reader is already looking and where it
+  disappears when the value is corrected; a floating toast beside it would be the same
+  problem rendered twice, and a toast cannot say *which* field when two are wrong. The
+  terminal still toasts, because a terminal has no inline slot: `actions::set_knob`
+  returns the `Refusal` silently and `input::commit_knob_edit` raises the toast on the TUI
+  side. The behavior of the `Enter` key is unchanged.
 * On success `ServeConfig::set` runs, which also clears every knob in `exclusive_with`
   (setting `--moe-cache-size` clears `--moe-cache-rate` and `--moe-cache-auto`). Reply
   `200 {"status":"ok","set":true,"cleared":["moe_cache_rate"]}`.
@@ -1406,7 +1440,13 @@ Six panes.
 * **What it does** — for the highlighted knob: `flag`, `help`, `default`, the `choice`
   options, and the flags it excludes (from `exclusive_with`, minus itself).
 * **Command** — `serve.command_preview`, plus up to four `serve.errors` as
-  `<flag>: <message>`.
+  `<flag>: <message>`. `errors[].key` is whatever key the configuration held, so it is not
+  always a knob: `serve.validate` emits `("<key>", "unknown knob")` for a key the schema
+  does not know, which a profile from a newer FreeToken or a hand-edited `profiles.toml`
+  produces. Resolve the key to a flag through `GET /api/knobs` and **fall back to printing
+  the key itself** — an unresolved key must read `moe_fanout_beta: unknown knob`, never
+  `undefined: unknown knob`. Such a key has no row in the knob list, so the Command pane is
+  the only place it appears, which is why the fallback matters.
 * **Profiles** — `serve.profiles`, two rows each: `name` with an `active` marker when it
   equals `serve.last_used_profile`; then `model`. Empty state explains save and load.
 * **Plan overlay** — when `serve.plan` is set: the headline from `plan.fit`

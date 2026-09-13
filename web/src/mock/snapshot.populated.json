@@ -1,0 +1,1053 @@
+{
+  "cache": {
+    "active_requests": 2,
+    "applying": false,
+    "budget_bytes": 24000000000,
+    "budget_ratio": 0.8953091413333333,
+    "current_bytes": {
+      "kv": 12884901888,
+      "mamba": 12582912,
+      "moe": 2147483648,
+      "swa": 6442450944,
+      "total": 21487419392
+    },
+    "delta_bytes": null,
+    "facts": [
+      "expert eviction: lru",
+      "window/full ratio: 0.20",
+      "thinking gears: off/low/high (default low)"
+    ],
+    "has_pending": false,
+    "last_rebuild_summary": "last rebuild: MoE 512  KV 131,072",
+    "over_budget": false,
+    "pools": [
+      {
+        "current": 512,
+        "delta": null,
+        "label": "MoE expert slots",
+        "max": 6144,
+        "min": null,
+        "note": "8% of 6,144 experts resident",
+        "pending": null,
+        "pool": "moe",
+        "ratio": 0.08333333333333333,
+        "shown": 512,
+        "unit": "slots"
+      },
+      {
+        "current": 131072,
+        "delta": null,
+        "label": "KV pages",
+        "max": 524288,
+        "min": null,
+        "note": "131,072 tokens",
+        "pending": null,
+        "pool": "kv",
+        "ratio": 0.25,
+        "shown": 131072,
+        "unit": "pages"
+      },
+      {
+        "current": 12,
+        "delta": null,
+        "label": "GDN state slots",
+        "max": 48,
+        "min": null,
+        "note": "",
+        "pending": null,
+        "pool": "mamba",
+        "ratio": 0.25,
+        "shown": 12,
+        "unit": "slots"
+      },
+      {
+        "current": 4096,
+        "delta": null,
+        "label": "SWA window pages",
+        "max": 131072,
+        "min": null,
+        "note": "524,288 tokens of window",
+        "pending": null,
+        "pool": "swa",
+        "ratio": 0.03125,
+        "shown": 4096,
+        "unit": "pages"
+      }
+    ],
+    "proposed_bytes": null,
+    "state": "serving"
+  },
+  "config": {
+    "config_path": "/home/jeremy/.cache/tmp/ft-man-tests-1581241/config.toml",
+    "confirm_destructive": true,
+    "convert_preflight": true,
+    "disk_free": {
+      "free_bytes": 585574653952,
+      "measured_path": "/home/jeremy"
+    },
+    "download_dir": "/home/jeremy/models",
+    "ftw_dir": "/home/jeremy/models",
+    "hub_cache": "/home/jeremy/.cache/huggingface/hub",
+    "hub_concurrency": 4,
+    "hub_endpoint": "https://huggingface.co",
+    "hub_ignore": [
+      "*.bin",
+      "*.pth",
+      "*.msgpack",
+      "*.h5",
+      "*.onnx"
+    ],
+    "log_capacity": 5000,
+    "poll_ms": 1000,
+    "server_host": "0.0.0.0",
+    "server_port": 1919,
+    "state_dir": "/home/jeremy/.cache/tmp/ft-man-tests-1581241/state",
+    "template_sources": [
+      "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
+    ],
+    "templates_preflight": true,
+    "theme": "dark",
+    "tick_ms": 200
+  },
+  "confirm": {
+    "action": {
+      "kind": "delete_model",
+      "path": "/models/Qwen3.6-35B-A3B"
+    },
+    "body": [
+      "/models/Qwen3.6-35B-A3B",
+      "",
+      "frees 21.0 GiB"
+    ],
+    "default_index": 0,
+    "destructive": true,
+    "options": [
+      "Cancel",
+      "Confirm"
+    ],
+    "title": "Delete checkpoint"
+  },
+  "engine": {
+    "active_downloads": 1,
+    "active_jobs": 1,
+    "adopted": false,
+    "command_line": null,
+    "completed_rate": 0.0,
+    "context_fit": {
+      "ceiling": 262144,
+      "is_truncated": true,
+      "ratio": 0.5,
+      "summary": "128k of 256k",
+      "usable": 131072
+    },
+    "endpoint": "http://127.0.0.1:1919",
+    "gpu_busy_reason": "a convert job is already using the GPU",
+    "is_live": false,
+    "log_path": null,
+    "model": "Qwen3.6-35B-A3B",
+    "pid": null,
+    "port": null,
+    "prefix_reuse": {
+      "cold_rate": 2987.0129870129867,
+      "fraction": 0.7406639460292278,
+      "samples": 29,
+      "summary": "~74%  (est. from 29 reqs)"
+    },
+    "server_reachable": true,
+    "state": {
+      "kind": "stopped"
+    },
+    "status_class": "good",
+    "status_text": "serving"
+  },
+  "environment": {
+    "endpoint": "http://127.0.0.1:1919",
+    "ft_display": null,
+    "ft_error": null,
+    "ft_found": false,
+    "ft_origin": null,
+    "ft_program": null,
+    "hostname": "inference-01",
+    "hub_token_present": false,
+    "hub_token_source": null,
+    "supported_archs": [
+      "Qwen3MoeForCausalLM"
+    ]
+  },
+  "hardware": {
+    "bench_profile": {
+      "ceilings": {
+        "cpu_stream_read_gbs": 84.2,
+        "pcie_linear_d2h_gbs": 24.4,
+        "pcie_linear_h2d_gbs": 25.1
+      },
+      "cpu": {
+        "physical_cores": 32,
+        "threads_used": 32
+      },
+      "dtype_kernels": {
+        "nvfp4": {
+          "cpu_moe_gbs": 61.3,
+          "cpu_moe_isa": "avx512_vnni",
+          "cpu_moe_overlap_gbs": 48.0,
+          "note": "isa tier labels are nominal for this W4A8 kernel",
+          "pcie_gather_gbs": 21.8,
+          "pcie_gather_overlap_gbs": 18.2,
+          "ratio": 2.81,
+          "recommended": "hybrid"
+        }
+      },
+      "dtypes": {
+        "nvfp4": "hybrid"
+      },
+      "gpu": {
+        "index": 0,
+        "name": "NVIDIA GeForce RTX 5090",
+        "uuid": "GPU-9e8d7c6b"
+      },
+      "host": "inference-01",
+      "threshold": 2.0,
+      "timestamp": "2026-09-05T12:00:00+00:00",
+      "version": 4
+    },
+    "bench_profile_path": null,
+    "bench_summary": "bench: nvfp4→hybrid",
+    "engine_gpu_uuid": "GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5",
+    "gpu_source": "NVML",
+    "gpus": [
+      {
+        "index": 0,
+        "memory_free": 4359738368,
+        "memory_ratio": 0.8731149137020111,
+        "memory_total": 34359738368,
+        "memory_used": 30000000000,
+        "name": "NVIDIA GeForce RTX 5090",
+        "pcie_link": "gen5 x16",
+        "power_limit_watts": 575.0,
+        "power_watts": 498.0,
+        "short_uuid": "GPU-9e8d7c6b-5a4",
+        "temperature": 71,
+        "utilization": 96,
+        "uuid": "GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5"
+      }
+    ],
+    "host": {
+      "cpu_cores": 32,
+      "cpu_percent": 62.5,
+      "hostname": "inference-01",
+      "kernel": "6.12.0-amd64",
+      "load_avg": [
+        7.2,
+        6.1,
+        5.4
+      ],
+      "memory_free": 41438953472,
+      "memory_ratio": 0.6984919309616089,
+      "memory_total": 137438953472,
+      "memory_used": 96000000000,
+      "physical_cores": 16,
+      "swap_total": 8589934592,
+      "swap_used": 1073741824,
+      "uptime_s": 903442
+    },
+    "reported_gpus": [
+      {
+        "index": 0,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_bytes": 34359738368,
+        "uuid": "GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5"
+      }
+    ]
+  },
+  "hub": {
+    "checking_compat": false,
+    "compat": {
+      "arch": "Qwen3MoeForCausalLM",
+      "context": 262144,
+      "is_moe": true,
+      "model_type": null,
+      "notes": [
+        {
+          "level": "info",
+          "text": "larger than 16.0 GiB of VRAM, so it needs an offload MoE backend rather than fused"
+        }
+      ],
+      "num_experts": 128,
+      "num_layers": null,
+      "quant": "nvfp4-pack-quantized",
+      "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4-PACK-QUANTIZED · 256k ctx",
+      "verdict": "supported",
+      "verdict_label": "supported"
+    },
+    "compat_error": null,
+    "custom_selection": false,
+    "disk_free": {
+      "free_bytes": 585574653952,
+      "measured_path": "/home/jeremy"
+    },
+    "files": [
+      {
+        "path": "config.json",
+        "size": 1400,
+        "wanted": true
+      },
+      {
+        "path": "model-00001-of-00030.safetensors",
+        "size": 4000000000,
+        "wanted": true
+      },
+      {
+        "path": "pytorch_model.bin",
+        "size": 4000000000,
+        "wanted": false
+      }
+    ],
+    "hf_cli": "/home/jeremy/.local/bin/hf",
+    "hf_install_command": "curl -LsSf https://hf.co/cli/install.sh | bash -s -- --exclude-skill",
+    "hf_installing": false,
+    "info": {
+      "gated": false,
+      "id": "Qwen/Qwen3.6-35B-A3B",
+      "is_gated": false,
+      "sha": "a1b2c3d4e5f6a7b8",
+      "siblings": [
+        {
+          "path": "config.json",
+          "size": 1400
+        },
+        {
+          "path": "model-00001-of-00030.safetensors",
+          "size": 4000000000
+        },
+        {
+          "path": "pytorch_model.bin",
+          "size": 4000000000
+        }
+      ]
+    },
+    "layout": {
+      "is_multi": true,
+      "shared": [
+        "config.json"
+      ],
+      "variants": [
+        {
+          "bytes": 9,
+          "file_count": 1,
+          "files": [
+            "UD-IQ3_XXS/model-00001-of-00002.gguf"
+          ],
+          "label": "UD-IQ3_XXS",
+          "role": "weights",
+          "subdir": "UD-IQ3_XXS"
+        },
+        {
+          "bytes": 18,
+          "file_count": 1,
+          "files": [
+            "Q8_0/model.gguf"
+          ],
+          "label": "Q8_0",
+          "role": "weights",
+          "subdir": "Q8_0"
+        }
+      ]
+    },
+    "loading_info": false,
+    "query": "",
+    "results": [
+      {
+        "downloads": 1204331,
+        "gated": false,
+        "id": "Qwen/Qwen3.6-35B-A3B",
+        "interesting_tags": [
+          "moe",
+          "text-generation"
+        ],
+        "is_gated": false,
+        "last_modified": "2026-08-01T10:00:00.000Z",
+        "likes": 4211,
+        "private": false,
+        "tags": [
+          "moe",
+          "text-generation",
+          "license:apache-2.0"
+        ]
+      }
+    ],
+    "revision": "main",
+    "searching": false,
+    "selected_bytes": 4000001400,
+    "selected_count": 2,
+    "target": "/home/jeremy/models",
+    "variant": "Q8_0"
+  },
+  "jobs": {
+    "convert_checking": null,
+    "downloads": [
+      {
+        "current": "model-00003-of-00012.safetensors",
+        "done_bytes": 44000000000,
+        "elapsed_s": 0,
+        "eta_s": null,
+        "failure_reason": null,
+        "file_count": 12,
+        "files_done": 3,
+        "finished_at": null,
+        "id": 1,
+        "is_running": true,
+        "rate_bps": 0.0,
+        "ratio": 0.36666666666666664,
+        "repo": "nvidia/GLM-5.2-NVFP4",
+        "revision": "main",
+        "started_at": "2026-09-13T09:58:57.381919005-06:00",
+        "status": {
+          "kind": "running"
+        },
+        "status_label": "downloading",
+        "target": "/models/x",
+        "total_bytes": 120000000000
+      }
+    ],
+    "items": [
+      {
+        "command_line": "ft ...",
+        "elapsed_s": 0,
+        "failure_reason": null,
+        "finished_at": null,
+        "id": 1,
+        "is_running": true,
+        "kind": "convert",
+        "kind_label": "convert",
+        "log_path": "/tmp/ft-man-test.log",
+        "output_bytes": 0,
+        "output_path": null,
+        "progress": {
+          "bytes": true,
+          "done": 30000000000,
+          "phase": "experts",
+          "total": 68000000000
+        },
+        "progress_detail": "27.9 GiB / 63.3 GiB  (experts)",
+        "progress_ratio": 0.4411764705882353,
+        "rate_bps": 0.0,
+        "started_at": "2026-09-13T09:58:57.381876049-06:00",
+        "status": {
+          "kind": "running"
+        },
+        "status_label": "running",
+        "title": "Qwen3.6-35B-A3B → FTW"
+      },
+      {
+        "command_line": "ft ...",
+        "elapsed_s": 0,
+        "failure_reason": "loading weights",
+        "finished_at": null,
+        "id": 2,
+        "is_running": false,
+        "kind": "bench",
+        "kind_label": "bench",
+        "log_path": "/tmp/ft-man-test.log",
+        "output_bytes": 0,
+        "output_path": null,
+        "progress": {
+          "bytes": false,
+          "done": 0,
+          "phase": "",
+          "total": 0
+        },
+        "progress_detail": "",
+        "progress_ratio": null,
+        "rate_bps": 0.0,
+        "started_at": "2026-09-13T09:58:57.381917786-06:00",
+        "status": {
+          "kind": "failed",
+          "reason": "with status 1"
+        },
+        "status_label": "failed",
+        "title": "CPU vs PCIe bandwidth"
+      }
+    ]
+  },
+  "logs": {
+    "capacity": 5000,
+    "count": 51,
+    "dropped": 0,
+    "first_seq": 1,
+    "last_seq": 51,
+    "log_path": null
+  },
+  "models": {
+    "config_path": "/home/jeremy/.cache/tmp/ft-man-tests-1581241/config.toml",
+    "items": [
+      {
+        "arch": "Qwen3MoeForCausalLM",
+        "converted_to": "/models/Qwen3.6-35B-A3B-ftw",
+        "convertible": true,
+        "format": "hf",
+        "format_description": "Hugging Face safetensors",
+        "format_label": "HF",
+        "ftw_fingerprint": null,
+        "ftw_output_path": "/home/jeremy/models/Qwen3.6-35B-A3B-ftw",
+        "guidance": [
+          {
+            "level": "good",
+            "text": "An FTW build already exists; serving that one loads faster."
+          },
+          {
+            "level": "warn",
+            "text": "Expert banks need host RAM: 65.2 GiB on disk vs 38.6 GiB free."
+          },
+          {
+            "level": "dim",
+            "text": "Larger than 32.0 GiB of VRAM — an offload MoE backend is required."
+          }
+        ],
+        "is_moe": true,
+        "is_partial": false,
+        "max_position": 262144,
+        "model_type": "qwen3_moe",
+        "modified_ms": 1789315137381,
+        "name": "Qwen3.6-35B-A3B",
+        "num_experts": 128,
+        "num_layers": 48,
+        "path": "/models/Qwen3.6-35B-A3B",
+        "quant": "nvfp4",
+        "repo": null,
+        "served_name": "Qwen3.6-35B-A3B",
+        "size_bytes": 70000000000,
+        "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx",
+        "template_status": {
+          "kind": "built_in",
+          "label": "built-in"
+        },
+        "template_targets": [
+          "/models/Qwen3.6-35B-A3B",
+          "/models/Qwen3.6-35B-A3B-ftw"
+        ],
+        "variant": null
+      },
+      {
+        "arch": "Qwen3MoeForCausalLM",
+        "converted_to": null,
+        "convertible": false,
+        "format": "ftw",
+        "format_description": "FTW — FreeToken fast-load",
+        "format_label": "FTW",
+        "ftw_fingerprint": "9f2c1ab4e7",
+        "ftw_output_path": "/home/jeremy/models/Qwen3.6-35B-A3B-ftw-ftw",
+        "guidance": [
+          {
+            "level": "good",
+            "text": "Ready to serve directly — FTW is auto-detected by --model."
+          },
+          {
+            "level": "warn",
+            "text": "Expert banks need host RAM: 64.3 GiB on disk vs 38.6 GiB free."
+          },
+          {
+            "level": "dim",
+            "text": "Larger than 32.0 GiB of VRAM — an offload MoE backend is required."
+          }
+        ],
+        "is_moe": true,
+        "is_partial": false,
+        "max_position": 262144,
+        "model_type": "qwen3_moe",
+        "modified_ms": null,
+        "name": "Qwen3.6-35B-A3B-ftw",
+        "num_experts": 128,
+        "num_layers": 48,
+        "path": "/models/Qwen3.6-35B-A3B-ftw",
+        "quant": "nvfp4",
+        "repo": null,
+        "served_name": "Qwen3.6-35B-A3B-ftw",
+        "size_bytes": 69000000000,
+        "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx",
+        "template_status": {
+          "kind": "built_in",
+          "label": "built-in"
+        },
+        "template_targets": [
+          "/models/Qwen3.6-35B-A3B-ftw"
+        ],
+        "variant": null
+      }
+    ],
+    "roots": [
+      {
+        "exists": false,
+        "path": "/home/jeremy/models"
+      },
+      {
+        "exists": true,
+        "path": "/home/jeremy/.cache/huggingface/hub"
+      }
+    ],
+    "scanning": false
+  },
+  "requests": {
+    "count": 34,
+    "dropped": 0,
+    "engine_cursor": 0,
+    "first_seq": 1,
+    "last_seq": 34,
+    "paused": false
+  },
+  "seq": 1,
+  "series": {
+    "active": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4,
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "decode_peak": 0.0,
+    "decode_tps": [
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44
+    ],
+    "gpu_util": [
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99
+    ],
+    "prefill_tps": [
+      2000,
+      2017,
+      2034,
+      2051,
+      2068,
+      2085,
+      2102,
+      2119,
+      2136,
+      2153,
+      2170,
+      2187,
+      2204,
+      2221,
+      2238,
+      2255,
+      2272,
+      2289,
+      2306,
+      2323,
+      2340,
+      2357,
+      2374,
+      2391,
+      2408,
+      2425,
+      2442,
+      2459,
+      2476,
+      2493,
+      2510,
+      2527,
+      2544,
+      2561,
+      2578,
+      2595,
+      2612,
+      2629,
+      2646,
+      2663
+    ],
+    "vram": []
+  },
+  "serve": {
+    "command_preview": "ft serve --model /models/Qwen3.6-35B-A3B-ftw --served-model-name Qwen3.6-35B-A3B --host 0.0.0.0 --port 1919 --memory-ratio 0.92 --num-pages 16384 --num-tokens 262144 --moe-strategy hybrid --enable-cache-report",
+    "errors": [
+      {
+        "key": "num_pages",
+        "message": "cannot be combined with --num-tokens"
+      },
+      {
+        "key": "num_tokens",
+        "message": "cannot be combined with --num-pages"
+      }
+    ],
+    "last_used_profile": "qwen-hybrid",
+    "plan": {
+      "edit_count": 2,
+      "fit": {
+        "ceiling": 262144,
+        "is_truncated": true,
+        "ratio": 0.9099578857421876,
+        "summary": "232.9k of 256k",
+        "usable": 238540
+      },
+      "is_empty": false,
+      "steps": [
+        {
+          "key": "disable_moe_prefill_overlap",
+          "label": "--disable-moe-prefill-overlap",
+          "level": "advice",
+          "reason": "the two-buffer prefill overlap pins 128 expert slots that context could be using. Giving it up slows prefill copies and raises the reachable context from 227.6k to 232.9k.",
+          "value": "true"
+        },
+        {
+          "key": null,
+          "label": "—",
+          "level": "warning",
+          "reason": "this GPU cannot hold 256k of context for Qwen3.6-35B-A3B-ftw: with the expert cache squeezed to its 128-slot floor the budget affords 232.9k. Everything below plans for that.",
+          "value": null
+        },
+        {
+          "key": "kv_reserve_tokens",
+          "label": "--kv-reserve-tokens 238540",
+          "level": "advice",
+          "reason": "reserve the reachable 232.9k of context before the expert cache takes the rest. At the current 8k the split leaves KV about 8.0k; the experts give up 6016 slots of 6144 to pay for it.",
+          "value": "238540"
+        },
+        {
+          "key": null,
+          "label": "—",
+          "level": "info",
+          "reason": "the GDN state pool holds 13 slots (13.0 MiB); this build sizes it differently than expected for --max-running-requests 4, so it is left alone",
+          "value": null
+        },
+        {
+          "key": null,
+          "label": "—",
+          "level": "info",
+          "reason": "--moe-strategy is already hybrid; the benchmark on NVIDIA GeForce RTX 5090 recommends hybrid for nvfp4 experts",
+          "value": null
+        }
+      ],
+      "unpriced": null
+    },
+    "profiles": [
+      {
+        "model": "/models/Qwen3.6-35B-A3B-ftw",
+        "name": "qwen-hybrid",
+        "notes": ""
+      }
+    ],
+    "set_counts": {
+      "api": 1,
+      "memory": 3,
+      "model": 2,
+      "moe": 1,
+      "runtime": 0,
+      "server": 2
+    },
+    "values": {
+      "enable_cache_report": "true",
+      "host": "0.0.0.0",
+      "memory_ratio": "0.92",
+      "model": "/models/Qwen3.6-35B-A3B-ftw",
+      "moe_strategy": "hybrid",
+      "num_pages": "16384",
+      "num_tokens": "262144",
+      "port": "1919",
+      "served_model_name": "Qwen3.6-35B-A3B"
+    }
+  },
+  "telemetry": {
+    "age_ms": 3,
+    "cache_status": {
+      "geometry": {
+        "cache_budget_bytes": 24000000000,
+        "limits": {
+          "kv": {
+            "max": 262144
+          },
+          "moe": {
+            "max": 2048
+          }
+        },
+        "moe_cache_policy": "lru",
+        "moe_cache_size": 512,
+        "num_experts": 128,
+        "num_mamba_slots": 12,
+        "num_moe_layers": 48,
+        "num_pages": 131072,
+        "num_swa_pages": 4096,
+        "page_size": 1,
+        "reasoning": {
+          "default": "low",
+          "gears": [
+            "off",
+            "low",
+            "high"
+          ]
+        },
+        "swa_full_tokens_ratio": 0.2,
+        "swa_page_size": 128,
+        "unit_bytes": {
+          "kv_per_token": 98304,
+          "mamba_per_slot": 1048576,
+          "moe_per_expert": 4194304,
+          "swa_per_token": 12288
+        }
+      },
+      "last_rebuild": {
+        "moe_cache_size": 512,
+        "num_pages": 131072
+      },
+      "state": "serving"
+    },
+    "error": null,
+    "health": {
+      "maintenance": "serving",
+      "message": null,
+      "model": "Qwen3.6-35B-A3B",
+      "phase": "experts",
+      "progress": {
+        "done_bytes": 12884901888,
+        "total_bytes": 22548578304
+      },
+      "status": "ok",
+      "uptime_s": 4231
+    },
+    "health_load_ratio": 0.5714285714285714,
+    "kv_ratio": 0.31458282470703125,
+    "kv_total_tokens": 131072,
+    "kv_used_tokens": 41233,
+    "last_rebuild_summary": "last rebuild: MoE 512  KV 131,072",
+    "mamba_ratio": 0.25,
+    "pool_bytes": {
+      "kv": 12884901888,
+      "mamba": 12582912,
+      "moe": 2147483648,
+      "swa": 6442450944,
+      "total": 21487419392
+    },
+    "stats": {
+      "gpus": [
+        {
+          "index": 0,
+          "name": "NVIDIA GeForce RTX 5090",
+          "total_bytes": 34359738368,
+          "uuid": "GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5"
+        }
+      ],
+      "kv": {
+        "page_size": 1,
+        "total_pages": 131072,
+        "used_pages": 41233
+      },
+      "mamba": {
+        "total_slots": 12,
+        "used_slots": 3
+      },
+      "model": {
+        "attn": "hybrid_linear",
+        "ctx": 262144,
+        "id": "Qwen3.6-35B-A3B",
+        "moe": true,
+        "sampling": {
+          "temperature": 0.7,
+          "top_k": 20,
+          "top_p": 0.8
+        }
+      },
+      "requests": {
+        "active": 2,
+        "completed": 1487,
+        "completion_tokens_total": 1204331,
+        "p95_ms": 8340,
+        "prompt_tokens_total": 8412990,
+        "ttft_mean_ms": 412
+      },
+      "swa": {
+        "page_size": 128,
+        "total_pages": 4096,
+        "used_pages": 900
+      },
+      "throughput": {
+        "decode_tps": 48.7,
+        "prefill_tps": 3120.5
+      },
+      "uptime_s": 4231,
+      "vram_bytes": 21000000000
+    },
+    "swa_ratio": 0.2197265625,
+    "swa_total_tokens": 524288,
+    "swa_used_tokens": 115200,
+    "total_experts": 6144
+  },
+  "templates": {
+    "checking": false,
+    "loading": false,
+    "preflight": {
+      "outcome": {
+        "detail": "renders in 4 ms",
+        "kind": "ok"
+      },
+      "template": "qwen-sharp"
+    },
+    "preflight_enabled": true,
+    "preview": {
+      "name": "Qwen-Sharp-Chat-Templates",
+      "text": "{%- set template_version = \"qwen3.8-froggeric-v22.4.1\" %}\n{{ messages }}",
+      "truncated": false
+    },
+    "remote": [
+      {
+        "path": "chat_template.jinja",
+        "size": 29686
+      },
+      {
+        "path": "archive/v22.3.2-sharp/chat_template.jinja",
+        "size": 28577
+      }
+    ],
+    "remote_repo": "peculiar-ragdoll/Qwen-Sharp-Chat-Templates",
+    "remote_revision": "5cb86e230acb",
+    "remote_stored_names": [
+      "Qwen-Sharp-Chat-Templates",
+      "Qwen-Sharp-Chat-Templates-v22.3.2-sharp"
+    ],
+    "repo": "peculiar-ragdoll/Qwen-Sharp-Chat-Templates",
+    "sources": [
+      "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
+    ],
+    "stored": [
+      {
+        "meta": {
+          "fetched_at": "2026-09-05T21:00:00+00:00",
+          "repo_path": "chat_template.jinja",
+          "revision": "5cb86e230acb03ffd992b841ecb12318a518e374",
+          "source": "peculiar-ragdoll/Qwen-Sharp-Chat-Templates",
+          "version": "qwen3.8-froggeric-v22.4.1"
+        },
+        "name": "Qwen-Sharp-Chat-Templates",
+        "path": "/state/templates/Qwen-Sharp-Chat-Templates.jinja",
+        "size": 29686,
+        "subtitle": "qwen3.8-froggeric-v22.4.1  ·  peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
+      }
+    ]
+  },
+  "toasts": [
+    {
+      "age_ms": 3,
+      "id": 1,
+      "kind": "info",
+      "text": "engine started",
+      "ttl_ms": 4000
+    },
+    {
+      "age_ms": 3,
+      "id": 2,
+      "kind": "warn",
+      "text": "the hf CLI is not installed",
+      "ttl_ms": 8000
+    }
+  ],
+  "ts_ms": 1789315137385,
+  "version": "0.3.0"
+}
