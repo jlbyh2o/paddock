@@ -244,15 +244,22 @@ pub fn pool_current(geo: &CacheGeometry, pool: Pool) -> u64 {
 
 /// The upper bound for a pool. The server publishes limits sized against the real cache
 /// budget; fall back to something defensible when it does not.
+///
+/// Two things have to line up with the engine. The key is the one FreeToken publishes
+/// (`_LIMIT_KEYS` in its `cache_report.py`), and the unit is the one it denominates that
+/// bound in: tokens for the paged pools, slots for the others. ft-man sizes every pool in
+/// the unit `/v1/cache/rebuild` accepts, which for KV and the window is *pages*, so those
+/// two convert. The conversion is invisible on a model with `page_size` 1 and is a factor
+/// of 128 on DSV4.
 pub fn pool_max(geo: &CacheGeometry, pool: Pool) -> u64 {
-    let key = match pool {
-        Pool::Moe => "moe",
-        Pool::Kv => "kv",
-        Pool::Mamba => "mamba",
-        Pool::Swa => "swa",
+    let (key, tokens_per_unit) = match pool {
+        Pool::Moe => ("moe_experts", 1),
+        Pool::Kv => ("kv_tokens", geo.page_size.max(1)),
+        Pool::Mamba => ("mamba_slots", 1),
+        Pool::Swa => ("swa_tokens", geo.swa_page_size.max(1)),
     };
     if let Some(max) = geo.limit(key, "max").filter(|m| *m > 0) {
-        return max;
+        return (max / tokens_per_unit).max(1);
     }
     match pool {
         // An expert cache larger than the model's total expert count is pointless.
@@ -358,11 +365,23 @@ mod tests {
         assert!(!pool_present(&g, Pool::Swa));
     }
 
+    /// The keys are FreeToken's, not ft-man's own names for the pools: a mismatch here is
+    /// silent, because every lookup simply misses and falls back to the local estimate.
     #[test]
     fn server_published_limits_win_over_the_fallback() {
         let mut g = geo();
-        g.limits = Some(serde_json::json!({"moe": {"max": 900}}));
+        g.limits = Some(serde_json::json!({"moe_experts": {"min": 128, "max": 900}}));
         assert_eq!(pool_max(&g, Pool::Moe), 900);
+    }
+
+    /// KV and the window are published in tokens but sized in pages everywhere else, so a
+    /// paged model must not get a bound `page_size` times too generous.
+    #[test]
+    fn a_paged_pool_converts_the_published_token_bound_into_pages() {
+        let mut g = geo();
+        g.page_size = 128;
+        g.limits = Some(serde_json::json!({"kv_tokens": {"min": 128, "max": 262144}}));
+        assert_eq!(pool_max(&g, Pool::Kv), 2048);
     }
 
     #[test]
