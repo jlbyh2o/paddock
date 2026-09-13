@@ -6,11 +6,12 @@
 //! usually would: FreeToken's offload backends keep every expert in host RAM, so
 //! "is there room for the banks?" is a question the Dashboard has to be able to answer.
 
+use serde::Serialize;
 use std::time::Duration;
 
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Gpu {
     pub index: u32,
     pub name: String,
@@ -40,7 +41,7 @@ impl Gpu {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Host {
     pub cpu_percent: f32,
     pub cpu_cores: usize,

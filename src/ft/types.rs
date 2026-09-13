@@ -4,11 +4,11 @@
 //! releases, and a manager that 500s on an unfamiliar key is worse than one that shows
 //! a dash. Unknown fields are ignored rather than rejected for the same reason.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------- /health
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Health {
     /// `loading`, `ok`, or `error`.
     #[serde(default)]
@@ -46,7 +46,7 @@ impl Health {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LoadProgress {
     #[serde(default)]
     pub done_bytes: u64,
@@ -56,7 +56,7 @@ pub struct LoadProgress {
 
 // ---------------------------------------------------------------- /v1/stats
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stats {
     #[serde(default)]
     pub model: ModelCard,
@@ -78,7 +78,7 @@ pub struct Stats {
     pub requests: RequestStats,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelCard {
     #[serde(default)]
     pub id: Option<String>,
@@ -95,7 +95,7 @@ pub struct ModelCard {
     pub sampling: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct PagePool {
     #[serde(default)]
     pub used_pages: u64,
@@ -121,7 +121,7 @@ fn one() -> u64 {
     1
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct SlotPool {
     #[serde(default)]
     pub used_slots: u64,
@@ -135,7 +135,7 @@ impl SlotPool {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GpuCard {
     #[serde(default)]
     pub index: Option<u32>,
@@ -147,7 +147,7 @@ pub struct GpuCard {
     pub total_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Throughput {
     #[serde(default)]
     pub decode_tps: f64,
@@ -155,7 +155,7 @@ pub struct Throughput {
     pub prefill_tps: f64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct RequestStats {
     #[serde(default)]
     pub active: u64,
@@ -173,7 +173,7 @@ pub struct RequestStats {
 
 // ---------------------------------------------------------------- /v1/cache/status
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheStatus {
     /// `serving`, `loading`, or `rebuilding`.
     #[serde(default)]
@@ -184,7 +184,7 @@ pub struct CacheStatus {
     pub geometry: CacheGeometry,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheGeometry {
     #[serde(default)]
     pub num_pages: u64,
@@ -240,7 +240,7 @@ impl CacheGeometry {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct PoolBytes {
     pub kv: u64,
     pub moe: u64,
@@ -254,7 +254,7 @@ impl PoolBytes {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct UnitBytes {
     #[serde(default)]
     pub kv_per_token: u64,
@@ -267,7 +267,7 @@ pub struct UnitBytes {
 }
 
 /// The thinking gears the served checkpoint's chat template exposes.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Reasoning {
     #[serde(default)]
     pub gears: Vec<String>,
@@ -277,7 +277,7 @@ pub struct Reasoning {
 
 // ---------------------------------------------------------------- /v1/requests
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RequestPage {
     #[serde(default)]
     pub entries: Vec<RequestRecord>,
@@ -285,7 +285,7 @@ pub struct RequestPage {
     pub next_cursor: u64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RequestRecord {
     #[serde(default)]
     pub ts: String,
@@ -314,7 +314,7 @@ pub struct RequestRecord {
 // ---------------------------------------------------------------- bench profile
 
 /// `~/.cache/freetoken/benchbw/<gpu-uuid>.json`, written by `ft bench bw`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BenchProfile {
     #[serde(default)]
     pub version: u32,
@@ -337,7 +337,7 @@ pub struct BenchProfile {
     pub dtype_kernels: std::collections::BTreeMap<String, BenchKernel>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BenchGpu {
     #[serde(default)]
     pub index: Option<u32>,
@@ -347,7 +347,7 @@ pub struct BenchGpu {
     pub uuid: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct BenchCpu {
     #[serde(default)]
     pub physical_cores: u32,
@@ -355,7 +355,7 @@ pub struct BenchCpu {
     pub threads_used: u32,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct BenchCeilings {
     #[serde(default)]
     pub cpu_stream_read_gbs: f64,
@@ -365,7 +365,7 @@ pub struct BenchCeilings {
     pub pcie_linear_d2h_gbs: f64,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BenchKernel {
     #[serde(default)]
     pub cpu_moe_gbs: Option<f64>,

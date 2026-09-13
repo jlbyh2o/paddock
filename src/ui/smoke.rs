@@ -26,7 +26,7 @@ use crate::ui::widgets::{Confirm, ConfirmAction, ToastKind};
 /// underflows.
 const SIZES: &[(u16, u16)] = &[(40, 12), (60, 20), (80, 24), (120, 40), (200, 60)];
 
-async fn app() -> App {
+pub(crate) async fn app() -> App {
     crate::config::isolate_paths_for_tests();
     // App::new reads the serve state file to re-adopt a running engine, so it must not
     // race the supervision tests that write it.
@@ -50,7 +50,7 @@ fn draw_all(app: &mut App) {
 }
 
 /// Fill every pane with the kind of data a live system produces.
-fn populate(app: &mut App) {
+pub(crate) fn populate(app: &mut App) {
     app.telemetry = Telemetry {
         health: Some(Health {
             status: "ok".into(),
@@ -196,7 +196,7 @@ fn populate(app: &mut App) {
     for (i, (prompt, ttft)) in
         [(69_000u64, 23_100u64), (69_800, 780), (70_400, 790), (71_100, 800)].iter().enumerate()
     {
-        app.requests_view.entries.push_back(RequestRecord {
+        app.requests_view.push(RequestRecord {
             ts: format!("2026-09-06T18:0{i}:00Z"),
             method: "POST".into(),
             path: "/v1/chat/completions".into(),
@@ -310,7 +310,7 @@ fn populate(app: &mut App) {
     ));
 
     for i in 0..30u64 {
-        app.requests_view.entries.push_back(RequestRecord {
+        app.requests_view.push(RequestRecord {
             ts: "2026-09-05T14:23:07.123456Z".into(),
             method: "POST".into(),
             path: "/v1/chat/completions".into(),
@@ -1339,7 +1339,7 @@ async fn a_preflight_concern_asks_before_burning_minutes_on_a_conversion() {
     let dir = with_checkpoint(&mut a, "cvtwarn", false);
     let source = a.models[0].path.clone();
 
-    super::input::on_convert_preflight(
+    crate::actions::on_convert_preflight(
         &mut a,
         source.clone(),
         crate::ft::Preflight::Warn(
@@ -1368,7 +1368,7 @@ async fn a_failed_preflight_is_also_offered_rather_than_silently_blocking() {
 
     // A check that could not run at all must not become an unexplained refusal: the
     // check is advisory, and the user may know better than it does.
-    super::input::on_convert_preflight(
+    crate::actions::on_convert_preflight(
         &mut a,
         source.clone(),
         crate::ft::Preflight::Fail("ImportError: no module named torch".into()),
@@ -1386,7 +1386,7 @@ async fn a_clean_preflight_starts_the_conversion_without_asking() {
     let source = a.models[0].path.clone();
     // No FreeToken CLI here, so the spawn fails — but the point is that nothing was
     // put in front of the user first.
-    super::input::on_convert_preflight(
+    crate::actions::on_convert_preflight(
         &mut a,
         source,
         crate::ft::Preflight::Ok("Qwen3MoE: MoE, 128 experts x 48 layers".into()),

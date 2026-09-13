@@ -5,6 +5,7 @@
 //! and watch throughput, requests and logs — all from one screen on the machine the
 //! engine runs on.
 
+mod actions;
 mod compat;
 mod config;
 mod ft;
@@ -14,22 +15,24 @@ mod models;
 mod plan;
 mod probe;
 mod reuse;
+mod runtime;
 mod templates;
 mod ui;
 mod util;
 mod variants;
+mod web;
 
 use std::io;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::config::{Config, Profiles};
-use crate::ui::app::{App, Message, Tab, Telemetry};
+use crate::ui::app::{App, Message, Tab};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -42,40 +45,57 @@ use crate::ui::app::{App, Message, Tab, Telemetry};
 )]
 struct Cli {
     /// Server host ft-man polls for telemetry.
-    #[arg(long, value_name = "HOST")]
+    #[arg(long, value_name = "HOST", global = true)]
     host: Option<String>,
 
     /// Server port ft-man polls for telemetry.
-    #[arg(long, value_name = "PORT")]
+    #[arg(long, value_name = "PORT", global = true)]
     port: Option<u16>,
 
     /// Path to the `ft` executable, if it is not on PATH.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", global = true)]
     ft_binary: Option<std::path::PathBuf>,
 
     /// A virtualenv holding a FreeToken install.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", global = true)]
     venv: Option<std::path::PathBuf>,
 
     /// Extra directory to scan for checkpoints; repeatable.
-    #[arg(long = "models", value_name = "DIR")]
+    #[arg(long = "models", value_name = "DIR", global = true)]
     model_roots: Vec<std::path::PathBuf>,
 
     /// Color theme: auto, dark, light, or mono.
-    #[arg(long, value_name = "NAME")]
+    #[arg(long, value_name = "NAME", global = true)]
     theme: Option<String>,
 
     /// Open on a specific tab.
-    #[arg(long, value_name = "TAB")]
+    #[arg(long, value_name = "TAB", global = true)]
     tab: Option<String>,
 
     /// Write a default config file and exit.
-    #[arg(long)]
+    #[arg(long, global = true)]
     init_config: bool,
 
     /// Print the resolved configuration and the FreeToken install, then exit.
-    #[arg(long)]
+    #[arg(long, global = true)]
     doctor: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Serve the web interface instead of drawing a terminal UI.
+    Web {
+        /// Address to bind. Overrides `[web] listen`.
+        #[arg(long, value_name = "ADDR")]
+        listen: Option<String>,
+
+        /// Bearer token every /api request must carry. Overrides `[web] token`.
+        #[arg(long, value_name = "TOKEN")]
+        token: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -96,12 +116,20 @@ fn main() -> Result<()> {
         return doctor(&config, ft);
     }
 
-    init_logging()?;
-    tokio::runtime::Builder::new_multi_thread()
+    let web = matches!(cli.command, Some(Command::Web { .. }));
+    init_logging(web)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("starting the async runtime")?
-        .block_on(run(cli, config, ft))
+        .context("starting the async runtime")?;
+    match cli.command {
+        Some(Command::Web { ref listen, ref token }) => {
+            let listen = listen.clone().unwrap_or_else(|| config.web.listen.clone());
+            let token = token.clone().or_else(|| config.web.token.clone());
+            runtime.block_on(web::run(config, ft, listen, token))
+        }
+        None => runtime.block_on(run(cli, config, ft)),
+    }
 }
 
 /// Merge CLI overrides over the file config. The file stays authoritative for anything
@@ -238,17 +266,22 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
     Ok(())
 }
 
-/// Log ft-man's own diagnostics to a file. Nothing goes to the terminal: stdout and
-/// stderr belong to the TUI once it starts.
-fn init_logging() -> Result<()> {
+/// Log ft-man's own diagnostics.
+///
+/// The TUI writes to a file and nowhere else: stdout and stderr belong to the terminal
+/// once it starts. The web daemon adds stderr at `info`, because it is a service and
+/// whatever supervises it — journald, usually — is where its operator will look first.
+fn init_logging(web: bool) -> Result<()> {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
     let dir = config::log_dir();
     std::fs::create_dir_all(&dir).ok();
     let appender = tracing_appender::rolling::never(&dir, "ft-man.log");
-    let filter = EnvFilter::try_from_env("FT_MAN_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+    let default = if web { "info" } else { "warn" };
+    let filter = EnvFilter::try_from_env("FT_MAN_LOG").unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(appender).with_ansi(false))
+        .with(web.then(|| fmt::layer().with_writer(std::io::stderr)))
         .with(filter)
         .try_init()
         .ok();
@@ -275,9 +308,7 @@ async fn run(cli: Cli, config: Config, ft: Result<ft::Freetoken, String>) -> Res
     }
     app.request_scan();
 
-    spawn_telemetry(&app, tx.clone());
-    spawn_hardware(tx.clone());
-    spawn_architectures(&app, tx.clone());
+    runtime::spawn_all(&app, tx.clone());
 
     let mut terminal = ratatui::try_init().context("initializing the terminal")?;
     let result = event_loop(&mut terminal, &mut app, &mut rx).await;
@@ -347,101 +378,6 @@ async fn event_loop(
             terminal.draw(|f| ui::draw::draw(f, app))?;
         }
     }
-}
-
-/// Poll the server's control plane on its own cadence.
-///
-/// `/health` is cheap and always answered, so it drives the loop; `/v1/stats` and
-/// `/v1/cache/status` are only meaningful once the engine is serving, and skipping them
-/// while it loads keeps a loading engine from being polled pointlessly for minutes.
-fn spawn_telemetry(app: &App, tx: mpsc::UnboundedSender<Message>) {
-    let mut client = app.client.clone();
-    let mut endpoint = app.endpoint_tx.subscribe();
-    let timeout = Duration::from_millis(app.config.server.timeout_ms);
-    let period = Duration::from_millis(app.config.server.poll_ms.max(200));
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(period);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut cursor = 0u64;
-        loop {
-            ticker.tick().await;
-            // Follow a port change in the serve configuration rather than polling an
-            // address nothing is listening on.
-            if endpoint.has_changed().unwrap_or(false) {
-                let url = endpoint.borrow_and_update().clone();
-                if let Ok(next) = ft::Client::new(&url, timeout) {
-                    client = next;
-                    cursor = 0;
-                }
-            }
-            let mut t = Telemetry { at: Some(std::time::Instant::now()), ..Default::default() };
-            match client.health().await {
-                Ok(health) => {
-                    let ready = health.is_ready();
-                    t.health = Some(health);
-                    if ready {
-                        t.stats = client.stats().await.ok();
-                        t.cache = client.cache_status().await.ok();
-                        if let Ok(page) = client.requests(cursor, 200).await {
-                            if !page.entries.is_empty() || page.next_cursor != cursor {
-                                cursor = page.next_cursor;
-                                let _ = tx.send(Message::Requests {
-                                    entries: page.entries,
-                                    next_cursor: cursor,
-                                });
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    // A connection refused while nothing is running is the normal state,
-                    // not an error worth a toast — the Dashboard shows it as "not
-                    // running" and that is enough.
-                    t.error = Some(format!("{e:#}"));
-                    cursor = 0;
-                }
-            }
-            if tx.send(Message::Telemetry(Box::new(t))).is_err() {
-                break;
-            }
-        }
-    });
-}
-
-/// Read FreeToken's model registry once, so the Hub can say definitively whether an
-/// architecture is supported instead of guessing from a list baked into ft-man.
-fn spawn_architectures(app: &App, tx: mpsc::UnboundedSender<Message>) {
-    let Some(ft) = app.ft.clone() else { return };
-    let Some(argv) = ft::preflight::architectures_command(&ft) else { return };
-    let env = app.config.freetoken.env.clone();
-    tokio::spawn(async move {
-        let mut cmd = tokio::process::Command::new(&argv[0]);
-        cmd.args(&argv[1..]);
-        for (k, v) in &env {
-            cmd.env(k, v);
-        }
-        let result = match cmd.output().await {
-            Ok(out) => ft::preflight::parse_architectures(&String::from_utf8_lossy(&out.stdout)),
-            Err(e) => Err(e.to_string()),
-        };
-        let _ = tx.send(Message::Architectures(result));
-    });
-}
-
-/// Sample GPUs and host memory on a blocking thread — NVML and `/proc` reads are
-/// synchronous, and doing them on the runtime would stall other tasks.
-fn spawn_hardware(tx: mpsc::UnboundedSender<Message>) {
-    std::thread::spawn(move || {
-        let mut probe = probe::Probe::new();
-        loop {
-            let gpus = probe.gpus();
-            let host = probe.host();
-            if tx.send(Message::Hardware { gpus, host }).is_err() {
-                break;
-            }
-            std::thread::sleep(probe::SAMPLE_INTERVAL);
-        }
-    });
 }
 
 /// Restore the terminal even when a panic unwinds past the normal exit path, so a crash

@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Group {
     Model,
     Server,
@@ -51,6 +52,7 @@ pub enum Kind {
     Choice(&'static [&'static str]),
 }
 
+#[derive(Serialize)]
 pub struct Knob {
     /// Stable identifier used in profiles and on the wire to the UI.
     pub key: &'static str,
@@ -64,6 +66,34 @@ pub struct Knob {
     pub help: &'static str,
     /// Keys that cannot be set at the same time as this one.
     pub exclusive_with: &'static [&'static str],
+}
+
+// `{kind, ...}`, written out because `Choice` holds an unnamed slice that internal
+// tagging cannot place, and the wire format names it `options`.
+impl Serialize for Kind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        match self {
+            Kind::Text => m.serialize_entry("kind", "text")?,
+            Kind::Flag => m.serialize_entry("kind", "flag")?,
+            Kind::Int { min, max } => {
+                m.serialize_entry("kind", "int")?;
+                m.serialize_entry("min", min)?;
+                m.serialize_entry("max", max)?;
+            }
+            Kind::Float { min, max } => {
+                m.serialize_entry("kind", "float")?;
+                m.serialize_entry("min", min)?;
+                m.serialize_entry("max", max)?;
+            }
+            Kind::Choice(options) => {
+                m.serialize_entry("kind", "choice")?;
+                m.serialize_entry("options", options)?;
+            }
+        }
+        m.end()
+    }
 }
 
 macro_rules! knob {

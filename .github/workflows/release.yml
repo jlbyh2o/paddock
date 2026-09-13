@@ -27,6 +27,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the web interface
+        run: cd web && npm ci && npm run check && npm run build
+
+      # A release must never ship the "frontend not built" placeholder: build.rs embeds it
+      # silently, so a Node step that failed halfway would otherwise produce a binary that
+      # looks fine until someone opens it.
+      - name: Check the web bundle is really there
+        run: |
+          if [ ! -f web/dist/index.html ]; then
+            echo "::error::web/dist/index.html is missing; the release would ship the placeholder page" >&2
+            exit 1
+          fi
+          ls -lh web/dist
+
       # Same pin as ci.yml and mise.toml, so a release is built by the compiler that
       # tested it.
       - uses: dtolnay/rust-toolchain@1.98.0

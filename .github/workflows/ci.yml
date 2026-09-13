@@ -14,6 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # The frontend is embedded in the binary, so it has to exist before cargo runs. The
+      # build script never invokes npm -- a `cargo build` that shells out to a package
+      # manager is a network operation in disguise -- so CI does it explicitly.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web interface
+        run: cd web && npm ci && npm run check && npm run build
       # Pinned, not "stable", and pinned to the same version as mise.toml so a local run
       # and a CI run are the same compiler. Tracking stable meant clippy could gain a lint
       # overnight and fail a build nobody had touched -- which is exactly what happened on
@@ -34,6 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # The MSRV job compiles the Rust side only; build.rs embeds a placeholder page when
+      # there is no bundle, which is exactly the path a contributor without Node takes.
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
       # check, not test: this job exists to prove the crate still compiles on the version

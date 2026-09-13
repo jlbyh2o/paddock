@@ -7,6 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
+use serde::Serialize;
+
 use super::theme::{bar, Theme};
 
 // ---------------------------------------------------------------- selection
@@ -198,7 +200,8 @@ impl TextInput {
 
 // ---------------------------------------------------------------- toasts
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToastKind {
     Info,
     Success,
@@ -208,24 +211,39 @@ pub enum ToastKind {
 
 #[derive(Debug, Clone)]
 pub struct Toast {
+    /// Monotonic for the life of the process, so a browser can animate one toast in and
+    /// another out without matching on their text.
+    pub id: u64,
     pub text: String,
     pub kind: ToastKind,
     pub at: std::time::Instant,
 }
 
+static NEXT_TOAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl Toast {
     pub fn new(text: impl Into<String>, kind: ToastKind) -> Self {
-        Self { text: text.into(), kind, at: std::time::Instant::now() }
+        Self {
+            id: NEXT_TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            text: text.into(),
+            kind,
+            at: std::time::Instant::now(),
+        }
+    }
+
+    /// How long this toast is meant to stay up. Sent to the browser so it can fade in
+    /// step with the server expiring it rather than guessing.
+    pub fn ttl(&self) -> std::time::Duration {
+        match self.kind {
+            ToastKind::Error => std::time::Duration::from_secs(12),
+            ToastKind::Warn => std::time::Duration::from_secs(8),
+            _ => std::time::Duration::from_secs(4),
+        }
     }
 
     /// Errors linger; routine confirmations do not.
     pub fn is_expired(&self) -> bool {
-        let ttl = match self.kind {
-            ToastKind::Error => std::time::Duration::from_secs(12),
-            ToastKind::Warn => std::time::Duration::from_secs(8),
-            _ => std::time::Duration::from_secs(4),
-        };
-        self.at.elapsed() > ttl
+        self.at.elapsed() > self.ttl()
     }
 }
 
@@ -321,6 +339,62 @@ pub enum ConfirmAction {
     InstallHfCli,
     /// Convert `source` even though the preflight raised a concern.
     ConvertAnyway(std::path::PathBuf),
+}
+
+// Written out because most variants carry an unnamed payload that internal tagging
+// cannot place; the field names are the ones docs/web-api.md fixes.
+impl Serialize for ConfirmAction {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        match self {
+            ConfirmAction::StopEngine { force } => {
+                m.serialize_entry("kind", "stop_engine")?;
+                m.serialize_entry("force", force)?;
+            }
+            ConfirmAction::DeleteModel(path) => {
+                m.serialize_entry("kind", "delete_model")?;
+                m.serialize_entry("path", path)?;
+            }
+            ConfirmAction::CancelJob(id) => {
+                m.serialize_entry("kind", "cancel_job")?;
+                m.serialize_entry("id", id)?;
+            }
+            ConfirmAction::CancelDownload(id) => {
+                m.serialize_entry("kind", "cancel_download")?;
+                m.serialize_entry("id", id)?;
+            }
+            ConfirmAction::DeleteProfile(name) => {
+                m.serialize_entry("kind", "delete_profile")?;
+                m.serialize_entry("name", name)?;
+            }
+            ConfirmAction::Quit => m.serialize_entry("kind", "quit")?,
+            ConfirmAction::ApplyCacheRebuild => m.serialize_entry("kind", "apply_cache_rebuild")?,
+            ConfirmAction::ApplyTemplate { template, model } => {
+                m.serialize_entry("kind", "apply_template")?;
+                m.serialize_entry("template", template)?;
+                m.serialize_entry("model", model)?;
+            }
+            ConfirmAction::RevertTemplate(model) => {
+                m.serialize_entry("kind", "revert_template")?;
+                m.serialize_entry("model", model)?;
+            }
+            ConfirmAction::DeleteTemplate(name) => {
+                m.serialize_entry("kind", "delete_template")?;
+                m.serialize_entry("name", name)?;
+            }
+            ConfirmAction::ReconvertModel(source) => {
+                m.serialize_entry("kind", "reconvert_model")?;
+                m.serialize_entry("source", source)?;
+            }
+            ConfirmAction::InstallHfCli => m.serialize_entry("kind", "install_hf_cli")?,
+            ConfirmAction::ConvertAnyway(source) => {
+                m.serialize_entry("kind", "convert_anyway")?;
+                m.serialize_entry("source", source)?;
+            }
+        }
+        m.end()
+    }
 }
 
 impl Confirm {

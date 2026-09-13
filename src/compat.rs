@@ -11,9 +11,11 @@
 //! arithmetic against the hardware. A clean report is not a promise that a model will
 //! serve — only that none of the known walls are in the way.
 
+use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Level {
     /// Worth knowing, not a problem.
     Info,
@@ -23,7 +25,8 @@ pub enum Level {
     Blocker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// No known obstacle.
     Supported,
@@ -46,7 +49,7 @@ impl Verdict {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Report {
     pub arch: Option<String>,
     pub model_type: Option<String>,
@@ -56,7 +59,28 @@ pub struct Report {
     pub quant: Option<String>,
     pub context: Option<u64>,
     /// `(level, message)`, most severe first.
+    #[serde(serialize_with = "notes_as_objects")]
     pub notes: Vec<(Level, String)>,
+}
+
+/// A note is a pair in Rust and `{level, text}` on the wire, because a two-element array
+/// is unreadable in a browser's devtools and impossible to extend.
+fn notes_as_objects<S: serde::Serializer>(
+    notes: &[(Level, String)],
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut seq = s.serialize_seq(Some(notes.len()))?;
+    for (level, text) in notes {
+        seq.serialize_element(&Note { level: *level, text })?;
+    }
+    seq.end()
+}
+
+#[derive(Serialize)]
+struct Note<'a> {
+    level: Level,
+    text: &'a str,
 }
 
 impl Report {
@@ -99,7 +123,7 @@ impl Report {
 }
 
 /// The hardware a candidate would have to run on.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct Hardware {
     pub vram_bytes: u64,
     pub host_ram_bytes: u64,

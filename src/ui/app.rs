@@ -235,7 +235,8 @@ impl Default for ServeView {
 }
 
 /// The four resizable pools, in the order the Cache view lists them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Pool {
     Moe,
     Kv,
@@ -332,6 +333,59 @@ pub struct RequestsView {
     pub entries: VecDeque<RequestRecord>,
     pub paused: bool,
     pub show_details: bool,
+    /// Records appended since the process started. Counted separately from the engine's
+    /// own cursor, which resets whenever the engine restarts, so a browser fetching by
+    /// sequence keeps its place across one.
+    pushed: u64,
+    /// Entries evicted by the ring or discarded by a clear.
+    dropped: u64,
+}
+
+impl RequestsView {
+    /// Append one record, evicting the oldest past the ring's 512.
+    pub fn push(&mut self, record: RequestRecord) {
+        if self.entries.len() >= 512 {
+            self.entries.pop_front();
+            self.dropped += 1;
+        }
+        self.pushed += 1;
+        self.entries.push_back(record);
+    }
+
+    /// Sequence of the newest record ever appended; 0 before the first one.
+    pub fn last_seq(&self) -> u64 {
+        self.pushed
+    }
+
+    /// Sequence of the oldest retained record, which is `last_seq` when none is.
+    pub fn first_seq(&self) -> u64 {
+        self.pushed
+            .saturating_sub(self.entries.len() as u64)
+            .saturating_add(u64::from(!self.entries.is_empty()))
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Retained records after `after`, oldest first, paired with their sequence.
+    pub fn since(&self, after: u64, limit: usize) -> Vec<(u64, &RequestRecord)> {
+        let first = self.first_seq();
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (first + i as u64, e))
+            .filter(|(seq, _)| *seq > after)
+            .take(limit)
+            .collect()
+    }
+
+    /// Discard every retained record. The sequence keeps counting and `dropped` absorbs
+    /// what went, so a reader holding a sequence can still tell where it stands.
+    pub fn clear(&mut self) {
+        self.dropped += self.entries.len() as u64;
+        self.entries.clear();
+    }
 }
 
 #[derive(Default)]
@@ -650,6 +704,45 @@ impl App {
         }
     }
 
+    /// The severity behind [`Self::engine_status_color`], named rather than colored.
+    ///
+    /// The two must stay in step: a browser has no access to the theme, so it colors the
+    /// status dot from this name, and the terminal colors it from the theme directly.
+    pub fn engine_status_class(&self) -> &'static str {
+        if let Some(h) = &self.telemetry.health {
+            if h.is_ready() {
+                return "good";
+            }
+            if h.is_loading() {
+                return "warn";
+            }
+            if h.is_error() {
+                return "bad";
+            }
+        }
+        match self.engine.state {
+            EngineState::Starting | EngineState::Stopping => "warn",
+            EngineState::Exited { .. } => "bad",
+            _ => "dim",
+        }
+    }
+
+    /// One line describing the machine's bandwidth profile, or `None` when none has been
+    /// measured — which the Dashboard turns into the prompt to run a benchmark.
+    pub fn bench_summary(&self) -> Option<String> {
+        let p = self.bench_profile.as_ref()?;
+        let verdicts: Vec<String> = p
+            .dtypes
+            .iter()
+            .filter_map(|(fmt, rec)| rec.as_ref().map(|r| format!("{fmt}→{r}")))
+            .collect();
+        Some(if verdicts.is_empty() {
+            "bandwidth profile present".to_string()
+        } else {
+            format!("bench: {}", verdicts.join("  "))
+        })
+    }
+
     /// The model currently in play: what the server reports, else what is configured.
     pub fn current_model(&self) -> Option<String> {
         self.telemetry
@@ -838,10 +931,7 @@ impl App {
                 // who has scrolled back to inspect a failure keeps their place.
                 let following = crate::ui::views::requests::at_tail(self);
                 for e in entries {
-                    if self.requests_view.entries.len() >= 512 {
-                        self.requests_view.entries.pop_front();
-                    }
-                    self.requests_view.entries.push_back(e);
+                    self.requests_view.push(e);
                 }
                 if following {
                     crate::ui::views::requests::follow_tail(self);
@@ -914,7 +1004,7 @@ impl App {
                 if !outcome.is_clean() {
                     tracing::warn!(?source, detail = outcome.detail(), "convert preflight");
                 }
-                crate::ui::input::on_convert_preflight(self, source, outcome);
+                crate::actions::on_convert_preflight(self, source, outcome);
             }
             Message::CacheRebuilt(res) => {
                 self.cache_view.applying = false;

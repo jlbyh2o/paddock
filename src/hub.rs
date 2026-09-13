@@ -12,12 +12,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------- API types
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RepoSummary {
     #[serde(rename = "id")]
     pub id: String,
@@ -25,7 +25,7 @@ pub struct RepoSummary {
     pub downloads: u64,
     #[serde(default)]
     pub likes: u64,
-    #[serde(default, rename = "lastModified")]
+    #[serde(default, rename(deserialize = "lastModified"))]
     pub last_modified: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -53,7 +53,7 @@ impl RepoSummary {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RepoInfo {
     #[serde(rename = "id")]
     pub id: String,
@@ -72,9 +72,9 @@ impl RepoInfo {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Sibling {
-    #[serde(rename = "rfilename")]
+    #[serde(rename(deserialize = "rfilename"))]
     pub path: String,
     #[serde(default)]
     pub size: Option<u64>,
@@ -90,7 +90,7 @@ pub fn jinja_files(siblings: &[Sibling]) -> Vec<Sibling> {
 }
 
 /// A file resolved for download: path within the repo plus its size.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RepoFile {
     pub path: String,
     pub size: u64,
@@ -327,6 +327,25 @@ pub enum DownloadStatus {
     Done,
     Failed(String),
     Canceled,
+}
+
+// Written out for the same reason as `JobStatus`: serde cannot internally tag a newtype
+// variant holding a plain String, and the wire format names that payload `reason`.
+impl Serialize for DownloadStatus {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        match self {
+            DownloadStatus::Running => m.serialize_entry("kind", "running")?,
+            DownloadStatus::Done => m.serialize_entry("kind", "done")?,
+            DownloadStatus::Canceled => m.serialize_entry("kind", "canceled")?,
+            DownloadStatus::Failed(reason) => {
+                m.serialize_entry("kind", "failed")?;
+                m.serialize_entry("reason", reason)?;
+            }
+        }
+        m.end()
+    }
 }
 
 impl Download {

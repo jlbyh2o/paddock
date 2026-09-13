@@ -223,7 +223,7 @@ fn detail(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn format_description(m: &Model) -> String {
+pub fn format_description(m: &Model) -> String {
     match m.format {
         Format::Ftw => "FTW — FreeToken fast-load".into(),
         Format::Hf => "Hugging Face safetensors".into(),
@@ -237,65 +237,80 @@ fn format_description(m: &Model) -> String {
 /// default, and the expert banks live in host RAM.
 fn guidance<'a>(app: &App, m: &Model, w: usize) -> Vec<Line<'a>> {
     let t = &app.theme;
-    let mut out: Vec<Line> = Vec::new();
-    let mut note = |text: String, color: ratatui::style::Color| {
-        out.push(Line::from(Span::styled(
-            truncate(&format!("• {text}"), w),
-            Style::default().fg(color),
-        )));
-    };
+    guidance_notes(app, m)
+        .into_iter()
+        .map(|(level, text)| {
+            let color = match level {
+                "good" => t.good,
+                "warn" => t.warn,
+                "bad" => t.bad,
+                _ => t.dim,
+            };
+            Line::from(Span::styled(truncate(&format!("• {text}"), w), Style::default().fg(color)))
+        })
+        .collect()
+}
+
+/// The detail pane's bullets, as `(severity, text)`.
+///
+/// Every rule here reads host RAM, GPU VRAM or the filesystem, so it is computed where
+/// that knowledge is and handed to whichever front end is drawing — a browser has none
+/// of those numbers and must not be asked to reach the same conclusions from them.
+pub fn guidance_notes(app: &App, m: &Model) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    let mut note = |color: &'static str, text: String| out.push((color, text));
 
     if m.is_partial() {
         note(
+            "bad",
             "A conversion died before writing its index, so these shards are unusable. \
              Delete it with D to reclaim the space and free the name for a retry."
                 .into(),
-            t.bad,
         );
         return out;
     }
 
     if m.converted_to.is_some() {
-        note("An FTW build already exists; serving that one loads faster.".into(), t.good);
+        note("good", "An FTW build already exists; serving that one loads faster.".into());
     } else if m.convertible() {
-        note("Serves as-is. Converting to FTW (c) speeds up every later load.".into(), t.dim);
+        note("dim", "Serves as-is. Converting to FTW (c) speeds up every later load.".into());
     } else if m.format == Format::Ftw {
-        note("Ready to serve directly — FTW is auto-detected by --model.".into(), t.good);
+        note("good", "Ready to serve directly — FTW is auto-detected by --model.".into());
     } else {
-        note("Served natively; no conversion step applies.".into(), t.dim);
+        note("dim", "Served natively; no conversion step applies.".into());
     }
 
     if m.is_moe {
         let host_free = app.host.memory_free();
         if host_free > 0 && m.size_bytes > host_free {
             note(
+                "warn",
                 format!(
                     "Expert banks need host RAM: {} on disk vs {} free.",
                     bytes(m.size_bytes),
                     bytes(host_free)
                 ),
-                t.warn,
             );
         }
         if let Some(gpu) = app.gpus.first() {
             if m.size_bytes > gpu.memory_total {
                 note(
+                    "dim",
                     format!(
                         "Larger than {} of VRAM — an offload MoE backend is required.",
                         bytes(gpu.memory_total)
                     ),
-                    t.dim,
                 );
             }
         }
     } else if let Some(gpu) = app.gpus.first() {
         if m.size_bytes > gpu.memory_total {
             note(
+                "warn",
                 format!(
                     "Dense model larger than {} of VRAM; it may not load.",
                     bytes(gpu.memory_total)
                 ),
-                t.warn,
             );
         }
     }
@@ -303,8 +318,8 @@ fn guidance<'a>(app: &App, m: &Model, w: usize) -> Vec<Line<'a>> {
     if m.name.to_lowercase().contains("deepseek") && !m.path.join("inference/config.json").is_file()
     {
         note(
+            "warn",
             "DeepSeek-V4 checkpoints need their inference/config.json subdirectory.".into(),
-            t.warn,
         );
     }
 

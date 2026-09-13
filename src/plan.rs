@@ -176,7 +176,7 @@ impl Costs {
 /// The whole point of this type is that the two numbers are different and nothing else
 /// puts them side by side: `usable` is `num_pages * page_size` (engine.py's own
 /// `min(max_seq_len, num_tokens)` input) and `ceiling` is what `/v1/models` reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ContextFit {
     pub usable: u64,
     pub ceiling: u64,
@@ -224,7 +224,7 @@ pub fn tokens(n: u64) -> String {
 // ---------------------------------------------------------------- startup budget
 
 /// The geometry `--moe-cache-auto` will settle on at startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Startup {
     pub moe_cache_size: u64,
     pub num_pages: u64,
@@ -334,7 +334,8 @@ pub fn mamba_slots_for(max_running: u64, hybrid_radix: bool, cache_ratio: f64) -
 
 // ---------------------------------------------------------------- the plan
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Level {
     /// Worth knowing; nothing to change.
     Info,
@@ -345,7 +346,7 @@ pub enum Level {
 }
 
 /// One recommendation: a knob to set, or a fact worth stating.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Step {
     pub level: Level,
     /// The knob to change, and what to change it to. `None` for a note that carries no
@@ -386,7 +387,7 @@ impl Step {
 }
 
 /// What a planning run concluded.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Plan {
     pub steps: Vec<Step>,
     /// The context the plan expects to deliver, and the model's ceiling.

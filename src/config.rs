@@ -59,6 +59,7 @@ pub struct Config {
     pub templates: TemplatesCfg,
     pub convert: ConvertCfg,
     pub ui: UiCfg,
+    pub web: WebCfg,
 }
 
 /// How to invoke FreeToken. `ft` is normally on PATH inside the venv it was installed
@@ -251,8 +252,11 @@ impl Default for HubCfg {
 /// A Hugging Face token plus where it came from. Resolved once at startup and passed
 /// around, so every part of the UI agrees about whether there is a token — the message
 /// on the Hub tab and the client that does the downloading must never disagree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HubToken {
+    // Never serialized. Provenance is what the UI needs; the token itself is a secret
+    // that has no business on a wire ft-man does not control.
+    #[serde(skip)]
     pub value: String,
     /// Human-readable provenance, e.g. `the HF_TOKEN environment variable`.
     pub source: &'static str,
@@ -315,6 +319,24 @@ pub struct TemplatesCfg {
 impl Default for TemplatesCfg {
     fn default() -> Self {
         Self { sources: vec!["peculiar-ragdoll/Qwen-Sharp-Chat-Templates".into()], preflight: true }
+    }
+}
+
+/// The browser interface `ft-man web` serves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebCfg {
+    /// Address to bind. 7979 sits well away from the engine's 1919 and the 192x range
+    /// FreeToken's own subprocesses use.
+    pub listen: String,
+    /// Bearer token every `/api` request must carry. Unset means no authentication at
+    /// all, which is `ft serve`'s own default.
+    pub token: Option<String>,
+}
+
+impl Default for WebCfg {
+    fn default() -> Self {
+        Self { listen: "0.0.0.0:7979".into(), token: None }
     }
 }
 

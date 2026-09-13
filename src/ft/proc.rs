@@ -30,41 +30,93 @@ use super::locate::Freetoken;
 
 // ---------------------------------------------------------------- log ring
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LogLine {
+    /// Position in the stream of every line ever pushed, starting at 1. Never reused and
+    /// never renumbered, so a client that fetches by sequence can tell a gap from a pause.
+    pub seq: u64,
     pub text: String,
     /// True for lines that arrived on stderr.
     pub err: bool,
+}
+
+/// What a ring currently holds, for a reader deciding whether it has missed anything.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RingStats {
+    pub count: usize,
+    /// Sequence of the oldest retained line; equal to `last_seq` when nothing is retained.
+    pub first_seq: u64,
+    /// Sequence of the newest line ever pushed; 0 before the first one.
+    pub last_seq: u64,
+    /// Lines evicted by the ring or discarded by a clear, since the process started.
+    pub dropped: u64,
+}
+
+#[derive(Debug, Default)]
+struct Ring {
+    lines: VecDeque<LogLine>,
+    /// Total pushed, which is also the newest sequence number.
+    pushed: u64,
+    dropped: u64,
 }
 
 /// A bounded, shared ring of child output. The reader task appends; the UI reads a
 /// snapshot each frame.
 #[derive(Clone)]
 pub struct LogRing {
-    inner: Arc<Mutex<VecDeque<LogLine>>>,
+    inner: Arc<Mutex<Ring>>,
     capacity: usize,
 }
 
 impl LogRing {
     pub fn new(capacity: usize) -> Self {
-        Self { inner: Arc::new(Mutex::new(VecDeque::with_capacity(capacity.min(1024)))), capacity }
+        Self {
+            inner: Arc::new(Mutex::new(Ring {
+                lines: VecDeque::with_capacity(capacity.min(1024)),
+                ..Default::default()
+            })),
+            capacity,
+        }
     }
 
     pub fn push(&self, text: String, err: bool) {
-        let mut buf = self.inner.lock().unwrap();
-        if buf.len() == self.capacity {
-            buf.pop_front();
+        let mut ring = self.inner.lock().unwrap();
+        if ring.lines.len() == self.capacity {
+            ring.lines.pop_front();
+            ring.dropped += 1;
         }
-        buf.push_back(LogLine { text, err });
+        ring.pushed += 1;
+        let seq = ring.pushed;
+        ring.lines.push_back(LogLine { seq, text, err });
     }
 
     /// All retained lines, oldest first.
     pub fn snapshot(&self) -> Vec<LogLine> {
-        self.inner.lock().unwrap().iter().cloned().collect()
+        self.inner.lock().unwrap().lines.iter().cloned().collect()
     }
 
+    /// Retained lines after `after`, oldest first, at most `limit` of them.
+    pub fn since(&self, after: u64, limit: usize) -> Vec<LogLine> {
+        let ring = self.inner.lock().unwrap();
+        ring.lines.iter().filter(|l| l.seq > after).take(limit).cloned().collect()
+    }
+
+    pub fn stats(&self) -> RingStats {
+        let ring = self.inner.lock().unwrap();
+        RingStats {
+            count: ring.lines.len(),
+            first_seq: ring.lines.front().map(|l| l.seq).unwrap_or(ring.pushed),
+            last_seq: ring.pushed,
+            dropped: ring.dropped,
+        }
+    }
+
+    /// Discard everything retained. The sequence keeps counting and `dropped` absorbs
+    /// what went, so a reader holding a sequence can still tell where it stands.
     pub fn clear(&self) {
-        self.inner.lock().unwrap().clear();
+        let mut ring = self.inner.lock().unwrap();
+        ring.dropped += ring.lines.len() as u64;
+        ring.lines.clear();
     }
 }
 
@@ -117,7 +169,8 @@ pub fn proc_starttime(pid: u32) -> Option<u64> {
 
 // ---------------------------------------------------------------- engine supervisor
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineState {
     /// No engine started by, or adopted by, this ft-man.
     Stopped,
@@ -163,6 +216,9 @@ pub struct Engine {
     stop_stage: u8,
     /// `starttime` of an adopted process, so a recycled PID is not mistaken for it.
     adopted_starttime: Option<u64>,
+    /// When re-adoption last looked at the state file. Cheap is not free, and [`poll`]
+    /// runs five times a second.
+    last_adopt_check: Option<std::time::Instant>,
 }
 
 /// How long a stopping engine gets at each stage before the next signal. FreeToken
@@ -186,6 +242,7 @@ impl Engine {
             stop_at: None,
             stop_stage: 0,
             adopted_starttime: None,
+            last_adopt_check: None,
         }
     }
 
@@ -344,10 +401,11 @@ impl Engine {
         self.log.push(format!("[ft-man] {why}"), true);
     }
 
-    /// Called every tick: reap the child if it exited, and notice when an adopted
-    /// engine goes away.
+    /// Called every tick: reap the child if it exited, notice when an adopted engine goes
+    /// away, and pick up an engine another process started.
     pub fn poll(&mut self) {
         self.escalate_stop();
+        self.readopt();
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -389,6 +447,33 @@ impl Engine {
                     self.log.push("[ft-man] the engine is gone".into(), true);
                 }
             }
+        }
+    }
+
+    /// Pick up an engine started elsewhere.
+    ///
+    /// A TUI and the web daemon can run side by side on one machine, and both are meant
+    /// to drive the same engine rather than each seeing only what it started itself. The
+    /// state file is the handoff: whichever process starts an engine writes it, and any
+    /// other that has none adopts it on its next tick.
+    ///
+    /// Only from a settled idle state. `Stopping` is deliberately excluded — a stop this
+    /// process just asked for has not cleared the file yet, and re-adopting the engine
+    /// being killed would undo the request.
+    fn readopt(&mut self) {
+        if self.pid.is_some()
+            || !matches!(self.state, EngineState::Stopped | EngineState::Exited { .. })
+        {
+            return;
+        }
+        // Once a second: reading a small file is cheap, but not five times a second
+        // forever on an idle daemon.
+        if self.last_adopt_check.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        self.last_adopt_check = Some(std::time::Instant::now());
+        if ServeState::load().is_some_and(|s| s.is_alive()) {
+            self.adopt();
         }
     }
 
@@ -502,7 +587,8 @@ pub fn new_log_path(kind: &str) -> PathBuf {
 // ---------------------------------------------------------------- jobs
 
 /// Which long-running FreeToken command a job is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum JobKind {
     /// `ft checkpoint` — HF safetensors to FTW.
     Convert,
@@ -527,8 +613,27 @@ pub enum JobStatus {
     Canceled,
 }
 
+// Written out rather than derived: serde cannot internally tag a newtype variant holding
+// a plain String, and the wire format in docs/web-api.md names that payload `reason`.
+impl Serialize for JobStatus {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        match self {
+            JobStatus::Running => m.serialize_entry("kind", "running")?,
+            JobStatus::Done => m.serialize_entry("kind", "done")?,
+            JobStatus::Canceled => m.serialize_entry("kind", "canceled")?,
+            JobStatus::Failed(reason) => {
+                m.serialize_entry("kind", "failed")?;
+                m.serialize_entry("reason", reason)?;
+            }
+        }
+        m.end()
+    }
+}
+
 /// Progress parsed out of a job's machine-readable output.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct JobProgress {
     /// `dense`, `experts`, `finalize` for a convert; the current format for a bench.
     pub phase: String,

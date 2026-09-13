@@ -32,6 +32,7 @@
 //! outside. A missing answer is the honest one there.
 
 use crate::ft::types::RequestRecord;
+use serde::Serialize;
 
 /// Below this, time-to-first-token is dominated by queueing and request overhead rather
 /// than prefill, and the implied rate is meaningless.
@@ -44,7 +45,7 @@ pub const MIN_SAMPLES: usize = 3;
 /// evidence of caching rather than of ordinary variation.
 pub const MIN_SPREAD: f64 = 1.5;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Reuse {
     /// Fraction of prompt tokens served from cache, 0.0 to 1.0.
     pub fraction: f64,

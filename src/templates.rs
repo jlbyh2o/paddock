@@ -50,7 +50,7 @@ pub struct TemplateMeta {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StoredTemplate {
     pub name: String,
     pub path: PathBuf,
@@ -230,6 +230,25 @@ pub enum Status {
     /// A `chat_template.jinja` exists that ft-man did not write — someone edited the
     /// checkpoint by hand. Reported rather than silently overwritten.
     Foreign,
+}
+
+// `{kind, label}` plus the applied record for an override. Written out so `label` — the
+// one string every view shows — travels with the variant rather than beside it.
+impl Serialize for Status {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        match self {
+            Status::BuiltIn => m.serialize_entry("kind", "built_in")?,
+            Status::Foreign => m.serialize_entry("kind", "foreign")?,
+            Status::Overridden(applied) => {
+                m.serialize_entry("kind", "overridden")?;
+                m.serialize_entry("applied", applied)?;
+            }
+        }
+        m.serialize_entry("label", &self.label())?;
+        m.end()
+    }
 }
 
 impl Status {

@@ -21,10 +21,12 @@
 //! from needing a special case for it.
 
 use crate::hub::Sibling;
+use serde::Serialize;
 
 /// What a group of files is for. Only [`Role::Weights`] is servable on its own; the others
 /// are add-ons that pair with a chosen quantization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     /// A servable set of weights.
     Weights,
@@ -38,7 +40,7 @@ pub enum Role {
     Draft,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Variant {
     /// What the user picks from the list: `UD-IQ3_XXS`, `Q8_0`, `safetensors`.
     pub label: String,
@@ -61,7 +63,7 @@ impl Variant {
 }
 
 /// A repo's files, grouped.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Layout {
     pub variants: Vec<Variant>,
     /// Files every variant needs regardless of which is chosen: `config.json`, the

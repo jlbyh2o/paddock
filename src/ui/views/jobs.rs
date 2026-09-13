@@ -146,7 +146,7 @@ fn job_rows<'a>(app: &App, idx: usize, is_sel: bool, width: usize) -> Vec<Line<'
     vec![head, detail]
 }
 
-fn progress_detail(job: &crate::ft::Job) -> String {
+pub fn progress_detail(job: &crate::ft::Job) -> String {
     let p = &job.progress;
     if p.bytes {
         // The converter reports no total for its dense phase, so there is no bar and no

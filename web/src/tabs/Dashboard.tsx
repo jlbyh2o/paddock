@@ -1,0 +1,376 @@
+/**
+ * Dashboard — the six panes of §5.2.
+ *
+ * Every derived number here (status text, context fit, reuse estimate, pool ratios,
+ * completion rate) arrives ready-made in the snapshot. This file formats and lays
+ * out; it does not compute.
+ */
+
+import { useCallback } from "react";
+import type { ReactNode } from "react";
+import type { Severity, Snapshot } from "../api/types.ts";
+import { api } from "../api/client.ts";
+import { run } from "../api/store.ts";
+import { useTabKeys } from "../ui/keys.ts";
+import { Bullets, Field, Meter, Pane, Sparkline } from "../ui/primitives.tsx";
+import {
+  DASH,
+  bytes,
+  count,
+  decimal,
+  duration,
+  fixed,
+  ms,
+  percent,
+  text,
+  tokens,
+  tps,
+} from "../format.ts";
+
+function sampling(raw: Record<string, unknown> | null | undefined): string {
+  if (!raw) return DASH;
+  const keys: [string, string][] = [
+    ["temperature", "temp"],
+    ["top_p", "top_p"],
+    ["top_k", "top_k"],
+    ["min_p", "min_p"],
+    ["repetition_penalty", "rep"],
+  ];
+  const parts: string[] = [];
+  for (const [key, label] of keys) {
+    const value = raw[key];
+    if (typeof value === "number" && Number.isFinite(value)) parts.push(`${label} ${value}`);
+  }
+  return parts.length === 0 ? DASH : parts.join("  ");
+}
+
+export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
+  const s = props.snapshot;
+  const { engine, telemetry, series, hardware } = s;
+  const stats = telemetry.stats;
+  const health = telemetry.health;
+  const geo = telemetry.cache_status?.geometry ?? null;
+
+  const start = useCallback(() => {
+    run(api.engineStart());
+  }, []);
+  const stop = useCallback(() => {
+    run(api.engineStop(false));
+  }, []);
+  const forceStop = useCallback(() => {
+    run(api.engineStop(true));
+  }, []);
+  const smoke = useCallback(() => {
+    run(api.smokeTest());
+  }, []);
+  const rescan = useCallback(() => {
+    run(api.rescanModels());
+  }, []);
+
+  useTabKeys(
+    useCallback(
+      (event: KeyboardEvent) => {
+        switch (event.key) {
+          case "e":
+            start();
+            return true;
+          case "s":
+            stop();
+            return true;
+          case "S":
+            forceStop();
+            return true;
+          case "t":
+            smoke();
+            return true;
+          case "r":
+            rescan();
+            return true;
+          default:
+            return false;
+        }
+      },
+      [start, stop, forceStop, smoke, rescan],
+    ),
+  );
+
+  const uptime = stats?.uptime_s ?? health?.uptime_s ?? null;
+  const loading = health?.status === "loading";
+  const fit = engine.context_fit;
+
+  const shape = [
+    fit && fit.is_truncated ? fit.summary : stats ? tokens(stats.model.ctx) : null,
+    stats?.model.attn ?? null,
+    stats?.model.moe ? "MoE" : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+
+  const gpus = hardware.gpus;
+  const bench = hardware.bench_profile;
+
+  return (
+    <div className="panes">
+      <Pane
+        title="Engine"
+        note={engine.gpu_busy_reason ?? undefined}
+        actions={
+          <>
+            <button type="button" className="btn" onClick={start} disabled={engine.is_live}>
+              Start <span className="dim">(e)</span>
+            </button>
+            <button type="button" className="btn" onClick={stop} disabled={!engine.is_live}>
+              Stop <span className="dim">(s)</span>
+            </button>
+            <button
+              type="button"
+              className="btn danger"
+              onClick={forceStop}
+              disabled={!engine.is_live}
+            >
+              Force-stop <span className="dim">(S)</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={smoke}
+              disabled={!engine.server_reachable}
+            >
+              Smoke test <span className="dim">(t)</span>
+            </button>
+            <button type="button" className="btn" onClick={rescan}>
+              Rescan <span className="dim">(r)</span>
+            </button>
+          </>
+        }
+      >
+        <Field label="Status" tone={engine.status_class}>
+          <span className={`dot ${engine.status_class}`} aria-hidden="true" /> {engine.status_text}
+        </Field>
+        <Field label="Model">{text(engine.model ?? null)}</Field>
+        <Field label="Endpoint" tone={engine.server_reachable ? "good" : "dim"} mono>
+          {engine.endpoint}
+        </Field>
+        <Field label="Process">
+          {engine.pid === null ? DASH : `pid ${engine.pid}${engine.adopted ? " (attached)" : ""}`}
+        </Field>
+        <Field label="Uptime">{duration(uptime)}</Field>
+        <Field label="Shape">{shape === "" ? DASH : shape}</Field>
+        {loading ? (
+          <Meter
+            label={text(health?.phase ?? null)}
+            ratio={telemetry.health_load_ratio}
+            figure={
+              health?.progress
+                ? `${bytes(health.progress.done_bytes)} / ${bytes(health.progress.total_bytes)}`
+                : percent(telemetry.health_load_ratio)
+            }
+          />
+        ) : null}
+        {fit && fit.is_truncated ? (
+          <div className="warn">
+            KV holds {tokens(fit.usable)} of {tokens(fit.ceiling)} — plan a fix on the Serve tab
+          </div>
+        ) : null}
+        <Field label="Sampling">{sampling(stats?.model.sampling)}</Field>
+        {telemetry.error ? (
+          <Field label="Poll" tone="bad">
+            {telemetry.error}
+            {telemetry.age_ms === null ? "" : ` (${duration(telemetry.age_ms / 1000)} ago)`}
+          </Field>
+        ) : null}
+      </Pane>
+
+      <Pane title="Throughput">
+        <Field label="Decode">
+          {tps(stats?.throughput.decode_tps)}{" "}
+          <span className="dim">peak {decimal(series.decode_peak)}</span>
+        </Field>
+        <Sparkline values={series.decode_tps} label="decode tokens per second" tone="good" />
+        <Field label="Prefill">{tps(stats?.throughput.prefill_tps)}</Field>
+        <Sparkline values={series.prefill_tps} label="prefill tokens per second" tone="dim" />
+      </Pane>
+
+      <Pane title="Cache pools">
+        <Meter
+          label="KV"
+          ratio={telemetry.kv_ratio}
+          figure={
+            telemetry.kv_total_tokens
+              ? `${tokens(telemetry.kv_used_tokens)} / ${tokens(telemetry.kv_total_tokens)}`
+              : "idle"
+          }
+        />
+        <Meter
+          label="MoE"
+          ratio={
+            geo && telemetry.total_experts
+              ? geo.moe_cache_size / telemetry.total_experts
+              : null
+          }
+          figure={
+            geo && telemetry.total_experts
+              ? `${count(geo.moe_cache_size)} / ${count(telemetry.total_experts)}`
+              : "idle"
+          }
+        />
+        <Meter
+          label="GDN state"
+          ratio={telemetry.mamba_ratio}
+          figure={
+            stats?.mamba
+              ? `${count(stats.mamba.used_slots)} / ${count(stats.mamba.total_slots)}`
+              : "idle"
+          }
+        />
+        <Meter
+          label="SWA"
+          ratio={telemetry.swa_ratio}
+          figure={
+            telemetry.swa_total_tokens
+              ? `${tokens(telemetry.swa_used_tokens)} / ${tokens(telemetry.swa_total_tokens)}`
+              : "idle"
+          }
+        />
+        <Field label="VRAM">
+          {bytes(telemetry.pool_bytes?.total)}
+          {geo && geo.cache_budget_bytes > 0 ? ` of ${bytes(geo.cache_budget_bytes)}` : ""}
+        </Field>
+        <div className="facts">
+          <span>KV {bytes(telemetry.pool_bytes?.kv)}</span>
+          <span>MoE {bytes(telemetry.pool_bytes?.moe)}</span>
+          <span>GDN {bytes(telemetry.pool_bytes?.mamba)}</span>
+          <span>SWA {bytes(telemetry.pool_bytes?.swa)}</span>
+        </div>
+      </Pane>
+
+      <Pane title={`GPU (${hardware.gpu_source})`}>
+        {gpus.length > 0 ? (
+          gpus.map((gpu) => (
+            <div key={gpu.uuid}>
+              <Field label={`${gpu.index}`}>
+                {gpu.name}
+                {gpu.uuid === hardware.engine_gpu_uuid ? (
+                  <span className="accent"> ← engine</span>
+                ) : null}
+              </Field>
+              <Meter
+                label="VRAM"
+                ratio={gpu.memory_ratio}
+                figure={`${percent(gpu.memory_ratio)}`}
+                tone={gpu.memory_ratio > 0.95 ? "warn" : undefined}
+              />
+              <div className="facts">
+                <span>
+                  {bytes(gpu.memory_used)} used · {bytes(gpu.memory_total)} total ·{" "}
+                  {bytes(gpu.memory_free)} free
+                </span>
+              </div>
+              <Meter
+                label="Util"
+                ratio={gpu.utilization === null ? null : gpu.utilization / 100}
+                figure={gpu.utilization === null ? DASH : `${gpu.utilization}%`}
+              />
+              <div className="facts">
+                <span>{gpu.temperature === null ? DASH : `${gpu.temperature}°C`}</span>
+                <span>
+                  {fixed(gpu.power_watts, 0)} / {fixed(gpu.power_limit_watts, 0)} W
+                </span>
+                <span>{text(gpu.pcie_link)}</span>
+                <span className="mono">{gpu.short_uuid}</span>
+              </div>
+            </div>
+          ))
+        ) : hardware.reported_gpus.length > 0 ? (
+          <>
+            <p className="dim">no local GPU readable; reporting what the engine says</p>
+            {hardware.reported_gpus.map((card, i) => (
+              <Field key={card.uuid ?? i} label={`${card.index ?? i}`}>
+                {text(card.name)} · {bytes(card.total_bytes)}
+              </Field>
+            ))}
+          </>
+        ) : (
+          <p className="dim">no NVIDIA GPU detected</p>
+        )}
+        {hardware.bench_summary ? (
+          <Field label="Bench">{hardware.bench_summary}</Field>
+        ) : (
+          <Field label="Bench" tone="dim">
+            no bandwidth profile — run one from the Jobs tab (b)
+          </Field>
+        )}
+        {bench ? (
+          <div className="facts">
+            <span>{bench.cpu.threads_used} of {bench.cpu.physical_cores} cores benched</span>
+            <span>CPU {fixed(bench.ceilings.cpu_stream_read_gbs)} GB/s</span>
+            <span>PCIe {fixed(bench.ceilings.pcie_linear_h2d_gbs)} GB/s h2d</span>
+          </div>
+        ) : null}
+      </Pane>
+
+      <Pane title="Activity">
+        <Field label="In flight">
+          {count(stats?.requests.active)}{" "}
+          <span className="dim">{decimal(engine.completed_rate, 2)} completed/s</span>
+        </Field>
+        <Field label="Completed">{count(stats?.requests.completed)}</Field>
+        <Field label="Latency">
+          p95 {ms(stats?.requests.p95_ms)} · TTFT {ms(stats?.requests.ttft_mean_ms)}
+        </Field>
+        <Field label="Prompt tokens">{count(stats?.requests.prompt_tokens_total)}</Field>
+        <Field label="Output tokens">{count(stats?.requests.completion_tokens_total)}</Field>
+        {engine.prefix_reuse ? (
+          <Field label="Prefix reuse">{engine.prefix_reuse.summary}</Field>
+        ) : null}
+        {stats && stats.vram_bytes > 0 ? (
+          <Field label="Engine VRAM">{bytes(stats.vram_bytes)}</Field>
+        ) : null}
+        <Field label="Work">
+          {engine.active_jobs} job{engine.active_jobs === 1 ? "" : "s"} ·{" "}
+          {engine.active_downloads} download{engine.active_downloads === 1 ? "" : "s"}
+        </Field>
+        <Field label="Library">
+          {count(s.models.items.length)} checkpoint{s.models.items.length === 1 ? "" : "s"}
+        </Field>
+        <Sparkline values={series.active} label="concurrent requests" tone="dim" />
+        <div className="dim">concurrent requests</div>
+      </Pane>
+
+      <Pane
+        title={`Host — ${hardware.host.hostname}`}
+        note={`up ${duration(hardware.host.uptime_s)}`}
+      >
+        <Meter
+          label="CPU"
+          ratio={hardware.host.cpu_percent / 100}
+          figure={`${fixed(hardware.host.cpu_percent)}%`}
+        />
+        <div className="facts">
+          <span>{hardware.host.cpu_cores} threads · {hardware.host.physical_cores} cores</span>
+          <span>load {fixed(hardware.host.load_avg[0], 2)}</span>
+        </div>
+        <Meter
+          label="RAM"
+          ratio={hardware.host.memory_ratio}
+          figure={`${bytes(hardware.host.memory_used)} / ${bytes(hardware.host.memory_total)}`}
+        />
+        {hardware.host.swap_total > 0 ? (
+          <Meter
+            label="Swap"
+            ratio={hardware.host.swap_used / hardware.host.swap_total}
+            figure={`${bytes(hardware.host.swap_used)} / ${bytes(hardware.host.swap_total)}`}
+            tone={hardware.host.swap_used > 0 ? "warn" : undefined}
+          />
+        ) : null}
+        <div className="facts">
+          <span>{bytes(hardware.host.memory_free)} free for expert banks</span>
+          <span className="mono">{hardware.host.kernel}</span>
+        </div>
+        {s.environment.ft_error ? (
+          <Bullets items={[{ level: "bad" as Severity, text: s.environment.ft_error }]} />
+        ) : null}
+      </Pane>
+    </div>
+  );
+}

@@ -3,7 +3,7 @@
 pub mod app;
 pub mod draw;
 pub mod input;
-mod smoke;
+pub(crate) mod smoke;
 pub mod theme;
 pub mod views;
 pub mod widgets;

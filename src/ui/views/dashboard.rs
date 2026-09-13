@@ -439,16 +439,7 @@ fn gpu_pane(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(p) = &app.bench_profile {
         lines.push(Line::from(""));
-        let verdicts: Vec<String> = p
-            .dtypes
-            .iter()
-            .filter_map(|(fmt, rec)| rec.as_ref().map(|r| format!("{fmt}→{r}")))
-            .collect();
-        let text = if verdicts.is_empty() {
-            "bandwidth profile present".to_string()
-        } else {
-            format!("bench: {}", verdicts.join("  "))
-        };
+        let text = app.bench_summary().unwrap_or_default();
         lines.push(Line::from(Span::styled(text, t.muted())));
         if p.cpu.physical_cores > 0 {
             lines.push(Line::from(Span::styled(

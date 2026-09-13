@@ -22,9 +22,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Format {
     /// A Hugging Face directory: `config.json` plus safetensors shards.
     Hf,
@@ -49,7 +50,7 @@ impl Format {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Model {
     pub name: String,
     /// The Hugging Face repo id (`org/name`) when this checkpoint came from the hub
@@ -79,6 +80,9 @@ pub struct Model {
     /// An FTW sibling built from this checkpoint, when the scan found one.
     pub converted_to: Option<PathBuf>,
     /// Directory mtime, shown so a freshly downloaded checkpoint is identifiable.
+    // Skipped: a `SystemTime` serializes as a struct of seconds and nanoseconds, which no
+    // browser wants. The web layer sends `modified_ms` beside the flattened rest.
+    #[serde(skip)]
     pub modified: Option<std::time::SystemTime>,
 }
 

@@ -174,19 +174,7 @@ fn budget(f: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    let mut facts: Vec<String> = Vec::new();
-    if let Some(policy) = &geo.moe_cache_policy {
-        facts.push(format!("expert eviction: {policy}"));
-    }
-    if geo.swa_full_tokens_ratio > 0.0 {
-        facts.push(format!("window/full ratio: {:.2}", geo.swa_full_tokens_ratio));
-    }
-    if let Some(r) = &geo.reasoning {
-        if !r.gears.is_empty() {
-            let default = r.default.as_deref().unwrap_or("—");
-            facts.push(format!("thinking gears: {} (default {default})", r.gears.join("/")));
-        }
-    }
+    let facts = facts(geo);
     if !facts.is_empty() {
         lines.push(Line::from(Span::styled(facts.join("   ·   "), t.muted())));
     }
@@ -211,8 +199,27 @@ fn budget(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
+/// The VRAM pane's footnotes: what the engine says about eviction, the window ratio and
+/// the thinking gears the served template exposes.
+pub fn facts(geo: &CacheGeometry) -> Vec<String> {
+    let mut facts: Vec<String> = Vec::new();
+    if let Some(policy) = &geo.moe_cache_policy {
+        facts.push(format!("expert eviction: {policy}"));
+    }
+    if geo.swa_full_tokens_ratio > 0.0 {
+        facts.push(format!("window/full ratio: {:.2}", geo.swa_full_tokens_ratio));
+    }
+    if let Some(r) = &geo.reasoning {
+        if !r.gears.is_empty() {
+            let default = r.default.as_deref().unwrap_or("—");
+            facts.push(format!("thinking gears: {} (default {default})", r.gears.join("/")));
+        }
+    }
+    facts
+}
+
 /// Total pool bytes if every pending edit were applied.
-fn proposed_bytes(app: &App, geo: &CacheGeometry) -> u64 {
+pub fn proposed_bytes(app: &App, geo: &CacheGeometry) -> u64 {
     let u = &geo.unit_bytes;
     let moe = app.cache_view.pending_for(Pool::Moe).unwrap_or(geo.moe_cache_size);
     let kv = app.cache_view.pending_for(Pool::Kv).unwrap_or(geo.num_pages);
@@ -242,6 +249,32 @@ pub fn pool_current(geo: &CacheGeometry, pool: Pool) -> u64 {
     }
 }
 
+/// FreeToken's own name for a pool's bounds, as its `cache_report.py` publishes them.
+pub fn limit_key(pool: Pool) -> &'static str {
+    match pool {
+        Pool::Moe => "moe_experts",
+        Pool::Kv => "kv_tokens",
+        Pool::Mamba => "mamba_slots",
+        Pool::Swa => "swa_tokens",
+    }
+}
+
+/// How many published tokens make one of the units ft-man sizes this pool in. The paged
+/// pools are published in tokens and rebuilt in pages; the others are one to one.
+pub fn tokens_per_unit(geo: &CacheGeometry, pool: Pool) -> u64 {
+    match pool {
+        Pool::Moe | Pool::Mamba => 1,
+        Pool::Kv => geo.page_size.max(1),
+        Pool::Swa => geo.swa_page_size.max(1),
+    }
+}
+
+/// The engine's published lower bound, in the pool's own unit. `None` when it published
+/// none — the TUI never shows a minimum, but a web slider needs one to clamp against.
+pub fn pool_min(geo: &CacheGeometry, pool: Pool) -> Option<u64> {
+    geo.limit(limit_key(pool), "min").map(|min| min / tokens_per_unit(geo, pool))
+}
+
 /// The upper bound for a pool. The server publishes limits sized against the real cache
 /// budget; fall back to something defensible when it does not.
 ///
@@ -252,14 +285,8 @@ pub fn pool_current(geo: &CacheGeometry, pool: Pool) -> u64 {
 /// two convert. The conversion is invisible on a model with `page_size` 1 and is a factor
 /// of 128 on DSV4.
 pub fn pool_max(geo: &CacheGeometry, pool: Pool) -> u64 {
-    let (key, tokens_per_unit) = match pool {
-        Pool::Moe => ("moe_experts", 1),
-        Pool::Kv => ("kv_tokens", geo.page_size.max(1)),
-        Pool::Mamba => ("mamba_slots", 1),
-        Pool::Swa => ("swa_tokens", geo.swa_page_size.max(1)),
-    };
-    if let Some(max) = geo.limit(key, "max").filter(|m| *m > 0) {
-        return (max / tokens_per_unit).max(1);
+    if let Some(max) = geo.limit(limit_key(pool), "max").filter(|m| *m > 0) {
+        return (max / tokens_per_unit(geo, pool)).max(1);
     }
     match pool {
         // An expert cache larger than the model's total expert count is pointless.
@@ -271,7 +298,7 @@ pub fn pool_max(geo: &CacheGeometry, pool: Pool) -> u64 {
 }
 
 /// A short explanation of what a given size means in practice.
-fn pool_note(geo: &CacheGeometry, pool: Pool, value: u64) -> String {
+pub fn pool_note(geo: &CacheGeometry, pool: Pool, value: u64) -> String {
     match pool {
         Pool::Moe => {
             let total = geo.total_experts();
@@ -287,7 +314,7 @@ fn pool_note(geo: &CacheGeometry, pool: Pool, value: u64) -> String {
 }
 
 /// One line describing the engine's most recent pool rebuild, when it has done one.
-fn last_rebuild_summary(app: &App) -> Option<String> {
+pub fn last_rebuild_summary(app: &App) -> Option<String> {
     let last = app.telemetry.cache.as_ref()?.last_rebuild.as_ref()?.as_object()?;
     let mut parts: Vec<String> = Vec::new();
     for (key, label) in [

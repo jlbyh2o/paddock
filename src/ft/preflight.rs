@@ -21,6 +21,23 @@ pub enum Outcome {
     Fail(String),
 }
 
+// `{kind, detail}`, written out because serde cannot internally tag a newtype variant
+// holding a plain String.
+impl serde::Serialize for Outcome {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let kind = match self {
+            Outcome::Ok(_) => "ok",
+            Outcome::Warn(_) => "warn",
+            Outcome::Fail(_) => "fail",
+        };
+        let mut m = s.serialize_map(Some(2))?;
+        m.serialize_entry("kind", kind)?;
+        m.serialize_entry("detail", self.detail())?;
+        m.end()
+    }
+}
+
 impl Outcome {
     pub fn detail(&self) -> &str {
         match self {
