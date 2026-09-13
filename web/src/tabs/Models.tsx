@@ -6,7 +6,7 @@
  * case-insensitively. Every action names the model by `path`, never by row.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import type { ModelEntry, Snapshot } from "../api/types.ts";
 import { api } from "../api/client.ts";
@@ -14,51 +14,44 @@ import { run } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Bullets, Empty, Field, Pane } from "../ui/primitives.tsx";
+import { SearchField, useFilterField } from "../ui/SearchField.tsx";
 import { DASH, bytes, count, text, timestampMs, tokens } from "../format.ts";
 
+/** The TUI's rule, against a needle that was trimmed and lowercased by the caller. */
 function matches(model: ModelEntry, needle: string): boolean {
-  const n = needle.toLowerCase();
   return (
-    model.name.toLowerCase().includes(n) ||
-    model.path.toLowerCase().includes(n) ||
-    (model.arch ?? "").toLowerCase().includes(n)
+    model.name.toLowerCase().includes(needle) ||
+    model.path.toLowerCase().includes(needle) ||
+    (model.arch ?? "").toLowerCase().includes(needle)
   );
 }
 
 export function Models(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
-  const [filter, setFilter] = useState("");
-  const filterRef = useRef<HTMLInputElement>(null);
+  const filter = useFilterField();
+  // Trimmed once: a filter of two spaces is not a filter, and the same string must
+  // decide both "is anything being filtered" and what the rows are matched against.
+  const needle = filter.needle.toLowerCase();
 
   const items = useMemo(
-    () => (filter.trim() === "" ? s.models.items : s.models.items.filter((m) => matches(m, filter))),
-    [s.models.items, filter],
+    () => (needle === "" ? s.models.items : s.models.items.filter((m) => matches(m, needle))),
+    [s.models.items, needle],
   );
 
   const selection = useSelection(items, useCallback((m: ModelEntry) => m.path, []));
   const model = selection.item;
 
   const useModel = useCallback((path: string, andServe: boolean) => {
-    run(api.useModel(path, andServe));
+    run(api.useModel({ path, and_serve: andServe }));
   }, []);
 
   useTabKeys(
     useCallback(
       (event: KeyboardEvent) => {
-        if (event.key === "Escape") {
-          if (filter !== "") {
-            setFilter("");
-            filterRef.current?.blur();
-            return true;
-          }
-          return false;
-        }
+        if (filter.handleKey(event)) return true;
+        if (event.key === "Escape") return false;
         if (selection.handleKey(event)) return true;
         switch (event.key) {
-          case "/":
-            filterRef.current?.focus();
-            filterRef.current?.select();
-            return true;
           case "Enter":
             if (model) useModel(model.path, false);
             return true;
@@ -66,10 +59,10 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
             if (model) useModel(model.path, true);
             return true;
           case "c":
-            if (model) run(api.convertModel(model.path));
+            if (model) run(api.convertModel({ path: model.path }));
             return true;
           case "D":
-            if (model) run(api.deleteModel(model.path));
+            if (model) run(api.deleteModel({ path: model.path }));
             return true;
           case "r":
             run(api.rescanModels());
@@ -84,8 +77,7 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
 
   const total = s.models.items.length;
   const title = s.models.scanning ? "Library (scanning…)" : "Library";
-  const note =
-    filter.trim() === "" ? `${count(total)}` : `${count(items.length)} of ${count(total)}`;
+  const note = needle === "" ? `${count(total)}` : `${count(items.length)} of ${count(total)}`;
 
   return (
     <div className="panes wide">
@@ -95,13 +87,10 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
         bodyClassName="flush"
         actions={
           <>
-            <input
-              ref={filterRef}
-              type="search"
+            <SearchField
+              field={filter}
               placeholder="filter  (/)"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              aria-label="Filter the library"
+              label="Filter the library"
               style={{ flex: "1 1 200px" }}
             />
             <button type="button" className="btn" onClick={() => run(api.rescanModels())}>
@@ -127,7 +116,7 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
           </Empty>
         ) : items.length === 0 ? (
           <Empty>
-            <p>Nothing matches “{filter}”.</p>
+            <p>Nothing matches “{filter.needle}”.</p>
           </Empty>
         ) : (
           <ul className="rows scroll h-560">
@@ -172,7 +161,7 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
               <button
                 type="button"
                 className="btn"
-                onClick={() => run(api.convertModel(model.path))}
+                onClick={() => run(api.convertModel({ path: model.path }))}
                 disabled={!model.convertible}
               >
                 Convert <span className="dim">(c)</span>
@@ -180,7 +169,7 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
               <button
                 type="button"
                 className="btn danger"
-                onClick={() => run(api.deleteModel(model.path))}
+                onClick={() => run(api.deleteModel({ path: model.path }))}
               >
                 Delete <span className="dim">(D)</span>
               </button>

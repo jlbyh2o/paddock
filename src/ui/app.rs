@@ -119,8 +119,19 @@ pub enum Message {
     Download(DownloadEvent),
     /// A download that finished starting up and is now ready to be tracked.
     RegisterDownload(Box<Download>),
-    /// A rescan of the local library finished.
-    Models(Vec<Model>),
+    /// A rescan of the local library finished: the checkpoints, and which roots were
+    /// actually there.
+    Models {
+        items: Vec<Model>,
+        roots: Vec<Root>,
+    },
+    /// A confirmation whose wording needed the filesystem, now that it has been costed on
+    /// the blocking pool.
+    AskConfirm(Box<Confirm>),
+    /// `remove_dir_all` of a checkpoint finished.
+    ModelDeleted(PathBuf, Result<(), String>),
+    /// The leftovers of a failed conversion are gone; the retry can start.
+    LeftoversRemoved(PathBuf, Result<(), String>),
     /// Hub search results.
     HubSearch(Result<Vec<RepoSummary>, String>),
     /// Full repo metadata for the selected result.
@@ -150,6 +161,16 @@ pub enum Message {
 }
 
 // ---------------------------------------------------------------- per-tab state
+
+/// A configured library root and whether it exists, recorded during the scan.
+///
+/// The web snapshot is built under the `App` mutex on the runtime, so it may not stat a
+/// path; a root on unmounted network storage would block every connected browser.
+#[derive(Debug, Clone)]
+pub struct Root {
+    pub path: PathBuf,
+    pub exists: bool,
+}
 
 #[derive(Default)]
 pub struct ModelsView {
@@ -201,6 +222,17 @@ pub struct HubView {
     pub checking_compat: bool,
 }
 
+impl HubView {
+    /// How much is selected, and how many files that is.
+    ///
+    /// Three callers wanted this number — the Files pane title, the download confirmation
+    /// and the web snapshot — and three folds over the same vector is three chances to
+    /// count `wanted` differently.
+    pub fn selected(&self) -> (u64, usize) {
+        self.files.iter().filter(|f| f.wanted).fold((0, 0), |(b, n), f| (b + f.size, n + 1))
+    }
+}
+
 pub struct ServeView {
     pub group: Group,
     pub sel: Selection,
@@ -235,7 +267,10 @@ impl Default for ServeView {
 }
 
 /// The four resizable pools, in the order the Cache view lists them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+///
+/// `Deserialize` as well as `Serialize`: the web API names a pool by exactly these
+/// strings, so the route bodies parse straight into this rather than into a copy of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Pool {
     Moe,
@@ -461,6 +496,16 @@ pub struct App {
     pub jobs: Vec<Job>,
     pub downloads: Vec<Download>,
     pub bench_profile: Option<BenchProfile>,
+    /// The file [`Self::bench_profile`] was read from, remembered rather than re-resolved:
+    /// finding it globs a directory, and the web snapshot may not touch the filesystem.
+    pub bench_profile_path: Option<PathBuf>,
+    /// Every configured library root and whether it existed at scan time.
+    pub model_roots: Vec<Root>,
+    /// Free space at the download directory and at the Hub tab's target, each with the
+    /// directory the figure was actually measured at. Sampled once a second on the
+    /// hardware tick; `statvfs` on network storage is not something a snapshot may do.
+    pub disk_free_download: Option<(PathBuf, u64)>,
+    pub disk_free_target: Option<(PathBuf, u64)>,
     /// Per-unit VRAM costs remembered from earlier serves, so a launch can be
     /// planned before the engine that would measure them is running.
     pub cost_store: crate::plan::CostStore,
@@ -589,6 +634,10 @@ impl App {
             jobs: Vec::new(),
             downloads: Vec::new(),
             bench_profile: None,
+            bench_profile_path: None,
+            model_roots: Vec::new(),
+            disk_free_download: None,
+            disk_free_target: None,
             cost_store: crate::plan::CostStore::load(),
             cost_store_warned: false,
             serve,
@@ -642,10 +691,14 @@ impl App {
         self.toast(text, ToastKind::Error);
     }
 
-    pub fn expire_toasts(&mut self) {
+    /// Drop every toast past its lifetime. Returns whether any went, so an idle daemon
+    /// does not rebuild a snapshot five times a second to report that nothing happened.
+    pub fn expire_toasts(&mut self) -> bool {
+        let before = self.toasts.len();
         while self.toasts.front().is_some_and(Toast::is_expired) {
             self.toasts.pop_front();
         }
+        self.toasts.len() != before
     }
 
     // ---- derived state ----------------------------------------------
@@ -821,15 +874,55 @@ impl App {
         self.templates_view.preview = Some((name, text));
     }
 
-    /// Chat template status for a checkpoint, used by the Models detail pane.
+    /// Chat template status for a checkpoint, as the scan recorded it.
+    ///
+    /// Read from the `Model` rather than from disk: the Models pane asks for every row on
+    /// every frame, and the web snapshot asks under a mutex the whole daemon shares.
+    /// [`Self::refresh_template_status`] puts it back in step after an apply or a revert.
     pub fn template_status(&self, model: &Model) -> crate::templates::Status {
-        crate::templates::status(&model.path)
+        model.template_status.clone()
+    }
+
+    /// Re-read the on-disk template status for one checkpoint and its FTW build.
+    ///
+    /// Called from the apply and revert actions, which have just written those very
+    /// directories and are already doing filesystem work.
+    pub fn refresh_template_status(&mut self, path: &std::path::Path) {
+        let mut paths = vec![path.to_path_buf()];
+        if let Some(m) = self.models.iter().find(|m| m.path == path) {
+            paths.extend(m.converted_to.clone());
+        }
+        for p in paths {
+            let status = crate::templates::status(&p);
+            if let Some(m) = self.models.iter_mut().find(|m| m.path == p) {
+                m.template_status = status;
+            }
+        }
     }
 
     pub fn reload_bench_profile(&mut self) {
-        self.bench_profile = load_bench_profile(
-            self.gpus.first().and_then(|g| (!g.uuid.is_empty()).then(|| g.uuid.clone())),
-        );
+        let uuid = self.gpus.first().and_then(|g| (!g.uuid.is_empty()).then(|| g.uuid.clone()));
+        self.bench_profile_path = crate::plan::bench_profile_status(uuid.as_deref());
+        self.bench_profile = self
+            .bench_profile_path
+            .as_ref()
+            .and_then(|p| serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok());
+    }
+
+    /// Re-measure free space at the download directory and at the Hub tab's target.
+    ///
+    /// Both are `statvfs`, both walk up to an existing ancestor, and both are read by
+    /// every frame either front end draws — so they are sampled on the hardware tick and
+    /// after anything that moves real bytes, never in a render or a snapshot.
+    pub fn refresh_disk_free(&mut self) -> bool {
+        let download = crate::models::expand_tilde(&self.config.library.download_dir);
+        let next_download = crate::hub::disk_free_at(&download.display().to_string());
+        let next_target = crate::hub::disk_free_at(&self.hub_view.target.value);
+        let changed =
+            next_download != self.disk_free_download || next_target != self.disk_free_target;
+        self.disk_free_download = next_download;
+        self.disk_free_target = next_target;
+        changed
     }
 
     // ---- message handling -------------------------------------------
@@ -858,6 +951,8 @@ impl App {
                 }
                 self.gpus = gpus;
                 self.host = host;
+                // Once a second, which is the cadence the probe thread runs at.
+                self.refresh_disk_free();
             }
             Message::Engine(e) => self.on_engine(e),
             Message::Job(e) => self.on_job(e),
@@ -866,11 +961,35 @@ impl App {
                 self.downloads.push(*dl);
                 self.jobs_view.sel.last(self.jobs.len() + self.downloads.len());
             }
-            Message::Models(models) => {
-                self.models = models;
+            Message::Models { items, roots } => {
+                self.models = items;
+                self.model_roots = roots;
                 self.models_view.scanning = false;
                 self.models_view.sel.clamp(self.filtered_models().len());
             }
+            Message::AskConfirm(confirm) => {
+                crate::actions::ask(self, *confirm);
+            }
+            Message::ModelDeleted(path, result) => match result {
+                Ok(()) => {
+                    self.success(format!("deleted {}", path.display()));
+                    self.refresh_disk_free();
+                    self.request_scan();
+                }
+                Err(e) => self.error(format!("could not delete {}: {e}", path.display())),
+            },
+            Message::LeftoversRemoved(source, result) => match result {
+                Ok(()) => {
+                    // The cursor follows the checkpoint through the *filtered* list, which
+                    // is the one the Models pane draws and indexes.
+                    if let Some(i) = self.filtered_models().iter().position(|m| m.path == source) {
+                        self.models_view.sel.index = i;
+                    }
+                    crate::actions::start_after_leftovers(self, &source);
+                    self.request_scan();
+                }
+                Err(e) => self.error(format!("could not remove the leftovers: {e}")),
+            },
             Message::HubSearch(res) => {
                 self.hub_view.searching = false;
                 match res {
@@ -882,6 +1001,16 @@ impl App {
                         self.hub_view.sel = Selection::default();
                         self.hub_view.info = None;
                         self.hub_view.files.clear();
+                        // Everything downstream of the old repo goes with it. Leaving the
+                        // grouping behind offered a quantization from the previous search
+                        // against a listing that no longer had it, and left the keyboard
+                        // in a pane with nothing in it.
+                        self.hub_view.layout = crate::variants::Layout::default();
+                        self.hub_view.variant = None;
+                        self.hub_view.variant_sel = Selection::default();
+                        self.hub_view.file_sel = Selection::default();
+                        self.hub_view.custom_selection = false;
+                        self.hub_view.focus = HubFocus::Results;
                     }
                     Err(e) => self.error(format!("Hub search failed: {e}")),
                 }
@@ -1150,6 +1279,7 @@ impl App {
                 match status {
                     JobStatus::Done => {
                         self.success(format!("{} finished: {title}", kind.label()));
+                        self.refresh_disk_free();
                         if kind == JobKind::Convert {
                             self.request_scan();
                         } else {
@@ -1188,6 +1318,7 @@ impl App {
                     Ok(path) => {
                         d.status = crate::hub::DownloadStatus::Done;
                         self.success(format!("downloaded {repo} to {}", path.display()));
+                        self.refresh_disk_free();
                         self.request_scan();
                     }
                     Err(e) if e == "canceled" => {
@@ -1214,17 +1345,26 @@ impl App {
         let ftw_dir = self.config.library.ftw_dir();
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let models = crate::models::scan(&roots, &ftw_dir);
-            let _ = tx.send(Message::Models(models));
+            let items = crate::models::scan(&roots, &ftw_dir);
+            // Whether each root is there is a `stat` too, and this is the one thread
+            // allowed to spend one.
+            let roots = roots
+                .into_iter()
+                .map(|path| {
+                    let path = crate::models::expand_tilde(&path);
+                    Root { exists: path.is_dir(), path }
+                })
+                .collect();
+            let _ = tx.send(Message::Models { items, roots });
         });
     }
 
     /// Keep the polled endpoint in step with the serve configuration. Called each tick;
     /// a no-op unless the host or port knob actually changed.
-    pub fn sync_endpoint(&mut self) {
+    pub fn sync_endpoint(&mut self) -> bool {
         let wanted = endpoint_for(&self.config, &self.serve);
         if wanted == *self.endpoint_tx.borrow() {
-            return;
+            return false;
         }
         match Client::new(&wanted, Duration::from_millis(self.config.server.timeout_ms)) {
             Ok(client) => {
@@ -1235,15 +1375,28 @@ impl App {
             }
             Err(e) => self.error(format!("could not point at that endpoint: {e:#}")),
         }
+        true
     }
 
-    pub fn tick(&mut self) {
-        self.sync_endpoint();
-        self.engine.poll();
-        self.expire_toasts();
+    /// One turn of the supervisor. Returns whether anything actually moved.
+    ///
+    /// The terminal redraws on a timer and does not care, but the web daemon publishes a
+    /// snapshot whenever state changes — so a tick that did nothing must say so, or an
+    /// idle machine ships five identical documents a second to every open browser and the
+    /// heartbeat that proves the stream is alive never gets a turn.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = self.sync_endpoint();
+        changed |= self.engine.poll();
+        changed |= self.expire_toasts();
         for d in &mut self.downloads {
-            d.sample_rate();
+            // A finished download's rate is frozen; sampling it again only re-reads a
+            // counter that cannot move.
+            if d.is_running() {
+                d.sample_rate();
+                changed = true;
+            }
         }
+        changed
     }
 }
 
@@ -1257,12 +1410,6 @@ fn endpoint_for(config: &Config, serve: &ServeConfig) -> String {
     let port =
         serve.get("port").and_then(|p| p.trim().parse::<u16>().ok()).unwrap_or(config.server.port);
     format!("http://{host}:{port}")
-}
-
-/// Read the `ft bench bw` profile for a GPU, falling back to the newest one written.
-fn load_bench_profile(gpu_uuid: Option<String>) -> Option<BenchProfile> {
-    let path = crate::plan::bench_profile_status(gpu_uuid.as_deref())?;
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
 /// Build the rebuild request from the Cache view's pending edits.

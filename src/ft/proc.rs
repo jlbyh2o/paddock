@@ -219,6 +219,9 @@ pub struct Engine {
     /// When re-adoption last looked at the state file. Cheap is not free, and [`poll`]
     /// runs five times a second.
     last_adopt_check: Option<std::time::Instant>,
+    /// A live engine recorded in the state file that this supervisor does not own — one a
+    /// second ft-man on the same machine started. Refreshed with the adoption check.
+    foreign: Option<ServeState>,
 }
 
 /// How long a stopping engine gets at each stage before the next signal. FreeToken
@@ -243,6 +246,7 @@ impl Engine {
             stop_stage: 0,
             adopted_starttime: None,
             last_adopt_check: None,
+            foreign: None,
         }
     }
 
@@ -268,7 +272,32 @@ impl Engine {
             false,
         );
         self.log.push(format!("[ft-man] earlier output is in {}", state.log_path.display()), false);
+        // It is ours now, so it is no longer somebody else's.
+        self.foreign = None;
         Some(state)
+    }
+
+    /// The live engine another process started, as of the last check. `None` when the only
+    /// engine around is this supervisor's own, or when there is none.
+    pub fn foreign(&self) -> Option<&ServeState> {
+        self.foreign.as_ref()
+    }
+
+    /// Re-read the state file now rather than waiting for the next adoption check.
+    ///
+    /// `poll` does this once a second, which is fine for a status line and not fine for a
+    /// decision: an engine started in the last second is exactly the race a start has to
+    /// lose rather than win twice.
+    pub fn refresh_foreign(&mut self) -> Option<&ServeState> {
+        self.foreign = ServeState::load().filter(|s| s.is_alive() && Some(s.pid) != self.pid);
+        // Settled and idle: take it, rather than merely reporting it.
+        if self.foreign.is_some()
+            && self.pid.is_none()
+            && matches!(self.state, EngineState::Stopped | EngineState::Exited { .. })
+        {
+            self.adopt();
+        }
+        self.foreign.as_ref()
     }
 
     pub fn is_live(&self) -> bool {
@@ -403,7 +432,8 @@ impl Engine {
 
     /// Called every tick: reap the child if it exited, notice when an adopted engine goes
     /// away, and pick up an engine another process started.
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        let before = (self.state.clone(), self.pid, self.foreign.as_ref().map(|s| s.pid));
         self.escalate_stop();
         self.readopt();
         if let Some(child) = self.child.as_mut() {
@@ -448,6 +478,9 @@ impl Engine {
                 }
             }
         }
+        // Whether anything moved, so the web daemon can leave an idle machine alone
+        // instead of publishing an identical snapshot five times a second.
+        (self.state.clone(), self.pid, self.foreign.as_ref().map(|s| s.pid)) != before
     }
 
     /// Pick up an engine started elsewhere.
@@ -461,20 +494,20 @@ impl Engine {
     /// process just asked for has not cleared the file yet, and re-adopting the engine
     /// being killed would undo the request.
     fn readopt(&mut self) {
-        if self.pid.is_some()
-            || !matches!(self.state, EngineState::Stopped | EngineState::Exited { .. })
-        {
-            return;
-        }
         // Once a second: reading a small file is cheap, but not five times a second
         // forever on an idle daemon.
         if self.last_adopt_check.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
             return;
         }
         self.last_adopt_check = Some(std::time::Instant::now());
-        if ServeState::load().is_some_and(|s| s.is_alive()) {
-            self.adopt();
+        // `refresh_foreign` both records and, from a settled idle state, adopts.
+        // `Stopping` is deliberately excluded there — a stop this process just asked for
+        // has not cleared the file yet, and re-adopting the engine being killed would undo
+        // the request.
+        if matches!(self.state, EngineState::Stopping) {
+            return;
         }
+        self.refresh_foreign();
     }
 
     /// Promote `Starting` to `Running` once `/health` reports readiness.
@@ -611,6 +644,18 @@ pub enum JobStatus {
     Done,
     Failed(String),
     Canceled,
+}
+
+impl JobStatus {
+    /// The one word both front ends print in the status column.
+    pub fn label(&self) -> &'static str {
+        match self {
+            JobStatus::Running => "running",
+            JobStatus::Done => "done",
+            JobStatus::Failed(_) => "failed",
+            JobStatus::Canceled => "canceled",
+        }
+    }
 }
 
 // Written out rather than derived: serde cannot internally tag a newtype variant holding

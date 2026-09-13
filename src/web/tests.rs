@@ -14,11 +14,11 @@ use crate::ui::smoke;
 const TOKEN: &str = "s3cret-token";
 
 async fn unguarded() -> Shared {
-    WebState::new(fresh().await, Auth::new(None))
+    WebState::new(fresh().await, Auth::new(None).unwrap())
 }
 
 async fn guarded() -> Shared {
-    WebState::new(fresh().await, Auth::new(Some(TOKEN.into())))
+    WebState::new(fresh().await, Auth::new(Some(TOKEN.into())).unwrap())
 }
 
 async fn fresh() -> App {
@@ -28,7 +28,35 @@ async fn fresh() -> App {
 async fn populated() -> Shared {
     let mut app = fresh().await;
     smoke::populate(&mut app);
-    WebState::new(app, Auth::new(None))
+    WebState::new(app, Auth::new(None).unwrap())
+}
+
+/// A populated daemon that can still receive its own messages.
+///
+/// `smoke::app` drops the receiving half, which is fine for routes that answer inline.
+/// Anything that hands work to the blocking pool — sizing a checkpoint before asking to
+/// delete it — answers through the channel instead, so those tests need to drain it.
+async fn populated_with_inbox(
+) -> (Shared, tokio::sync::mpsc::UnboundedReceiver<crate::ui::app::Message>) {
+    let (mut app, rx) = smoke::app_with_inbox().await;
+    smoke::populate(&mut app);
+    (WebState::new(app, Auth::new(None).unwrap()), rx)
+}
+
+/// Deliver whatever a spawned task has sent back, as `web::spawn_drain` does.
+async fn pump(
+    state: &Shared,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::ui::app::Message>,
+) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    if let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+        state.write(|app| {
+            app.handle(msg);
+            while let Ok(next) = rx.try_recv() {
+                app.handle(next);
+            }
+        });
+    }
 }
 
 /// One request against a freshly assembled router, so no test can leak state into
@@ -415,41 +443,41 @@ async fn a_jobs_output_page_needs_a_real_job() {
     assert!(body["error"].as_str().unwrap().contains("999"));
 }
 
-/// The fixture's jobs have a log path that was never written, which is the shape a daemon
-/// restarted mid-conversion sees.
-/// Section 2.14: `output_bytes` is the change counter for `GET /api/jobs/{id}/output`.
-/// Without it the browser had no way to know a job's file had grown and polled on a
-/// timer; with it a client fetches when the number moves and not otherwise.
+/// Section 2.14: `output_seq` is the change counter for `GET /api/jobs/{id}/output`.
+/// Without it the browser had no way to know a job had written anything and polled on a
+/// timer; with it a client fetches when the number moves and not otherwise. It is the
+/// job's own ring counter, so no snapshot stats a file.
 #[tokio::test]
-async fn a_job_reports_the_size_of_its_output_file() {
+async fn a_job_reports_its_output_line_counter() {
     let state = unguarded().await;
-    let dir = crate::config::state_dir().join("job-output-size");
-    std::fs::create_dir_all(&dir).expect("a place to write a log");
-    let log = dir.join("job.log");
-    std::fs::write(&log, "one line\n").expect("a log to measure");
-
     state.write(|app| {
-        let mut job = crate::ft::Job::fake(
+        let job = crate::ft::Job::fake(
             crate::ft::proc::JobKind::Convert,
             "measurable",
             crate::ft::proc::JobStatus::Running,
             crate::ft::proc::JobProgress::default(),
         );
-        job.log_path = log.clone();
+        job.log.clear();
+        job.log.push("one line".into(), false);
         app.jobs = vec![job];
     });
 
     let (_, snap) = send(&state, get("/api/snapshot")).await;
-    assert_eq!(snap["jobs"]["items"][0]["output_bytes"], 9);
+    let first = snap["jobs"]["items"][0]["output_seq"].as_u64().expect("a counter");
+    assert!(first >= 1);
 
-    std::fs::write(&log, "one line\nand another\n").expect("the job writes more");
+    state.write(|app| app.jobs[0].log.push("and another".into(), false));
     let (_, snap) = send(&state, get("/api/snapshot")).await;
-    assert_eq!(snap["jobs"]["items"][0]["output_bytes"], 21, "a grown file moves the counter");
+    assert_eq!(
+        snap["jobs"]["items"][0]["output_seq"],
+        first + 1,
+        "a line written moves the counter"
+    );
 
-    // A job whose file is not there yet reports zero rather than failing the snapshot.
-    state.write(|app| app.jobs[0].log_path = dir.join("never-written.log"));
+    // A clear does not renumber, so a client holding the old value still sees it move.
+    state.write(|app| app.jobs[0].log.clear());
     let (_, snap) = send(&state, get("/api/snapshot")).await;
-    assert_eq!(snap["jobs"]["items"][0]["output_bytes"], 0);
+    assert_eq!(snap["jobs"]["items"][0]["output_seq"], first + 1);
 }
 
 #[tokio::test]
@@ -475,13 +503,16 @@ async fn confirming_nothing_is_a_conflict() {
 /// has happened until it is answered.
 #[tokio::test]
 async fn a_destructive_action_confirms_before_it_acts() {
-    let state = populated().await;
+    let (state, mut rx) = populated_with_inbox().await;
     let path = state.read(|app| app.models[0].path.display().to_string());
 
+    // Sizing the checkpoint runs on the blocking pool, so the route reports that work has
+    // started and the modal arrives with the next snapshot rather than in the reply.
     let (status, body) =
         send(&state, post("/api/models/delete", serde_json::json!({"path": path}))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "confirm_pending");
+    assert_eq!(body["status"], "started");
+    pump(&state, &mut rx).await;
 
     let (_, snap) = send(&state, get("/api/snapshot")).await;
     let confirm = &snap["confirm"];
@@ -1210,13 +1241,68 @@ async fn the_wire_fixtures_the_frontend_reads_are_this_serialization() {
     assert_eq!(status, StatusCode::OK);
     assert!(knobs["knobs"].as_array().is_some_and(|k| !k.is_empty()), "the schema is non-empty");
     write_fixture(dump, &mock.join("knobs.json"), &knobs);
+
+    // Whether or not this run rewrote them, the committed fixtures must not name whoever
+    // generated them. They are checked in, read by the frontend's tests, and published with
+    // the repository.
+    if dump {
+        for name in ["snapshot.populated.json", "snapshot.empty.json", "knobs.json"] {
+            let path = mock.join(name);
+            let text = std::fs::read_to_string(&path).expect("a fixture to re-read");
+            for leak in identity_terms() {
+                assert!(
+                    !text.to_lowercase().contains(&leak.to_lowercase()),
+                    "{name} names the machine it was generated on: {leak}"
+                );
+            }
+        }
+    }
 }
 
+/// Strings that would identify whoever ran the dump. The home directory and the host name
+/// reach the snapshot through real fields — `config.download_dir`, `models.roots`,
+/// `hardware.host.hostname` — so they are rewritten rather than omitted, and the fixture
+/// keeps the shape a real machine produces.
+fn identity_terms() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_string)) {
+        out.push(home.clone());
+        // The user name on its own, which also appears inside a host name like `box-alice`.
+        if let Some(user) = home.rsplit('/').next().filter(|u| u.len() > 2) {
+            out.push(user.to_string());
+        }
+    }
+    if let Ok(host) = hostname_of_this_machine() {
+        out.push(host);
+    }
+    out
+}
+
+fn hostname_of_this_machine() -> Result<String, ()> {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_string())
+        .map_err(|_| ())
+        .and_then(|h| if h.is_empty() { Err(()) } else { Ok(h) })
+}
+
+/// Write one fixture, with this machine's identity replaced by a fixed stand-in.
+///
+/// The frontend's wire tests read these documents and the repository ships them, so a dump
+/// taken on a developer's laptop must not carry that laptop's home directory or host name
+/// into the tree. The substitution is textual and value-only: every key, every shape and
+/// every path *structure* is exactly what the daemon serialized, which is the whole reason
+/// these are generated rather than written by hand.
 fn write_fixture(dump: bool, path: &std::path::Path, value: &Value) {
     if !dump {
         return;
     }
     let mut text = serde_json::to_string_pretty(value).expect("a fixture serializes");
+    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_string)) {
+        text = text.replace(&home, "/home/user");
+    }
+    if let Ok(host) = hostname_of_this_machine() {
+        text = text.replace(&host, "gpu-box");
+    }
     text.push('\n');
     std::fs::write(path, text).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
 }
@@ -1270,5 +1356,239 @@ async fn wire_populated() -> Shared {
     app.serve = serde_json::from_value(values).expect("the serve config round-trips");
     app.serve_view.plan = crate::ui::views::plan::build(&app).ok();
 
-    WebState::new(app, Auth::new(None))
+    // The cached samples a live daemon fills in on its first hardware tick and first
+    // scan. Without them `config.disk_free`, `hub.disk_free` and `models.roots` are
+    // null or empty, and the frontend's key comparison could never see their shape.
+    app.model_roots = vec![
+        crate::ui::app::Root { path: "/models".into(), exists: true },
+        crate::ui::app::Root { path: "/srv/missing".into(), exists: false },
+    ];
+    app.disk_free_download = Some(("/models".into(), 512 * (1 << 30)));
+    app.disk_free_target = Some(("/models".into(), 512 * (1 << 30)));
+
+    WebState::new(app, Auth::new(None).unwrap())
+}
+
+// ---------------------------------------------------------------- request guard
+
+fn with_header(mut req: Request<Body>, name: &str, value: &str) -> Request<Body> {
+    req.headers_mut().insert(
+        axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+        value.parse().unwrap(),
+    );
+    req
+}
+
+/// The shape a cross-site request forgery takes against this daemon: a page in the
+/// operator's browser `fetch`es the LAN address, the browser attaches the session cookie,
+/// and a delete runs. The `Origin` header is the one thing the attacking page cannot forge.
+#[tokio::test]
+async fn a_cross_origin_state_change_is_refused() {
+    let state = populated().await;
+    let req = with_header(
+        with_header(post("/api/models/rescan", serde_json::json!({})), "host", "box.lan:7979"),
+        "origin",
+        "http://evil.example",
+    );
+    let (status, body) = send(&state, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["error"].as_str().unwrap().contains("evil.example"), "{body}");
+    assert_eq!(body["toasted"], false, "the daemon refused before any action ran");
+
+    // The daemon's own page is allowed, on either scheme.
+    for origin in ["http://box.lan:7979", "https://box.lan:7979"] {
+        let req = with_header(
+            with_header(post("/api/models/rescan", serde_json::json!({})), "host", "box.lan:7979"),
+            "origin",
+            origin,
+        );
+        let (status, _) = send(&state, req).await;
+        assert_eq!(status, StatusCode::OK, "{origin} is this daemon's own origin");
+    }
+
+    // No Origin at all is `curl`, which has no cookie jar to borrow.
+    let (status, _) = send(&state, post("/api/models/rescan", serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // And a read is never refused: the browser's own rules keep another origin from
+    // seeing the response.
+    let req = with_header(get("/api/snapshot"), "origin", "http://evil.example");
+    let (status, _) = send(&state, req).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// A cross-site form post needs no preflight at all, and it can only send one of three
+/// content types — none of them JSON. Requiring JSON puts every state-changing route
+/// behind a preflight the browser will refuse to make on a hostile page's behalf.
+#[tokio::test]
+async fn a_form_shaped_body_is_refused_with_415() {
+    let state = unguarded().await;
+    for content_type in
+        ["application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "text/plain"]
+    {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/models/rescan")
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from("{}"))
+            .unwrap();
+        let (status, body) = send(&state, req).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{content_type}");
+        assert!(body["error"].as_str().unwrap().contains("application/json"), "{body}");
+    }
+
+    // A body-less POST sends no Content-Type at all, and half these routes take none.
+    let req =
+        Request::builder().method("POST").uri("/api/models/rescan").body(Body::empty()).unwrap();
+    let (status, _) = send(&state, req).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+// ---------------------------------------------------------------- error envelope
+
+/// Section 1.2: the envelope says whether a toast is also on its way, so a client renders
+/// one problem rather than two.
+#[tokio::test]
+async fn the_error_envelope_says_whether_the_refusal_also_toasted() {
+    let state = unguarded().await;
+
+    // Field-shaped: the browser has an inline slot under the value, so no toast.
+    let (status, body) = send(
+        &state,
+        post("/api/serve/knob", serde_json::json!({"key": "memory_ratio", "value": "1.5"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["toasted"], false);
+
+    // An identity that no longer exists is about the request too.
+    let (status, body) =
+        send(&state, post("/api/serve/knob", serde_json::json!({"key": "nope"}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["toasted"], false);
+
+    // A refusal about the state of the machine reaches the terminal as a toast, and the
+    // browser is told so rather than rendering the same sentence twice.
+    let (status, body) = send(&state, post("/api/engine/stop", serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["toasted"], true);
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(snap["toasts"].as_array().map(Vec::len), Some(1));
+
+    // And a refusal the web layer itself raised toasted nothing: there was no action.
+    let (status, body) = send(&state, get("/api/nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["toasted"], false);
+}
+
+/// A refusal that toasts nothing must also not wake every other connected browser: there
+/// is nothing new for them to render.
+#[tokio::test]
+async fn a_silent_refusal_publishes_no_snapshot() {
+    let state = unguarded().await;
+    let before = *state.changed.borrow();
+    let (status, _) = send(
+        &state,
+        post("/api/serve/knob", serde_json::json!({"key": "memory_ratio", "value": "1.5"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(*state.changed.borrow(), before, "nothing changed, so nothing was published");
+
+    // The accepted value does wake it.
+    send(
+        &state,
+        post("/api/serve/knob", serde_json::json!({"key": "memory_ratio", "value": "0.8"})),
+    )
+    .await;
+    assert!(*state.changed.borrow() > before);
+}
+
+// ---------------------------------------------------------------- job output
+
+/// `{id}` is a `u64`. A path that is not one used to be rejected by axum's own extractor,
+/// with a plain-text body — the single `/api` response a client could not parse.
+#[tokio::test]
+async fn a_non_numeric_job_id_is_the_json_envelope_not_plain_text() {
+    let state = populated().await;
+    for path in ["/api/jobs/abc/output", "/api/jobs/-1/output", "/api/jobs/1.5/output"] {
+        let (status, text, content_type) = raw(&state, get(path)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(content_type.as_deref(), Some("application/json"), "{path}");
+        let value: Value = serde_json::from_str(&text).expect("the envelope is JSON");
+        assert!(value["error"].is_string(), "{path}: {text}");
+        assert_eq!(value["toasted"], false);
+    }
+}
+
+/// Every line comes back classified, so the browser colors a log exactly as the terminal
+/// does rather than reimplementing the rule.
+#[tokio::test]
+async fn engine_log_lines_carry_the_severity_the_terminal_colors_them_with() {
+    let state = unguarded().await;
+    state.write(|app| {
+        for line in [
+            "[ft-man] $ ft serve --model x",
+            "INFO: loading weights",
+            "WARNING: falling back to torch",
+            "ERROR:freetoken.engine:boom",
+        ] {
+            app.engine.log.push(line.into(), false);
+        }
+    });
+
+    let (status, body) = send(&state, get("/api/logs")).await;
+    assert_eq!(status, StatusCode::OK);
+    let severities: Vec<&str> =
+        body["items"].as_array().unwrap().iter().map(|l| l["severity"].as_str().unwrap()).collect();
+    assert_eq!(severities, vec!["meta", "normal", "warn", "error"]);
+    assert!(body["items"][0]["text"].is_string(), "the text is unchanged beside it");
+}
+
+// ---------------------------------------------------------------- the heartbeat
+
+/// Section 2.1: a heartbeat once a second when nothing changed, so a proxy between here
+/// and the browser does not decide an idle connection is a dead one. It never fired,
+/// because the ticker woke the stream five times a second whether or not anything moved.
+#[tokio::test]
+async fn an_idle_daemon_still_sends_a_heartbeat() {
+    let state = unguarded().await;
+    super::events::spawn_broadcaster(state.clone());
+
+    let response = super::router(state.clone()).oneshot(get("/api/events")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut body = response.into_body().into_data_stream();
+    let mut text = String::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !text.contains("event: heartbeat") {
+        match tokio::time::timeout_at(deadline, futures_util::StreamExt::next(&mut body)).await {
+            Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
+            _ => break,
+        }
+    }
+    assert!(text.contains("event: snapshot"), "the stream opens with state: {text:.200}");
+    assert!(
+        text.contains("event: heartbeat"),
+        "an idle daemon must prove the connection is alive: {text:.400}"
+    );
+}
+
+/// A tick that moved nothing must not publish. Five identical documents a second to every
+/// open browser is what the heartbeat was starved by.
+#[tokio::test]
+async fn an_idle_tick_publishes_nothing() {
+    let state = unguarded().await;
+    let before = *state.changed.borrow();
+    for _ in 0..5 {
+        state.write_if(|app| {
+            let changed = app.tick();
+            ((), changed)
+        });
+    }
+    assert_eq!(*state.changed.borrow(), before, "an idle machine has nothing to say");
+
+    // A toast is a change, and expiring it later is another one.
+    state.write(|app| app.info("something happened"));
+    assert!(*state.changed.borrow() > before);
 }

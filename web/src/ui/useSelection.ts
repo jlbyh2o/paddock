@@ -4,7 +4,7 @@
  * §1.5: the server never accepts a list index, and a list can change between a
  * render and a click. Selecting by id means a row that moved is still the row that
  * was chosen, and a row that vanished falls back to the same position rather than
- * silently retargeting an action at its neighbour.
+ * silently retargeting an action at its neighbor.
  */
 
 import { useCallback, useMemo, useState } from "react";

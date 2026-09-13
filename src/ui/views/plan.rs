@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::plan::{tokens, Level, Plan};
+use crate::plan::{Level, Plan};
 use crate::ui::app::App;
 use crate::ui::widgets::modal;
 
@@ -23,22 +23,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     // The headline is the context, because that is the question the plan exists to answer.
     if let Some(fit) = plan.fit {
-        let (color, verdict) = if fit.is_truncated() {
-            (
-                t.warn,
-                format!(
-                    "{} of the {} this model offers  ({:.0}%)",
-                    tokens(fit.usable),
-                    tokens(fit.ceiling),
-                    fit.ratio() * 100.0,
-                ),
-            )
-        } else {
-            (t.good, format!("the full {} this model offers", tokens(fit.ceiling)))
-        };
+        let color = if fit.is_truncated() { t.warn } else { t.good };
         lines.push(Line::from(vec![
             Span::styled("Context after this plan  ", t.label()),
-            Span::styled(verdict, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            Span::styled(fit.verdict(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
         ]));
         lines.push(Line::from(""));
     }

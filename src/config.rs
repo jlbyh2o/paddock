@@ -156,9 +156,14 @@ impl LibraryCfg {
     pub fn effective_roots(&self) -> Vec<PathBuf> {
         let mut roots: Vec<PathBuf> =
             self.roots.iter().map(|r| crate::models::expand_tilde(r)).collect();
-        let cache = self.hub_cache();
-        if !roots.contains(&cache) {
-            roots.push(cache);
+        // The FTW directory too. It defaults to `download_dir`, which is usually already a
+        // root — but when it is configured somewhere else, every build ft-man itself wrote
+        // was invisible to the library that offered to write it, and the Models tab showed
+        // a checkpoint with no conversion beside tens of gigabytes of one.
+        for implied in [self.hub_cache(), self.ftw_dir()] {
+            if !roots.contains(&implied) {
+                roots.push(implied);
+            }
         }
         roots
     }
@@ -481,10 +486,24 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Serialize every test that reads or writes `HF_*`.
+    ///
+    /// The environment is process-global and `cargo test` runs these on separate threads,
+    /// so two of them setting `HF_HOME` to different directories is a genuine race: one
+    /// test's `set_var` lands between another's `set_var` and its assertion, and the
+    /// failure moves around between runs. A plain `Mutex` because nothing here awaits.
+    fn hf_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        // A test that panics mid-assertion poisons the lock; the next one still has to
+        // run, and there is no shared state to be left inconsistent.
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// `resolve_token` reads process-global environment, so these cases run under one
     /// lock and one test rather than racing each other.
     #[test]
     fn hub_token_resolution_prefers_env_then_config() {
+        let _env = hf_env_lock();
         // Start from a known state: neither variable set.
         std::env::remove_var("HF_TOKEN");
         std::env::remove_var("HUGGING_FACE_HUB_TOKEN");
@@ -565,6 +584,7 @@ mod tests {
     /// reported a library of nothing on a machine holding 100 GB of weights.
     #[test]
     fn a_configured_cache_beats_the_environment() {
+        let _env = hf_env_lock();
         let mut lib = LibraryCfg::default();
 
         // With nothing configured, the environment decides, matching huggingface_hub.
@@ -581,6 +601,18 @@ mod tests {
 
         // And it is scanned, whether or not it was also listed as a root.
         assert!(lib.effective_roots().contains(&PathBuf::from("/workspace/huggingface/hub")));
+
+        // So is the FTW directory, or a build ft-man wrote is one the library cannot see.
+        lib.ftw_dir = Some(PathBuf::from("/fast/ftw"));
+        assert!(lib.effective_roots().contains(&PathBuf::from("/fast/ftw")));
+        lib.roots = vec![PathBuf::from("/fast/ftw")];
+        assert_eq!(
+            lib.effective_roots().iter().filter(|r| r.as_path() == Path::new("/fast/ftw")).count(),
+            1,
+            "listing it explicitly must not scan it twice"
+        );
+        lib.ftw_dir = None;
+        lib.roots = LibraryCfg::default().roots;
         lib.roots = vec![PathBuf::from("/workspace/huggingface/hub")];
         assert_eq!(
             lib.effective_roots().iter().filter(|r| r.ends_with("hub")).count(),

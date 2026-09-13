@@ -10,7 +10,6 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
-    println!("cargo:rerun-if-changed=web/dist");
     println!("cargo:rerun-if-changed=build.rs");
 
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set by cargo"));
@@ -19,6 +18,13 @@ fn main() {
     std::fs::create_dir_all(&staged).expect("creating the staging directory");
 
     let dist = PathBuf::from("web/dist");
+    // Only when it is there. `rerun-if-changed` on a path that does not exist is how cargo
+    // is told "this input may have appeared", so naming an absent `web/dist` unconditionally
+    // made every single `cargo build` on a checkout with no frontend rebuild the whole
+    // crate — the common case for anyone working on the Rust half.
+    if dist.is_dir() {
+        println!("cargo:rerun-if-changed=web/dist");
+    }
     if dist.join("index.html").is_file() {
         copy_tree(&dist, &staged);
     } else {

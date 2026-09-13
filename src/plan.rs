@@ -206,6 +206,23 @@ impl ContextFit {
     pub fn summary(&self) -> String {
         format!("{} of {}", tokens(self.usable), tokens(self.ceiling))
     }
+
+    /// The plan overlay's headline, as a sentence: what this fit actually delivers.
+    ///
+    /// One wording, because the terminal and the browser print it side by side on the same
+    /// machine and two phrasings of one number read as two different answers.
+    pub fn verdict(&self) -> String {
+        if self.is_truncated() {
+            format!(
+                "{} of the {} this model offers  ({:.0}%)",
+                tokens(self.usable),
+                tokens(self.ceiling),
+                self.ratio() * 100.0,
+            )
+        } else {
+            format!("the full {} this model offers", tokens(self.ceiling))
+        }
+    }
 }
 
 /// Token counts read better in k/M than in full digits, and every context number in the

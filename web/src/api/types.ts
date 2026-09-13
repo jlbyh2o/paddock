@@ -500,6 +500,8 @@ export interface ContextFit {
   ratio: number;
   /** `ContextFit::summary()`, e.g. "32k of 256k". */
   summary: string;
+  /** `ContextFit::verdict()` — the plan's headline sentence, e.g. "the full 256k this model offers". */
+  verdict: string;
 }
 
 /** Estimated prefix-cache reuse. Mirrors `reuse::Reuse`. Null when the evidence is too thin. */
@@ -542,6 +544,11 @@ export interface EngineSnapshot {
   active_downloads: number;
   /** `App::gpu_busy_reason()` — why a conversion or benchmark would be refused now. */
   gpu_busy_reason: string | null;
+  /**
+   * Why `POST /api/engine/start` would be refused right now, computed by the same
+   * predicate the route uses; null when a start would be attempted.
+   */
+  start_blocked: string | null;
 }
 
 /** The raw control-plane documents, plus the values the views derive from them. */
@@ -568,6 +575,8 @@ export interface TelemetrySnapshot {
   mamba_ratio: number | null;
   /** "last rebuild: MoE 2,403  KV 8,192". */
   last_rebuild_summary: string | null;
+  /** `views::dashboard::format_sampling` — the checkpoint's recommended sampling, e.g. "temperature 0.6  top_p 0.95". */
+  sampling_summary: string | null;
 }
 
 /** Sparkline series: up to 120 samples each, oldest first. */
@@ -751,6 +760,8 @@ export interface TemplatesSnapshot {
 /** One validation failure from `ServeConfig::validate()`. */
 export interface KnobError {
   key: string;
+  /** The knob's flag spelling, resolved by the daemon; null when the key names no knob. */
+  flag: string | null;
   message: string;
 }
 
@@ -817,8 +828,8 @@ export interface CachePoolRow {
   current: number;
   /** `views::cache::pool_max`, in the pool's own unit. */
   max: number;
-  /** The engine's published minimum, converted; null when it published none. */
-  min: number | null;
+  /** The effective minimum in the pool's unit, already clamped to at least 1. */
+  min: number;
   /** Null means "leave this pool alone". */
   pending: number | null;
   /** `pending ?? current` — what the bar and the number render. */
@@ -882,11 +893,11 @@ export interface JobEntry {
   /** Where a bench run wrote its profile. */
   output_path: string | null;
   /**
-   * Size of the job's output file right now. It is the change counter for
-   * `GET /api/jobs/{id}/output`: poll when it moves, not on a timer. `0` when the job
-   * has written nothing yet.
+   * The job's output line counter (`LogRing` sequence). It is the change counter for
+   * `GET /api/jobs/{id}/output`: poll when it moves, not on a timer, and it moves with
+   * the job's final status line, so no extra read is needed after the job stops.
    */
-  output_bytes: number;
+  output_seq: number;
   /** `Job::failure_reason()` — the most informative line the process printed. */
   failure_reason: string | null;
   is_running: boolean;
@@ -1108,6 +1119,17 @@ export interface LogLine {
   text: string;
   /** True for lines that arrived on stderr. */
   err: boolean;
+  /** `views::logs::classify` — the same coloring the TUI applies. Render it; do not re-derive. */
+  severity: LogSeverity;
+}
+
+/** How a log line is colored. "meta" is a `[ft-man]` line of ft-man's own. */
+export type LogSeverity = "error" | "warn" | "meta" | "normal";
+
+/** One line of a job's output, classified like an engine log line. */
+export interface JobOutputLine {
+  text: string;
+  severity: LogSeverity;
 }
 
 /** `GET /api/logs?after=&limit=`. */
@@ -1151,7 +1173,7 @@ export interface JobOutputPage {
   eof: boolean;
   /** The requested offset was past the end of the file, so the read restarted at 0. */
   truncated: boolean;
-  lines: string[];
+  lines: JobOutputLine[];
 }
 
 // ---------------------------------------------------------------- errors and replies
@@ -1159,6 +1181,12 @@ export interface JobOutputPage {
 /** Every non-2xx /api response. */
 export interface ApiError {
   error: string;
+  /**
+   * True when the daemon also pushed this refusal as a toast, which arrives in the next
+   * snapshot: render one problem, not two. False for a field-shaped refusal (a rejected
+   * knob value) that the client shows inline.
+   */
+  toasted: boolean;
 }
 
 /** The action completed. */

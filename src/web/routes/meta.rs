@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::actions;
 use crate::knobs::{Group, Knob, KNOBS};
 use crate::web::auth::{constant_time_eq, COOKIE};
-use crate::web::snapshot;
 use crate::web::state::{reply, ApiError, ApiResult, Body, Reply, Shared};
 
 // ---------------------------------------------------------------- auth
@@ -73,15 +72,15 @@ fn over_tls(headers: &HeaderMap) -> bool {
 // ---------------------------------------------------------------- snapshot
 
 pub async fn snapshot(State(state): State<Shared>) -> Response {
-    let seq = state.next_seq();
-    let body = state.read(|app| serde_json::to_string(&snapshot::build(app, seq)));
-    match body {
-        Ok(json) => ([(header::CONTENT_TYPE, "application/json")], json).into_response(),
-        Err(e) => ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("could not build a snapshot: {e}"),
-        )
-        .into_response(),
+    // The same builder the broadcaster runs, and the frame it produces is published too:
+    // a client that asks for a snapshot while a stream is open should not see an older
+    // document than the stream just delivered.
+    match state.publish() {
+        Some(frame) => {
+            ([(header::CONTENT_TYPE, "application/json")], frame.json.to_string()).into_response()
+        }
+        None => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not build a snapshot")
+            .into_response(),
     }
 }
 
@@ -95,7 +94,8 @@ pub struct KnobSchema {
 
 #[derive(Serialize)]
 pub struct GroupOut {
-    group: &'static str,
+    /// `knobs::Group` itself, which already serializes as the wire's own spelling.
+    group: Group,
     title: &'static str,
 }
 
@@ -107,10 +107,7 @@ pub async fn knobs(headers: HeaderMap) -> Response {
         return StatusCode::NOT_MODIFIED.into_response();
     }
     let schema = KnobSchema {
-        groups: Group::ALL
-            .iter()
-            .map(|g| GroupOut { group: snapshot::group_name(*g), title: g.title() })
-            .collect(),
+        groups: Group::ALL.iter().map(|g| GroupOut { group: *g, title: g.title() }).collect(),
         knobs: KNOBS,
     };
     ([(header::ETAG, etag)], Json(schema)).into_response()
@@ -127,5 +124,5 @@ pub async fn confirm(
     State(state): State<Shared>,
     Body(req): Body<ConfirmRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::answer_confirm(app, req.accept)))
+    reply(state.act(|app| actions::answer_confirm(app, req.accept)))
 }

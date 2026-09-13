@@ -1,11 +1,10 @@
 /**
  * Logs — §5.9.
  *
- * Lines come from `GET /api/logs` by sequence. Filtering, errors-only, wrapping and
- * following are all browser-side over what was fetched, exactly as the TUI computes
- * them over its own ring — including the errors rule (`err` or the text matching
- * ERROR / CRITICAL / Traceback / Exception) and the coloring rule (`[ft-man]` lines
- * are accents, `WARNING`/`WARN` is warn, `ready to serve` is good).
+ * Lines come from `GET /api/logs` by sequence, already classified: each carries the
+ * `severity` `views::logs::classify` gave it, so the browser colors by that field and
+ * never re-reads the text to guess. Filtering, errors-only, wrapping and following are
+ * browser-side over what was fetched, exactly as the TUI computes them over its ring.
  *
  * When the ring dropped lines between two polls the store says how many, and that
  * elision is shown rather than silently closing the gap.
@@ -13,31 +12,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { LogLine, Snapshot } from "../api/types.ts";
+import type { Snapshot } from "../api/types.ts";
 import { api } from "../api/client.ts";
 import { run, useLogFeed } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { Empty, Pane } from "../ui/primitives.tsx";
-import { count } from "../format.ts";
-
-/** The TUI's `is_error_text`. */
-function isErrorText(text: string): boolean {
-  return (
-    text.includes("ERROR") ||
-    text.includes("CRITICAL") ||
-    text.includes("Traceback") ||
-    text.includes("Exception")
-  );
-}
-
-/** The TUI's `views::logs::line_style`. */
-function lineClass(line: LogLine): string {
-  if (line.text.startsWith("[ft-man]")) return "accent";
-  if (line.err || isErrorText(line.text)) return "bad";
-  if (line.text.includes("WARNING") || line.text.includes("WARN")) return "warn";
-  if (line.text.includes("ready to serve")) return "ready";
-  return "";
-}
+import { SearchField, useFilterField } from "../ui/SearchField.tsx";
+import { count, severityClass } from "../format.ts";
 
 /** Enough of a window that a long ring stays cheap to render. */
 const WINDOW = 800;
@@ -45,46 +26,40 @@ const WINDOW = 800;
 export function Logs(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
   const feed = useLogFeed(true, s.logs);
-  const [filter, setFilter] = useState("");
+  const filter = useFilterField();
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [wrap, setWrap] = useState(false);
   const [follow, setFollow] = useState(true);
-  const filterRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
+  const needle = filter.needle.toLowerCase();
   const visible = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
     let lines = feed.items;
-    if (errorsOnly) lines = lines.filter((l) => l.err || isErrorText(l.text));
+    // The TUI's errors-only rule, expressed through the two fields that carry it:
+    // anything the daemon classified as an error, plus anything that came on stderr.
+    if (errorsOnly) lines = lines.filter((l) => l.severity === "error" || l.err);
     if (needle !== "") lines = lines.filter((l) => l.text.toLowerCase().includes(needle));
     return lines;
-  }, [feed.items, filter, errorsOnly]);
+  }, [feed.items, needle, errorsOnly]);
 
   const window = visible.length > WINDOW ? visible.slice(-WINDOW) : visible;
   const hidden = visible.length - window.length;
+  // The window is capped, so its *length* stops changing once the ring is full; the
+  // newest sequence is what actually moves when a line arrives.
+  const newestSeq = window[window.length - 1]?.seq ?? 0;
 
   useEffect(() => {
     if (!follow) return;
     const el = bodyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [follow, window.length]);
+  }, [follow, newestSeq]);
 
   useTabKeys(
     useCallback(
       (event: KeyboardEvent) => {
-        if (event.key === "Escape") {
-          if (filter !== "") {
-            setFilter("");
-            filterRef.current?.blur();
-            return true;
-          }
-          return false;
-        }
+        if (filter.handleKey(event)) return true;
+        if (event.key === "Escape") return false;
         switch (event.key) {
-          case "/":
-            filterRef.current?.focus();
-            filterRef.current?.select();
-            return true;
           case "f":
             setFollow((prev) => !prev);
             return true;
@@ -141,13 +116,10 @@ export function Logs(props: { snapshot: Snapshot }): ReactNode {
       bodyClassName="flush"
       actions={
         <>
-          <input
-            ref={filterRef}
-            type="search"
-            value={filter}
+          <SearchField
+            field={filter}
             placeholder="filter  (/)"
-            onChange={(e) => setFilter(e.target.value)}
-            aria-label="Filter log lines"
+            label="Filter log lines"
             style={{ flex: "1 1 180px" }}
           />
           <label className="toggle">
@@ -192,7 +164,7 @@ export function Logs(props: { snapshot: Snapshot }): ReactNode {
             <div className="gap-notice">… {count(hidden)} earlier lines not rendered</div>
           ) : null}
           {window.map((line) => (
-            <div key={line.seq} className={`logline ${lineClass(line)}`}>
+            <div key={line.seq} className={`logline ${severityClass(line.severity)}`}>
               {line.text}
             </div>
           ))}

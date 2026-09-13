@@ -3,9 +3,10 @@
  *
  * The knob *schema* comes from `GET /api/knobs` and the *values* from the snapshot;
  * this file never invents a default, a domain or a help string. Validation is the
- * daemon's too: a value that fails `knobs::validate_value` comes back as a 409 whose
- * message is already flag-prefixed, and it is shown against the field that produced
- * it rather than as a second floating problem.
+ * daemon's too: a value that fails `knobs::validate_value` comes back as a refusal the
+ * daemon deliberately did *not* toast (§1.2), because this pane has an inline slot
+ * under the field that produced it. That flag — not the status code — is what says the
+ * message belongs to a field.
  */
 
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -13,7 +14,7 @@ import type { ReactNode } from "react";
 import type { Knob, KnobGroup, ProfileEntry, Snapshot } from "../api/types.ts";
 import { ApiError, api } from "../api/client.ts";
 import { reportError, run } from "../api/store.ts";
-import { exclusions, knobByKey, knobsInGroup, useKnobs } from "../api/knobs.ts";
+import { exclusions, knobsInGroup, useKnobs } from "../api/knobs.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Empty, Field, Pane } from "../ui/primitives.tsx";
@@ -50,7 +51,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
       const value = raw.trim() === "" ? null : raw.trim();
       clearError(knob.key);
       api
-        .serveKnob(knob.key, value)
+        .serveKnob({ key: knob.key, value })
         .then(() => {
           setDrafts((prev) => {
             const next = { ...prev };
@@ -59,7 +60,8 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
           });
         })
         .catch((error: unknown) => {
-          if (error instanceof ApiError && error.status === 409) {
+          // A refusal the daemon left untoasted is this field's to render.
+          if (error instanceof ApiError && !error.toasted && !error.isUnauthorized) {
             setKnobErrors((prev) => ({ ...prev, [knob.key]: error.message }));
             return;
           }
@@ -77,7 +79,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
         return next;
       });
       clearError(knob.key);
-      run(api.serveKnob(knob.key, null));
+      run(api.serveKnob({ key: knob.key, value: null }));
     },
     [clearError],
   );
@@ -85,7 +87,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
   const activate = useCallback(
     (knob: Knob) => {
       if (knob.kind.kind === "flag") {
-        run(api.serveFlag(knob.key));
+        run(api.serveFlag({ key: knob.key }));
         return;
       }
       editorRefs.current.get(knob.key)?.focus();
@@ -94,14 +96,14 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
   );
 
   const cycle = useCallback((knob: Knob, delta: number) => {
-    run(api.serveCycle(knob.key, delta));
+    run(api.serveCycle({ key: knob.key, delta }));
   }, []);
 
   const saveProfile = useCallback(() => {
     const name =
       profileName.trim() === "" ? basename(s.serve.values["model"] ?? "") : profileName.trim();
     if (name === "" || name === "—") return;
-    run(api.profileSave(name), () => {
+    run(api.profileSave({ name }), () => {
       setProfileName("");
     });
   }, [profileName, s.serve.values]);
@@ -128,7 +130,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
           }
           case "Enter":
             if (pane === "profiles" && profiles.item) {
-              run(api.profileLoad(profiles.item.name));
+              run(api.profileLoad({ name: profiles.item.name }));
               return true;
             }
             if (knob) activate(knob);
@@ -151,10 +153,10 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
             saveProfile();
             return true;
           case "P":
-            if (profiles.item) run(api.profileLoad(profiles.item.name));
+            if (profiles.item) run(api.profileLoad({ name: profiles.item.name }));
             return true;
           case "D":
-            if (profiles.item) run(api.profileDelete(profiles.item.name));
+            if (profiles.item) run(api.profileDelete({ name: profiles.item.name }));
             return true;
           case "g":
             run(api.engineStart());
@@ -187,7 +189,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
             // The visible text beside it is the state ("on", "(auto)"), which names the
             // value rather than the knob; without this the checkbox has no usable name.
             aria-label={knob.label}
-            onChange={(e) => run(api.serveFlag(knob.key, e.target.checked))}
+            onChange={(e) => run(api.serveFlag({ key: knob.key, on: e.target.checked }))}
           />
           <span className={stored === undefined ? "dim" : ""}>
             {stored === undefined ? `(${knob.default})` : "on"}
@@ -371,7 +373,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
                   className="btn"
                   disabled={!profiles.item}
                   onClick={() => {
-                    if (profiles.item) run(api.profileLoad(profiles.item.name));
+                    if (profiles.item) run(api.profileLoad({ name: profiles.item.name }));
                   }}
                 >
                   Load <span className="dim">(P)</span>
@@ -381,7 +383,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
                   className="btn danger"
                   disabled={!profiles.item}
                   onClick={() => {
-                    if (profiles.item) run(api.profileDelete(profiles.item.name));
+                    if (profiles.item) run(api.profileDelete({ name: profiles.item.name }));
                   }}
                 >
                   Delete <span className="dim">(D)</span>
@@ -406,7 +408,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
                       setPane("profiles");
                       profiles.select(profile.name);
                     }}
-                    onDoubleClick={() => run(api.profileLoad(profile.name))}
+                    onDoubleClick={() => run(api.profileLoad({ name: profile.name }))}
                   >
                     <div className="row-main">
                       <span className="grow">{profile.name}</span>
@@ -447,9 +449,15 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
             {s.serve.command_preview}
           </pre>
         ) : null}
+        {/*
+          §2.12: `flag` is the daemon's own resolution of the key, and it is null for a
+          key the schema does not know — a profile from a newer FreeToken, or a
+          hand-edited profiles.toml. Such a key has no row in the knob list, so this is
+          the only place it appears, and it must read as itself.
+        */}
         {s.serve.errors.slice(0, 4).map((error) => (
           <div key={`${error.key}-${error.message}`} className="bad mono">
-            {knobByKey(schema, error.key)?.flag ?? error.key}: {error.message}
+            {error.flag ?? error.key}: {error.message}
           </div>
         ))}
       </Pane>

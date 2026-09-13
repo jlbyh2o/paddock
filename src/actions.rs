@@ -6,14 +6,21 @@
 //! "the selected row" to a target and calls in; the web layer resolves a request body to
 //! the same target and calls the same function.
 //!
-//! Refusals are reported twice over, deliberately. Every path that declines to act still
-//! pushes the toast the TUI has always shown, and also returns a [`Refusal`] carrying the
-//! HTTP status the web API documents for it — so the terminal keeps behaving exactly as
-//! it did while a browser learns why nothing happened.
+//! Refusals are reported twice over, deliberately. A refusal about the *state* of the
+//! machine — an engine already running, a GPU already busy — pushes the toast the TUI has
+//! always shown and also returns a [`Refusal`] carrying the HTTP status the web API
+//! documents for it, so the terminal keeps behaving exactly as it did while a browser
+//! learns why nothing happened.
 //!
-//! One refusal is the exception: a knob value that fails validation belongs against the
-//! field that produced it, so [`set_knob`] only returns the `Refusal` and the terminal's
-//! own caller raises the toast. See docs/web-api.md section 4.8.
+//! A refusal about the *request* does not toast. A rejected knob value, an empty profile
+//! name, a path that is no longer in the library: each belongs against the field or the row
+//! that produced it, where the reader is already looking, and a floating toast beside it is
+//! the same problem rendered twice. The terminal has no inline slot, so `ui::input` raises
+//! those toasts on its own side of the shared action.
+//!
+//! Every `Refusal` therefore carries [`Refusal::toasted`], and the web error envelope
+//! reports it, so a client knows whether a toast is also on its way. See docs/web-api.md
+//! sections 1.2 and 4.8.
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +56,17 @@ impl Done {
 pub struct Refusal {
     pub status: u16,
     pub message: String,
+    /// Whether this refusal also went onto `app.toasts`, and so will arrive in the next
+    /// snapshot. False for the field-shaped ones the caller renders inline.
+    pub toasted: bool,
+}
+
+impl Refusal {
+    /// A refusal the reader will see where they are already looking: under the field they
+    /// submitted, or against the row they clicked. No toast.
+    pub fn quiet(status: u16, message: impl Into<String>) -> Self {
+        Self { status, message: message.into(), toasted: false }
+    }
 }
 
 pub type Outcome = Result<Done, Refusal>;
@@ -57,7 +75,7 @@ pub type Outcome = Result<Done, Refusal>;
 fn refuse(app: &mut App, status: u16, kind: ToastKind, message: impl Into<String>) -> Refusal {
     let message = message.into();
     app.toast(message.clone(), kind);
-    Refusal { status, message }
+    Refusal { status, message, toasted: true }
 }
 
 fn warn_off(app: &mut App, status: u16, message: impl Into<String>) -> Refusal {
@@ -95,14 +113,16 @@ pub fn run_action(app: &mut App, action: ConfirmAction) -> Done {
             Done::Ok
         }
         ConfirmAction::DeleteModel(path) => {
-            match std::fs::remove_dir_all(&path) {
-                Ok(()) => {
-                    app.success(format!("deleted {}", path.display()));
-                    app.request_scan();
-                }
-                Err(e) => app.error(format!("could not delete {}: {e}", path.display())),
-            }
-            Done::Ok
+            // Tens of thousands of `unlink`s against a 200 GiB checkpoint. Done inline it
+            // held the TUI's event loop — and the web daemon's single `App` mutex, so every
+            // connected browser — for as long as the filesystem took.
+            app.info(format!("deleting {}…", path.display()));
+            let tx = app.tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let result = std::fs::remove_dir_all(&path).map_err(|e| e.to_string());
+                let _ = tx.send(Message::ModelDeleted(path, result));
+            });
+            Done::started()
         }
         ConfirmAction::CancelJob(id) => {
             if let Some(j) = app.jobs.iter_mut().find(|j| j.id == id) {
@@ -148,17 +168,13 @@ pub fn run_action(app: &mut App, action: ConfirmAction) -> Done {
         ConfirmAction::ConvertAnyway(source) => start_conversion(app, &source),
         ConfirmAction::ReconvertModel(source) => {
             let out = ftw_out(app, &source);
-            if let Err(e) = std::fs::remove_dir_all(&out) {
-                app.error(format!("could not remove {}: {e}", out.display()));
-                return Done::Ok;
-            }
-            app.info(format!("removed the incomplete {}", out.display()));
-            if let Some(i) = app.models.iter().position(|m| m.path == source) {
-                app.models_view.sel.index = i;
-            }
-            let done = begin_conversion(app, &source);
-            app.request_scan();
-            done
+            app.info(format!("removing the incomplete {}…", out.display()));
+            let tx = app.tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let result = std::fs::remove_dir_all(&out).map_err(|e| e.to_string());
+                let _ = tx.send(Message::LeftoversRemoved(source, result));
+            });
+            Done::started()
         }
         ConfirmAction::DeleteTemplate(name) => {
             match crate::templates::remove(&name) {
@@ -187,7 +203,7 @@ pub fn ask(app: &mut App, confirm: Confirm) -> Done {
 /// and the modal's `y`/`n` both do.
 pub fn answer_confirm(app: &mut App, accept: bool) -> Outcome {
     let Some(confirm) = app.confirm.take() else {
-        return Err(Refusal { status: 409, message: "no confirmation is pending".into() });
+        return Err(warn_off(app, 409, "no confirmation is pending"));
     };
     if !accept {
         return Ok(Done::Ok);
@@ -197,28 +213,82 @@ pub fn answer_confirm(app: &mut App, accept: bool) -> Outcome {
 
 // ---------------------------------------------------------------- engine
 
-pub fn start_engine(app: &mut App) -> Outcome {
+/// Why a start would be refused, with everything the two callers need to report it.
+struct StartRefusal {
+    status: u16,
+    kind: ToastKind,
+    message: String,
+    /// Whether the refusal is something to fix on the Serve tab.
+    focus_serve: bool,
+}
+
+/// The single predicate behind `POST /api/engine/start` and `engine.start_blocked`.
+///
+/// One function, because the snapshot advertises in advance what the route will do, and a
+/// button that says "start" against a daemon that would answer 409 is worse than no button.
+/// It reads state only — the cross-process check it depends on is refreshed by
+/// [`crate::ft::Engine::poll`] once a second, and forced by the route itself.
+fn start_refusal(app: &App) -> Option<StartRefusal> {
+    let warn = |message: String| {
+        Some(StartRefusal { status: 409, kind: ToastKind::Warn, message, focus_serve: false })
+    };
     if app.engine.is_live() {
-        return Err(warn_off(app, 409, "an engine is already running; stop it first"));
+        return warn("an engine is already running; stop it first".into());
+    }
+    // Another ft-man on this machine — a terminal beside the daemon, or a second daemon —
+    // may have started one since the last tick. The state file is the handoff; starting a
+    // second engine on the same GPU and port is how both end up broken.
+    if let Some(state) = app.engine.foreign() {
+        return warn(format!(
+            "an engine started elsewhere is already running (pid {}, port {}); ft-man has              attached to it",
+            state.pid, state.port
+        ));
     }
     if let Some(job) = app.jobs.iter().find(|j| j.is_running()) {
         let kind = job.kind.label();
-        return Err(warn_off(
-            app,
-            409,
-            format!("a {kind} job is using the GPU; wait for it or cancel it first"),
-        ));
+        return warn(format!("a {kind} job is using the GPU; wait for it or cancel it first"));
+    }
+    if app.ft.is_none() {
+        return Some(StartRefusal {
+            status: 503,
+            kind: ToastKind::Error,
+            message: app
+                .ft_error
+                .clone()
+                .unwrap_or_else(|| "the FreeToken CLI was not found".into()),
+            focus_serve: false,
+        });
+    }
+    let errors = app.serve.validate();
+    if let Some((key, msg)) = errors.first() {
+        let flag = crate::knobs::knob(key).map(|k| k.flag).unwrap_or(key);
+        return Some(StartRefusal {
+            status: 409,
+            kind: ToastKind::Error,
+            message: format!("{flag}: {msg}"),
+            focus_serve: true,
+        });
+    }
+    None
+}
+
+/// Why `POST /api/engine/start` would be refused right now; `None` when it would try.
+pub fn start_blocked(app: &App) -> Option<String> {
+    start_refusal(app).map(|r| r.message)
+}
+
+pub fn start_engine(app: &mut App) -> Outcome {
+    // Re-read the state file before deciding, rather than trusting the last tick: a second
+    // engine started in the last second is exactly the race this closes. Adopting it here
+    // also means the refusal is true by the time it is read.
+    app.engine.refresh_foreign();
+    if let Some(r) = start_refusal(app) {
+        if r.focus_serve {
+            app.tab = Tab::Serve;
+        }
+        return Err(refuse(app, r.status, r.kind, r.message));
     }
     let ft = freetoken(app)?;
-
-    let errors = app.serve.validate();
-    if !errors.is_empty() {
-        let (key, msg) = &errors[0];
-        let flag = crate::knobs::knob(key).map(|k| k.flag).unwrap_or(key);
-        let message = format!("{flag}: {msg}");
-        app.tab = Tab::Serve;
-        return Err(error_off(app, 409, message));
-    }
 
     let model = app.serve.get("model").unwrap_or_default().to_string();
     let port = app.serve.get("port").and_then(|p| p.parse().ok()).unwrap_or(app.config.server.port);
@@ -314,8 +384,21 @@ pub fn use_model(app: &mut App, path: &Path, and_serve: bool) -> Outcome {
     let name = model.name.clone();
     // Explicit, never inferred. See `Model::served_name`.
     let served = model.served_name();
+    // Only when ft-man is the one who put it there. A name typed by hand, or loaded from a
+    // profile, is a decision about the API this engine publishes — clients send it in
+    // request bodies — and picking a different model must not silently rewrite it. The
+    // giveaway is that the current value is the previous model's derived name.
+    let derive = match app.serve.get("served_model_name").map(str::trim).filter(|n| !n.is_empty()) {
+        None => true,
+        Some(current) => {
+            let current = current.to_string();
+            app.models.iter().any(|m| m.served_name() == current)
+        }
+    };
     app.serve.set("model", target.display().to_string());
-    app.serve.set("served_model_name", served);
+    if derive {
+        app.serve.set("served_model_name", served);
+    }
     if let Some(n) = note {
         app.info(n);
     }
@@ -374,13 +457,15 @@ pub fn convert_model(app: &mut App, path: &Path) -> Outcome {
                 ),
             ));
         }
-        let size = crate::models::dir_size(&out);
-        return Ok(ask(
-            app,
-            Confirm::new(
+        // Same reason as `delete_model`: sizing a half-written FTW build is a full tree
+        // walk, and the confirmation cannot be worded without the number.
+        let tx = app.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let size = crate::models::dir_size(&out);
+            let confirm = Confirm::new(
                 "Retry conversion",
                 vec![
-                    format!("{} has leftovers from a conversion that failed.", name),
+                    format!("{name} has leftovers from a conversion that failed."),
                     String::new(),
                     out.display().to_string(),
                     format!(
@@ -391,8 +476,10 @@ pub fn convert_model(app: &mut App, path: &Path) -> Outcome {
                 ],
                 ConfirmAction::ReconvertModel(source),
                 true,
-            ),
-        ));
+            );
+            let _ = tx.send(Message::AskConfirm(Box::new(confirm)));
+        });
+        return Ok(Done::started());
     }
 
     Ok(begin_conversion(app, &source))
@@ -404,10 +491,29 @@ pub fn delete_model(app: &mut App, path: &Path) -> Outcome {
     };
     let path = model.path.clone();
     let name = model.name.clone();
-    let size = crate::models::dir_size(&path);
-    Ok(ask(
-        app,
-        Confirm::new(
+    // The hub cache belongs to `huggingface_hub`: a snapshot directory is symlinks into
+    // `blobs/`, and deleting it frees the links, leaves the blobs, and breaks `refs/`.
+    // `hf cache delete` is the only thing that knows how to take a repo apart properly.
+    if crate::templates::is_hub_cache_path(&path) {
+        let repo = model.repo.clone().unwrap_or_else(|| name.clone());
+        return Err(warn_off(
+            app,
+            409,
+            format!(
+                "{name} is in the Hugging Face cache, which ft-man only reads — remove it \
+                 with `hf cache delete {repo}`, which also frees the blobs the snapshot \
+                 only links to"
+            ),
+        ));
+    }
+    // `dir_size` walks the whole tree. On the daemon that walk happens under the one mutex
+    // every browser shares, so it goes to the blocking pool and the confirmation is raised
+    // when the number is in hand.
+    app.info(format!("measuring {}…", path.display()));
+    let tx = app.tx.clone();
+    tokio::task::spawn_blocking(move || {
+        let size = crate::models::dir_size(&path);
+        let confirm = Confirm::new(
             "Delete checkpoint",
             vec![
                 format!("Permanently delete {name}?"),
@@ -417,15 +523,25 @@ pub fn delete_model(app: &mut App, path: &Path) -> Outcome {
             ],
             ConfirmAction::DeleteModel(path),
             true,
-        ),
-    ))
+        );
+        let _ = tx.send(Message::AskConfirm(Box::new(confirm)));
+    });
+    Ok(Done::started())
 }
 
 /// A model named by a path that is no longer in the library. No toast: the TUI resolves
 /// its target from the list it just drew and cannot reach this, so the only reader is a
 /// browser acting on a stale list.
 fn not_found_model(_app: &mut App, _path: &Path) -> Refusal {
-    Refusal { status: 404, message: "that model is no longer in the library".into() }
+    Refusal::quiet(404, "that model is no longer in the library")
+}
+
+/// Continue a retried conversion once its leftovers have actually been removed.
+///
+/// Split out because the removal now runs on the blocking pool: `Message::LeftoversRemoved`
+/// is what resumes the sequence, and it has nowhere else to call into.
+pub fn start_after_leftovers(app: &mut App, source: &Path) {
+    begin_conversion(app, source);
 }
 
 /// Ask FreeToken what it makes of the checkpoint, then convert.
@@ -597,7 +713,7 @@ fn hub_or_refuse(app: &mut App) -> Result<Hub, Refusal> {
 pub fn search(app: &mut App, query: &str) -> Outcome {
     let query = query.trim().to_string();
     if query.is_empty() {
-        return Err(Refusal { status: 400, message: "a search needs a query".into() });
+        return Err(Refusal::quiet(400, "a search needs a query"));
     }
     app.hub_view.query.set(query.clone());
     let hub = hub_or_refuse(app)?;
@@ -677,17 +793,13 @@ pub fn choose_variant(app: &mut App, label: &str) -> Outcome {
     let Some(label) =
         app.hub_view.layout.weights().find(|v| v.label == label).map(|v| v.label.clone())
     else {
-        return Err(Refusal {
-            status: 409,
-            message: format!("this repo has no '{label}' quantization"),
-        });
+        return Err(warn_off(app, 409, format!("this repo has no '{label}' quantization")));
     };
     let wanted = app.hub_view.layout.files_for(&label);
     for f in &mut app.hub_view.files {
         f.wanted = wanted.contains(&f.path);
     }
-    let total: u64 = app.hub_view.files.iter().filter(|f| f.wanted).map(|f| f.size).sum();
-    let count = app.hub_view.files.iter().filter(|f| f.wanted).count();
+    let (total, count) = app.hub_view.selected();
     app.hub_view.variant = Some(label.clone());
     app.hub_view.custom_selection = false;
     app.info(format!("{label}: {count} file(s), {}", crate::util::bytes(total)));
@@ -697,10 +809,7 @@ pub fn choose_variant(app: &mut App, label: &str) -> Outcome {
 /// Toggle one file by path. `wanted` of `None` flips it, which is what `Space` does.
 pub fn toggle_file(app: &mut App, path: &str, wanted: Option<bool>) -> Result<bool, Refusal> {
     let Some(f) = app.hub_view.files.iter_mut().find(|f| f.path == path) else {
-        return Err(Refusal {
-            status: 404,
-            message: format!("no file named {path} in this repo's listing"),
-        });
+        return Err(Refusal::quiet(404, format!("no file named {path} in this repo's listing")));
     };
     f.wanted = wanted.unwrap_or(!f.wanted);
     let now = f.wanted;
@@ -734,10 +843,10 @@ pub fn download(app: &mut App, variant: Option<&str>, files: Option<&[String]>) 
                 match app.hub_view.files.iter().find(|f| f.path == *p) {
                     Some(f) => out.push(f.clone()),
                     None => {
-                        return Err(Refusal {
-                            status: 400,
-                            message: format!("{p} is not in this repo's listing"),
-                        })
+                        return Err(Refusal::quiet(
+                            400,
+                            format!("{p} is not in this repo's listing"),
+                        ))
                     }
                 }
             }
@@ -746,10 +855,7 @@ pub fn download(app: &mut App, variant: Option<&str>, files: Option<&[String]>) 
         (_, Some(label)) => {
             let wanted = app.hub_view.layout.files_for(label);
             if wanted.is_empty() {
-                return Err(Refusal {
-                    status: 409,
-                    message: format!("this repo has no '{label}' quantization"),
-                });
+                return Err(warn_off(app, 409, format!("this repo has no '{label}' quantization")));
             }
             app.hub_view.files.iter().filter(|f| wanted.contains(&f.path)).cloned().collect()
         }
@@ -858,7 +964,9 @@ pub fn offer_hf_install(app: &mut App) -> Outcome {
 pub fn list_template_repo(app: &mut App, repo: &str) -> Outcome {
     let repo = repo.trim().to_string();
     if repo.is_empty() {
-        return Err(warn_off(app, 400, "enter a Hugging Face repo id first"));
+        // Field-shaped: the repo box is right there. `ui::input` toasts it, because a
+        // terminal has nowhere else to put it.
+        return Err(Refusal::quiet(400, "enter a Hugging Face repo id first"));
     }
     app.templates_view.repo.set(repo.clone());
     let hub = hub_or_refuse(app)?;
@@ -883,18 +991,17 @@ pub fn list_template_repo(app: &mut App, repo: &str) -> Outcome {
 pub fn fetch_template(app: &mut App, repo: &str, revision: Option<&str>, path: &str) -> Outcome {
     let repo = repo.trim().to_string();
     if repo.is_empty() {
-        return Err(Refusal { status: 400, message: "a fetch needs a repo id".into() });
+        return Err(Refusal::quiet(400, "a fetch needs a repo id"));
     }
-    let revision =
-        match revision.map(str::to_string).or_else(|| app.templates_view.remote_revision.clone()) {
-            Some(r) => r,
-            None => {
-                return Err(Refusal {
-                    status: 400,
-                    message: "no revision is known for that repo; list it first".into(),
-                })
-            }
-        };
+    let revision = match revision
+        .map(str::to_string)
+        .or_else(|| app.templates_view.remote_revision.clone())
+    {
+        Some(r) => r,
+        None => {
+            return Err(Refusal::quiet(400, "no revision is known for that repo; list it first"))
+        }
+    };
     let path = path.to_string();
     let hub = hub_or_refuse(app)?;
     let name = crate::templates::name_for(&repo, &path);
@@ -924,7 +1031,7 @@ pub fn fetch_template(app: &mut App, repo: &str, revision: Option<&str>, path: &
 /// Ask before writing a template into a checkpoint directory.
 pub fn apply_template(app: &mut App, template: &str, model_path: &Path) -> Outcome {
     let Some(stored) = app.templates_view.stored.iter().find(|t| t.name == template) else {
-        return Err(Refusal { status: 404, message: format!("no template named '{template}'") });
+        return Err(Refusal::quiet(404, format!("no template named '{template}'")));
     };
     let name = stored.name.clone();
     let version = stored.meta.version.clone();
@@ -942,7 +1049,7 @@ pub fn apply_template(app: &mut App, template: &str, model_path: &Path) -> Outco
             format!("{model_name} has no directory to write a template into"),
         ));
     }
-    let status = crate::templates::status(&model_path);
+    let status = model.template_status.clone();
 
     let mut body = vec![
         match &version {
@@ -1037,6 +1144,7 @@ fn write_template(app: &mut App, template_name: &str, model_path: &Path) {
         ));
         return;
     };
+    app.refresh_template_status(&model.path);
     app.success(format!(
         "applied '{}' to {} director{}",
         template.name,
@@ -1059,7 +1167,7 @@ pub fn request_revert_template(app: &mut App, model_path: &Path) -> Outcome {
     let name = model.name.clone();
     let path = model.path.clone();
     let targets = crate::templates::targets(model);
-    if !crate::templates::status(&path).is_overridden() {
+    if !model.template_status.is_overridden() {
         return Err(warn_off(app, 409, format!("{name} is not using an ft-man template override")));
     }
     let mut body = vec![
@@ -1096,6 +1204,7 @@ fn revert_template(app: &mut App, model_path: &Path) {
         }
     }
     app.templates_view.preflight = None;
+    app.refresh_template_status(&model.path);
     if reverted == 0 {
         app.error("found no override to restore");
         return;
@@ -1109,7 +1218,7 @@ fn revert_template(app: &mut App, model_path: &Path) {
 /// Render a stored template against a model's real tokenizer.
 pub fn verify_template(app: &mut App, template: &str, model_path: &Path) -> Outcome {
     let Some(stored) = app.templates_view.stored.iter().find(|t| t.name == template) else {
-        return Err(Refusal { status: 404, message: format!("no template named '{template}'") });
+        return Err(Refusal::quiet(404, format!("no template named '{template}'")));
     };
     let (name, jinja) = (stored.name.clone(), stored.path.clone());
     let Some(model) = app.models.iter().find(|m| m.path == model_path) else {
@@ -1153,7 +1262,7 @@ fn run_preflight_checked(app: &mut App, name: &str, model_dir: &Path, jinja: &Pa
 
 pub fn delete_template(app: &mut App, name: &str) -> Outcome {
     let Some(stored) = app.templates_view.stored.iter().find(|t| t.name == name) else {
-        return Err(Refusal { status: 404, message: format!("no template named '{name}'") });
+        return Err(Refusal::quiet(404, format!("no template named '{name}'")));
     };
     let name = stored.name.clone();
     Ok(ask(
@@ -1184,8 +1293,7 @@ pub struct KnobSet {
 }
 
 fn knob_or_refuse(key: &str) -> Result<&'static Knob, Refusal> {
-    crate::knobs::knob(key)
-        .ok_or_else(|| Refusal { status: 404, message: format!("no knob named '{key}'") })
+    crate::knobs::knob(key).ok_or_else(|| Refusal::quiet(404, format!("no knob named '{key}'")))
 }
 
 /// Set a knob, or unset it when `value` is `None` or empty.
@@ -1200,18 +1308,22 @@ pub fn set_knob(app: &mut App, key: &str, value: Option<&str>) -> Result<KnobSet
         // No toast. A rejected value belongs against the field that produced it, and the
         // web UI has an inline slot for it; the terminal has none, so `commit_knob_edit`
         // raises the toast there. See docs/web-api.md section 4.8.
-        return Err(Refusal { status: 409, message: format!("{}: {msg}", k.flag) });
+        return Err(Refusal::quiet(409, format!("{}: {msg}", k.flag)));
     }
     // `ServeConfig::set` clears whatever the new value excludes; report which, since the
     // browser's other fields have just been emptied under it.
-    let cleared: Vec<String> = k
-        .exclusive_with
-        .iter()
-        .filter(|other| **other != k.key && app.serve.is_set(other))
-        .map(|other| (*other).to_string())
-        .collect();
+    let candidates: Vec<&'static str> =
+        k.exclusive_with.iter().copied().filter(|other| *other != k.key).collect();
+    let before: Vec<&'static str> =
+        candidates.iter().copied().filter(|other| app.serve.is_set(other)).collect();
     app.serve.set(k.key, value);
-    Ok(KnobSet { set: true, cleared })
+    // Read back rather than predicted. `set` has one case that does not store: a `Flag`
+    // given "false" unsets the knob and clears nothing, so reporting `set: true` there was
+    // a lie the browser then rendered as a checked box.
+    let set = app.serve.is_set(k.key);
+    let cleared: Vec<String> =
+        before.into_iter().filter(|other| !app.serve.is_set(other)).map(str::to_string).collect();
+    Ok(KnobSet { set, cleared })
 }
 
 /// Clear a knob. `announce` is what separates `x` on the Serve tab, which says so, from
@@ -1231,7 +1343,7 @@ pub fn unset_knob(app: &mut App, k: &'static Knob, announce: bool) {
 pub fn toggle_flag(app: &mut App, key: &str, on: Option<bool>) -> Result<bool, Refusal> {
     let k = knob_or_refuse(key)?;
     if !matches!(k.kind, Kind::Flag) {
-        return Err(Refusal { status: 409, message: format!("{} is not a flag", k.flag) });
+        return Err(warn_off(app, 409, format!("{} is not a flag", k.flag)));
     }
     let wanted = on.unwrap_or(!app.serve.flag(k.key));
     if wanted {
@@ -1281,7 +1393,7 @@ pub fn cycle_knob(app: &mut App, key: &str, delta: isize) -> Result<Option<Strin
                 }
             }
         }
-        _ => Err(Refusal { status: 409, message: format!("{} is not a choice knob", k.flag) }),
+        _ => Err(warn_off(app, 409, format!("{} is not a choice knob", k.flag))),
     }
 }
 
@@ -1306,7 +1418,7 @@ pub fn build_plan(app: &mut App) -> Result<bool, Refusal> {
 /// Fold the plan's edits into the serve configuration.
 pub fn apply_plan(app: &mut App) -> Result<usize, Refusal> {
     let Some(plan) = app.serve_view.plan.take() else {
-        return Err(Refusal { status: 409, message: "no plan is held".into() });
+        return Err(warn_off(app, 409, "no plan is held"));
     };
     let changed = plan.apply(&mut app.serve);
     match changed {
@@ -1329,7 +1441,8 @@ pub fn dismiss_plan(app: &mut App) {
 pub fn save_profile(app: &mut App, name: &str) -> Result<bool, Refusal> {
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Err(warn_off(app, 400, "a profile needs a name"));
+        // Field-shaped, like every other empty-input refusal; `ui::input` toasts it.
+        return Err(Refusal::quiet(400, "a profile needs a name"));
     }
     let existed = app.profiles.get(&name).is_some();
     app.profiles.upsert(crate::ui::app::profile_from(name.clone(), &app.serve));
@@ -1348,7 +1461,7 @@ pub fn save_profile(app: &mut App, name: &str) -> Result<bool, Refusal> {
 
 pub fn load_profile(app: &mut App, name: &str) -> Outcome {
     let Some(p) = app.profiles.get(name) else {
-        return Err(Refusal { status: 404, message: format!("no profile named '{name}'") });
+        return Err(Refusal::quiet(404, format!("no profile named '{name}'")));
     };
     app.serve = p.serve.clone();
     let name = p.name.clone();
@@ -1360,7 +1473,7 @@ pub fn load_profile(app: &mut App, name: &str) -> Outcome {
 
 pub fn delete_profile(app: &mut App, name: &str) -> Outcome {
     let Some(p) = app.profiles.get(name) else {
-        return Err(Refusal { status: 404, message: format!("no profile named '{name}'") });
+        return Err(Refusal::quiet(404, format!("no profile named '{name}'")));
     };
     let name = p.name.clone();
     Ok(ask(
@@ -1386,21 +1499,17 @@ fn save_profiles(app: &mut App) {
 fn geometry(app: &mut App) -> Result<crate::ft::types::CacheGeometry, Refusal> {
     match app.telemetry.cache.as_ref().map(|c| c.geometry.clone()) {
         Some(geo) => Ok(geo),
-        None => Err(Refusal {
-            status: 503,
-            message: "cache geometry is only available while the engine is serving".into(),
-        }),
+        None => {
+            Err(warn_off(app, 503, "cache geometry is only available while the engine is serving"))
+        }
     }
 }
 
 fn present(geo: &crate::ft::types::CacheGeometry, pool: Pool) -> Result<(), Refusal> {
-    if views::cache::pool_present(geo, pool) {
+    if crate::cache_pools::present(geo, pool) {
         Ok(())
     } else {
-        Err(Refusal {
-            status: 404,
-            message: format!("this model exposes no {} pool", pool.label()),
-        })
+        Err(Refusal::quiet(404, format!("this model exposes no {} pool", pool.label())))
     }
 }
 
@@ -1412,18 +1521,13 @@ pub fn set_cache_pending(
 ) -> Result<Option<u64>, Refusal> {
     let geo = geometry(app)?;
     present(&geo, pool)?;
-    let staged = value.map(|v| {
-        let max = views::cache::pool_max(&geo, pool);
-        let min = geo
-            .limit(views::cache::limit_key(pool), "min")
-            .map(|m| m / views::cache::tokens_per_unit(&geo, pool).max(1))
-            .unwrap_or(1)
-            .max(1);
-        v.clamp(min.min(max.max(1)), max.max(1))
-    });
+    // The same bounds the Cache view draws and the snapshot sends: one conversion from
+    // FreeToken's published limits into the unit `/v1/cache/rebuild` accepts.
+    let bounds = crate::cache_pools::geometry(&geo, pool);
+    let staged = value.map(|v| bounds.clamp(v));
     // "Back to where it started" is not an edit, which is how `views::cache::adjust`
     // already treats it.
-    let staged = staged.filter(|v| *v != views::cache::pool_current(&geo, pool));
+    let staged = staged.filter(|v| *v != bounds.current);
     app.cache_view.set_pending(pool, staged);
     Ok(staged)
 }
@@ -1447,7 +1551,7 @@ pub fn apply_cache(app: &mut App) -> Outcome {
         return Err(warn_off(app, 409, "nothing to apply"));
     }
     let pools: Vec<Pool> =
-        Pool::ALL.iter().copied().filter(|p| views::cache::pool_present(&geo, *p)).collect();
+        Pool::ALL.iter().copied().filter(|p| crate::cache_pools::present(&geo, *p)).collect();
     let active = app.telemetry.stats.as_ref().map(|s| s.requests.active).unwrap_or(0);
     let mut body = vec!["Resize the cache pools on the running engine?".to_string(), String::new()];
     for p in &pools {
@@ -1455,7 +1559,7 @@ pub fn apply_cache(app: &mut App) -> Outcome {
             body.push(format!(
                 "  {}: {} → {} {}",
                 p.label(),
-                crate::util::count(views::cache::pool_current(&geo, *p)),
+                crate::util::count(crate::cache_pools::current(&geo, *p)),
                 crate::util::count(v),
                 p.unit()
             ));
@@ -1530,7 +1634,7 @@ pub fn run_bench(app: &mut App) -> Outcome {
 
 pub fn cancel_job(app: &mut App, id: u64) -> Outcome {
     let Some(job) = app.jobs.iter().find(|j| j.id == id) else {
-        return Err(Refusal { status: 404, message: format!("no job with id {id}") });
+        return Err(Refusal::quiet(404, format!("no job with id {id}")));
     };
     if !job.is_running() {
         return Err(warn_off(app, 409, "that job has already finished"));
@@ -1555,7 +1659,7 @@ pub fn cancel_job(app: &mut App, id: u64) -> Outcome {
 
 pub fn cancel_download(app: &mut App, id: u64) -> Outcome {
     let Some(d) = app.downloads.iter().find(|d| d.id == id) else {
-        return Err(Refusal { status: 404, message: format!("no download with id {id}") });
+        return Err(Refusal::quiet(404, format!("no download with id {id}")));
     };
     if !d.is_running() {
         return Err(warn_off(app, 409, "that download has already finished"));

@@ -84,6 +84,21 @@ pub struct Model {
     // browser wants. The web layer sends `modified_ms` beside the flattened rest.
     #[serde(skip)]
     pub modified: Option<std::time::SystemTime>,
+    /// The chat-template situation as of the scan, read here rather than per frame.
+    ///
+    /// Both front ends want it for every row, and the web daemon builds its snapshot under
+    /// the `App` mutex on the async runtime — where a `stat` per model per frame against a
+    /// network mount stalls every connected browser. `App::refresh_template_status` puts it
+    /// back in step after an apply or a revert, which are the only things that change it.
+    // Skipped: the web layer sends it under its own `template_status` key, beside the
+    // flattened rest, so the shape stays the documented one.
+    #[serde(skip)]
+    pub template_status: crate::templates::Status,
+    /// Whether `inference/config.json` is present — DeepSeek-V4 keeps its real arguments
+    /// there, and the Models pane says so when it is missing. Recorded at scan time for
+    /// the same reason as `template_status`.
+    #[serde(skip)]
+    pub has_inference_config: bool,
 }
 
 impl Model {
@@ -147,7 +162,12 @@ impl Model {
 /// is deliberately avoided — a model directory can hold thousands of files and a runaway
 /// walk would make the Models view feel broken.
 pub fn scan(roots: &[PathBuf], ftw_dir: &Path) -> Vec<Model> {
-    let mut found: BTreeMap<PathBuf, Model> = BTreeMap::new();
+    // Keyed by path *and* variant, not by path alone. A repo that ships one file per
+    // quantization keeps every build in the snapshot root, so several `Model`s legitimately
+    // share a path and differ only in which files they are; keying on the path dropped all
+    // but the last, and the one that survived was whichever the directory listing happened
+    // to sort last.
+    let mut found: BTreeMap<(PathBuf, Option<String>), Model> = BTreeMap::new();
     for root in roots {
         let root = expand_tilde(root);
         if !root.is_dir() {
@@ -162,19 +182,19 @@ pub fn scan(roots: &[PathBuf], ftw_dir: &Path) -> Vec<Model> {
             let cached = inspect_cache_entry(&entry);
             if !cached.is_empty() {
                 for m in cached {
-                    found.insert(m.path.clone(), m);
+                    found.insert(key_of(&m), m);
                 }
                 continue;
             }
             if let Some(m) = inspect(&entry) {
-                found.insert(m.path.clone(), m);
+                found.insert(key_of(&m), m);
                 continue;
             }
             // Not a model itself: try one level deeper for the org/model layout.
             for child in read_dir_sorted(&entry) {
                 if child.is_dir() {
                     if let Some(m) = inspect(&child) {
-                        found.insert(m.path.clone(), m);
+                        found.insert(key_of(&m), m);
                     }
                 }
             }
@@ -185,6 +205,12 @@ pub fn scan(roots: &[PathBuf], ftw_dir: &Path) -> Vec<Model> {
     link_conversions(&mut models, ftw_dir);
     models.sort_by_key(|m| m.name.to_lowercase());
     models
+}
+
+/// What makes a checkpoint the same checkpoint when two roots both see it: where it is,
+/// and which build of that directory it is.
+fn key_of(m: &Model) -> (PathBuf, Option<String>) {
+    (m.path.clone(), m.variant.clone())
 }
 
 /// Resolve a Hugging Face hub cache entry to the checkpoint it currently points at.
@@ -297,10 +323,24 @@ fn link_conversions(models: &mut [Model], ftw_dir: &Path) {
         models.iter().filter(|m| m.format == Format::Ftw).map(|m| m.path.clone()).collect();
     for m in models.iter_mut().filter(|m| m.format == Format::Hf) {
         let expected = ftw_output_path(&m.path, m.repo.as_deref(), m.variant.as_deref(), ftw_dir);
-        if let Some(path) = ftw.iter().find(|p| **p == expected) {
+        // The sibling `<source>-ftw` is where builds went before `library.ftw_dir` existed.
+        // Still accepted as a fallback: an existing build is tens of gigabytes, and a
+        // version bump that quietly unlinked it would offer to convert the model again.
+        let legacy = legacy_ftw_path(&m.path);
+        if let Some(path) = ftw
+            .iter()
+            .find(|p| **p == expected)
+            .or_else(|| ftw.iter().find(|p| Some(*p) == legacy.as_ref()))
+        {
             m.converted_to = Some(path.clone());
         }
     }
+}
+
+/// Where earlier versions of ft-man wrote an FTW build: beside the source, `<name>-ftw`.
+fn legacy_ftw_path(source: &Path) -> Option<PathBuf> {
+    let name = source.file_name()?.to_string_lossy().into_owned();
+    Some(source.parent()?.join(format!("{name}-ftw")))
 }
 
 /// Where ft-man puts the FTW build of a checkpoint: under `library.ftw_dir`, with a
@@ -371,6 +411,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             repo: None,
             variant: None,
             modified,
+            template_status: crate::templates::status(dir),
+            has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
 
@@ -393,6 +435,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             repo: None,
             variant: None,
             modified,
+            template_status: crate::templates::status(dir),
+            has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
 
@@ -420,6 +464,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             repo: None,
             variant: None,
             modified,
+            template_status: crate::templates::status(dir),
+            has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
 
@@ -443,6 +489,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             repo: None,
             variant: None,
             modified,
+            template_status: crate::templates::status(dir),
+            has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
 
@@ -587,6 +635,58 @@ pub fn dir_size(dir: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repo that keeps one file per quantization in the snapshot root produces several
+    /// `Model`s with the same `path`. Keyed on the path alone, all but one were dropped —
+    /// and which one survived depended on directory order.
+    #[test]
+    fn several_builds_of_one_directory_all_survive_the_dedupe() {
+        let dir = tmpdir("dedupe");
+        let snapshot =
+            dir.join("models--unsloth--Qwen3.8-Flash-Next-GGUF").join("snapshots").join("deadbeef");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), r#"{"model_type":"qwen3"}"#).unwrap();
+        for name in ["Qwen3.8-UD-IQ3_XXS.gguf", "Qwen3.8-Q8_0.gguf"] {
+            std::fs::write(snapshot.join(name), vec![0u8; 64]).unwrap();
+        }
+
+        let found = scan(std::slice::from_ref(&dir), &dir.join("ftw"));
+        let mut variants: Vec<String> = found.iter().filter_map(|m| m.variant.clone()).collect();
+        variants.sort();
+        assert_eq!(
+            variants,
+            vec!["Q8_0".to_string(), "UD-IQ3_XXS".to_string()],
+            "both builds of one snapshot directory must be listed: {found:#?}"
+        );
+        // And they really do share a path, which is what the old key collapsed.
+        assert_eq!(found[0].path, found[1].path);
+        assert_ne!(found[0].served_name(), found[1].served_name());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Builds written before `library.ftw_dir` existed sit beside their source. Those are
+    /// tens of gigabytes each, and a version bump that unlinked them would offer to
+    /// convert a checkpoint that already had a conversion.
+    #[test]
+    fn an_ftw_build_in_the_old_sibling_location_stays_linked() {
+        let dir = tmpdir("legacy-ftw");
+        let source = dir.join("Qwen3.6-35B-A3B");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("config.json"), r#"{"model_type":"qwen3"}"#).unwrap();
+        std::fs::write(source.join("model-00001.safetensors"), vec![0u8; 64]).unwrap();
+
+        let sibling = dir.join("Qwen3.6-35B-A3B-ftw");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join(crate::ft::proc::FTW_INDEX), "{}").unwrap();
+        std::fs::write(sibling.join("weights.ftw"), vec![0u8; 32]).unwrap();
+
+        // `ftw_dir` points somewhere else entirely, which is the configuration that used
+        // to break the link.
+        let found = scan(std::slice::from_ref(&dir), &dir.join("elsewhere"));
+        let hf = found.iter().find(|m| m.format == Format::Hf).expect("the source is listed");
+        assert_eq!(hf.converted_to.as_deref(), Some(sibling.as_path()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn tmpdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ft-man-test-{name}-{}", std::process::id()));
@@ -887,6 +987,8 @@ mod tests {
             ftw_fingerprint: None,
             converted_to: None,
             modified: None,
+            template_status: Default::default(),
+            has_inference_config: false,
         });
         assert_eq!(m.served_name(), "unsloth/Model-GGUF:UD-IQ3_XXS");
 

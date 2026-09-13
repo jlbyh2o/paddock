@@ -91,10 +91,19 @@ export function App(): ReactNode {
   // ---- the stream -------------------------------------------------------
   useEffect(() => {
     if (auth !== "ok") return;
-    // First paint does not wait for the stream's first frame.
-    api.snapshot().then(applySnapshot, () => {
-      // The stream is the real source; a failure here is not worth a toast.
-    });
+    let live = true;
+    // First paint does not wait for the stream's first frame — but the stream is the
+    // authority. `applySnapshot` drops a document that is not newer than the one
+    // already held (§2.2), so this GET losing the race simply does nothing instead of
+    // rewinding the page to a state the reader has already seen past.
+    api.snapshot().then(
+      (snapshot) => {
+        if (live) applySnapshot(snapshot);
+      },
+      () => {
+        // The stream is the real source; a failure here is not worth a toast.
+      },
+    );
     loadKnobs().catch((error: unknown) => {
       reportError(error);
     });
@@ -115,14 +124,17 @@ export function App(): ReactNode {
         setAuth("required");
       },
     });
-    return close;
+    return () => {
+      live = false;
+      close();
+    };
   }, [auth]);
 
   const confirm = snapshot?.confirm ?? null;
   const plan = snapshot?.serve.plan ?? null;
 
   const answerConfirm = useCallback((accept: boolean) => {
-    run(api.confirm(accept));
+    run(api.confirm({ accept }));
   }, []);
 
   // ---- global keys ------------------------------------------------------
@@ -156,7 +168,19 @@ export function App(): ReactNode {
 
       // A modal owns the keyboard while it is up.
       if (confirm) {
-        if (event.key === "Enter" || event.key === "y" || event.key === "Y") {
+        if (event.key === "Enter") {
+          // Enter activates whatever has focus, which is the default (safe) option
+          // until the reader moves it. Accepting unconditionally would turn a Tab away
+          // from Confirm into a trap: the button says Cancel and the key does the
+          // opposite. `y` and `n` stay unambiguous, which is why they are separate.
+          const focused = document.activeElement;
+          const answer =
+            focused instanceof HTMLElement && focused.dataset["confirm"] !== undefined
+              ? focused.dataset["confirm"] === "accept"
+              : confirm.default_index === 1;
+          answerConfirm(answer);
+          event.preventDefault();
+        } else if (event.key === "y" || event.key === "Y") {
           answerConfirm(true);
           event.preventDefault();
         } else if (event.key === "n" || event.key === "N") {

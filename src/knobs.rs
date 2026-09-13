@@ -540,6 +540,40 @@ pub fn validate_value(k: &Knob, value: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A choice knob accepts exactly its declared options and nothing else. The Serve
+    /// tab only ever cycles through them, so the value that reaches this is one a browser
+    /// or a hand-edited profile supplied.
+    #[test]
+    fn a_choice_knob_accepts_only_its_own_options() {
+        let k = knob("moe_strategy").expect("the MoE strategy knob exists");
+        let Kind::Choice(options) = k.kind else { panic!("moe_strategy is a choice knob") };
+        for good in options {
+            assert_eq!(validate_value(k, good), None, "{good} is one of its options");
+        }
+        // Trimmed before comparison, as every other kind is.
+        assert_eq!(validate_value(k, &format!("  {}  ", options[0])), None);
+
+        let msg = validate_value(k, "turbo").expect("an unlisted option must be rejected");
+        assert!(msg.starts_with("must be one of: "), "{msg}");
+        for good in options {
+            assert!(msg.contains(good), "the message lists what is allowed: {msg}");
+        }
+        // Case matters: these are argv values, and FreeToken compares them exactly.
+        assert!(validate_value(k, &options[0].to_uppercase()).is_some());
+        // An empty value is an unset knob, not a bad one.
+        assert_eq!(validate_value(k, ""), None);
+    }
+
+    /// A flag's domain is the two words `ServeConfig::set` understands. "false" is valid
+    /// and means "unset", which is why it has to be accepted rather than rejected.
+    #[test]
+    fn a_flag_accepts_only_true_or_false() {
+        let k = knob("moe_cache_auto").expect("the MoE auto flag exists");
+        assert_eq!(validate_value(k, "true"), None);
+        assert_eq!(validate_value(k, "false"), None);
+        assert_eq!(validate_value(k, "yes").as_deref(), Some("must be true or false"));
+    }
+
     #[test]
     fn every_knob_key_is_unique() {
         let mut keys: Vec<_> = KNOBS.iter().map(|k| k.key).collect();

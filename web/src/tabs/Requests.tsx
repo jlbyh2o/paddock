@@ -7,6 +7,11 @@
  * `paused` is the daemon's display flag (§3.3 and §7.1): collection never stops, so
  * pausing only stops this table following the newest row, and unpausing catches up
  * from the held sequence with nothing lost.
+ *
+ * Following and selecting are one state, as they are in the TUI: while the table is
+ * following, the row of interest is the newest one and the detail pane shows it;
+ * touching a row (or an arrow key) stops the follow and pins the choice, and `f`
+ * resumes it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -34,15 +39,31 @@ export function Requests(props: { snapshot: Snapshot }): ReactNode {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const selection = useSelection(feed.items, useCallback((r: RequestRecord) => String(r.seq), []));
-  const record = selection.item;
+  const newest = feed.items[feed.items.length - 1] ?? null;
+  // Following means "no explicit selection": the newest record is the one being read,
+  // and `useSelection`'s fallback (the first row) would be the oldest one instead.
+  const record = follow ? newest : selection.item;
+  const selectedSeq = record === null ? null : String(record.seq);
 
   const paused = s.requests.paused;
+
+  // The ring is capped at 512, so `items.length` stops moving once it is full; the
+  // newest sequence is what still changes when a request lands.
+  const newestSeq = newest?.seq ?? 0;
+
+  // Keep the cursor under the row being read, so that the first arrow key steps away
+  // from the newest entry rather than from the oldest one. Deliberately keyed on the
+  // sequence alone: `selection` is a fresh object every render.
+  const select = selection.select;
+  useEffect(() => {
+    if (follow && newestSeq > 0) select(String(newestSeq));
+  }, [follow, newestSeq, select]);
 
   useEffect(() => {
     if (!follow || paused) return;
     const el = bodyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [follow, paused, feed.items.length]);
+  }, [follow, paused, newestSeq]);
 
   useTabKeys(
     useCallback(
@@ -59,7 +80,7 @@ export function Requests(props: { snapshot: Snapshot }): ReactNode {
             setFollow((prev) => !prev);
             return true;
           case "p":
-            run(api.pauseRequests(!paused));
+            run(api.pauseRequests({ paused: !paused }));
             return true;
           case "c":
             run(api.clearRequests());
@@ -88,7 +109,7 @@ export function Requests(props: { snapshot: Snapshot }): ReactNode {
               />
               follow <span className="dim">(f)</span>
             </label>
-            <button type="button" className="btn" onClick={() => run(api.pauseRequests(!paused))}>
+            <button type="button" className="btn" onClick={() => run(api.pauseRequests({ paused: !paused }))}>
               {paused ? "Resume" : "Pause"} <span className="dim">(p)</span>
             </button>
             <button type="button" className="btn" onClick={() => run(api.clearRequests())}>
@@ -135,7 +156,7 @@ export function Requests(props: { snapshot: Snapshot }): ReactNode {
                 {feed.items.map((item) => (
                   <tr
                     key={item.seq}
-                    className={`row ${String(item.seq) === selection.id ? "selected" : ""}`}
+                    className={`row ${String(item.seq) === selectedSeq ? "selected" : ""}`}
                     onClick={() => {
                       setFollow(false);
                       selection.select(String(item.seq));

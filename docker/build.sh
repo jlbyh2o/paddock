@@ -77,6 +77,30 @@ if docker run --rm --entrypoint /bin/bash "$STAGING" \
   exit 1
 fi
 
+# The binary is compiled from this working tree, so anything the build embedded about the
+# machine it was built on travels with it: a --remap-path-prefix that did not fire, a
+# panic message quoting an absolute path, a hardcoded address left in by mistake. None of
+# that belongs in an image anyone can pull, and none of it is visible in a diff.
+#
+# `strings` rather than grep -a: a match has to be a real printable run to be worth
+# failing on, and this is the one check whose false negative is publishing an identity.
+echo "==> checking the binary carries no build-machine identity"
+IDENTITY_PATTERNS='jeremy|/home/|jlbyh2o@'
+if docker run --rm --entrypoint /bin/bash "$STAGING" -c '
+    command -v strings >/dev/null 2>&1 \
+      && strings -n 6 /usr/local/bin/ft-man \
+      || tr -c "[:print:]\n" "\n" < /usr/local/bin/ft-man
+  ' | grep -Eq "$IDENTITY_PATTERNS"; then
+  echo "ft-man carries build-machine identity. Matches:" >&2
+  docker run --rm --entrypoint /bin/bash "$STAGING" -c '
+      command -v strings >/dev/null 2>&1 \
+        && strings -n 6 /usr/local/bin/ft-man \
+        || tr -c "[:print:]\n" "\n" < /usr/local/bin/ft-man
+    ' | grep -E "$IDENTITY_PATTERNS" | sort -u | head -20 >&2
+  echo "Not tagging or pushing $STAGING." >&2
+  exit 1
+fi
+
 LOCAL="${IMAGE_NAME}:${TAG}"
 docker tag "$STAGING" "$LOCAL"
 docker tag "$STAGING" "${IMAGE_NAME}:latest"

@@ -6,6 +6,7 @@
 //! engine runs on.
 
 mod actions;
+mod cache_pools;
 mod compat;
 mod config;
 mod ft;

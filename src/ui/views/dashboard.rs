@@ -613,7 +613,7 @@ impl App {
 /// Render the checkpoint's recommended sampling parameters. Reasoning models ship these
 /// in `generation_config.json` and go into repetition loops without them, so it is worth
 /// stating what the engine will apply to a request that specifies nothing.
-fn format_sampling(value: &serde_json::Value) -> Option<String> {
+pub fn format_sampling(value: &serde_json::Value) -> Option<String> {
     let obj = value.as_object()?;
     let mut parts: Vec<String> = Vec::new();
     for key in ["temperature", "top_p", "top_k", "min_p", "repetition_penalty"] {

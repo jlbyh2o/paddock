@@ -315,8 +315,7 @@ pub fn guidance_notes(app: &App, m: &Model) -> Vec<(&'static str, String)> {
         }
     }
 
-    if m.name.to_lowercase().contains("deepseek") && !m.path.join("inference/config.json").is_file()
-    {
+    if m.name.to_lowercase().contains("deepseek") && !m.has_inference_config {
         note(
             "warn",
             "DeepSeek-V4 checkpoints need their inference/config.json subdirectory.".into(),

@@ -4,7 +4,8 @@
  * Server toasts carry `age_ms` and `ttl_ms` (§2.15) so the browser can fade in step
  * with `App::expire_toasts` rather than running a timer of its own. Client-side
  * problems — a network failure, a 400 — are merged in from `localToastStore`; a
- * 409/503 refusal never appears here, because the daemon already sent its own.
+ * refusal the daemon marked `toasted` never appears here, because its own toast is
+ * already on the way in the next snapshot.
  */
 
 import type { ReactNode } from "react";

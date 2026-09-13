@@ -2,9 +2,10 @@
  * Cache — §5.7.
  *
  * Every number in the pool table was computed by `views::cache` on the daemon,
- * including the token-to-page conversions the engine's published limits need. The
- * browser does no pool arithmetic: a slider posts a value, an arrow posts a
- * percentage, and the next snapshot says what that meant.
+ * including the token-to-page conversions the engine's published limits need and the
+ * floor each pool may be dragged to. The browser does no pool arithmetic: a slider
+ * posts a value, an arrow posts a percentage, and the next snapshot says what that
+ * meant.
  */
 
 import { useCallback, useState } from "react";
@@ -27,7 +28,7 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
   const row = selection.item;
 
   const adjust = useCallback((pool: PoolId, percentStep: number) => {
-    run(api.cacheAdjust(pool, percentStep));
+    run(api.cacheAdjust({ pool, percent: percentStep }));
   }, []);
 
   useTabKeys(
@@ -43,7 +44,7 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
             adjust(row.pool, event.shiftKey ? 0.1 : 0.01);
             return true;
           case "r":
-            run(api.cachePending(row.pool, null));
+            run(api.cachePending({ pool: row.pool, value: null }));
             return true;
           case "R":
             run(api.cacheResetAll());
@@ -102,7 +103,7 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
               type="button"
               className="btn"
               onClick={() => {
-                if (row) run(api.cachePending(row.pool, null));
+                if (row) run(api.cachePending({ pool: row.pool, value: null }));
               }}
               disabled={!row || row.pending === null}
             >
@@ -130,7 +131,6 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
         <ul className="rows">
           {pools.map((pool) => {
             const live = dragging[pool.pool] ?? pool.shown;
-            const min = Math.max(pool.min ?? 1, 1);
             return (
               <li
                 key={pool.pool}
@@ -172,7 +172,7 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
                   </button>
                   <input
                     type="range"
-                    min={min}
+                    min={pool.min}
                     max={pool.max}
                     value={live}
                     disabled={disabled}
@@ -182,7 +182,7 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
                       setDragging((prev) => ({ ...prev, [pool.pool]: Number(e.target.value) }))
                     }
                     onPointerUp={(e) => {
-                      run(api.cachePending(pool.pool, Number(e.currentTarget.value)));
+                      run(api.cachePending({ pool: pool.pool, value: Number(e.currentTarget.value) }));
                       setDragging((prev) => {
                         const next = { ...prev };
                         delete next[pool.pool];
@@ -190,7 +190,7 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
                       });
                     }}
                     onKeyUp={(e) => {
-                      run(api.cachePending(pool.pool, Number(e.currentTarget.value)));
+                      run(api.cachePending({ pool: pool.pool, value: Number(e.currentTarget.value) }));
                     }}
                   />
                   <button

@@ -8,7 +8,7 @@
  * filesystem than the one the download will use.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { CompatVerdict, RepoFile, RepoSummary, Severity, Snapshot } from "../api/types.ts";
 import { api } from "../api/client.ts";
@@ -16,6 +16,7 @@ import { run } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Empty, Field, Pane } from "../ui/primitives.tsx";
+import { SearchField, useFilterField } from "../ui/SearchField.tsx";
 import { DASH, bytes, count, dateOnly, shortSha } from "../format.ts";
 
 const VERDICT_TONE: Record<CompatVerdict, Severity> = {
@@ -34,15 +35,16 @@ const NOTE_TONE: Record<string, Severity> = {
 export function Hub(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
   const hub = s.hub;
-  const [query, setQuery] = useState(hub.query);
+  // Escape gives the keyboard back without emptying the box: the text here is a query
+  // being composed, not a filter over what is already on screen.
+  const query = useFilterField(hub.query, { clearOnEscape: false });
   const [pane, setPane] = useState<"results" | "files">("results");
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const results = useSelection(hub.results, useCallback((r: RepoSummary) => r.id, []));
   const files = useSelection(hub.files, useCallback((f: RepoFile) => f.path, []));
 
   const openRepo = useCallback((repoId: string) => {
-    run(api.hubOpen(repoId));
+    run(api.hubOpen({ repo_id: repoId }));
   }, []);
 
   const download = useCallback(() => {
@@ -53,38 +55,32 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
 
   const submitSearch = (event: FormEvent) => {
     event.preventDefault();
-    if (query.trim() === "") return;
-    run(api.hubSearch(query.trim()));
+    if (query.needle === "") return;
+    run(api.hubSearch({ query: query.needle }));
   };
 
   useTabKeys(
     useCallback(
       (event: KeyboardEvent) => {
-        if (event.key === "Escape") {
-          searchRef.current?.blur();
-          return false;
-        }
+        if (query.handleKey(event)) return true;
+        if (event.key === "Escape") return false;
         const active = pane === "results" ? results : files;
         if (active.handleKey(event)) return true;
         switch (event.key) {
-          case "/":
-            searchRef.current?.focus();
-            searchRef.current?.select();
-            return true;
           case "Enter":
             if (pane === "results" && results.item) openRepo(results.item.id);
             return true;
           case " ":
             if (pane === "files" && files.item) {
-              run(api.hubToggleFile(files.item.path));
+              run(api.hubToggleFile({ path: files.item.path }));
               return true;
             }
             return false;
           case "a":
-            run(api.hubSelectFiles("all"));
+            run(api.hubSelectFiles({ mode: "all" }));
             return true;
           case "n":
-            run(api.hubSelectFiles("none"));
+            run(api.hubSelectFiles({ mode: "none" }));
             return true;
           case "d":
             download();
@@ -96,7 +92,7 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
             return false;
         }
       },
-      [pane, results, files, openRepo, download, hub.hf_cli],
+      [pane, query, results, files, openRepo, download, hub.hf_cli],
     ),
   );
 
@@ -125,13 +121,10 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
           bodyClassName="flush"
           actions={
             <form className="inline-form" onSubmit={submitSearch} style={{ width: "100%" }}>
-              <input
-                ref={searchRef}
-                type="search"
-                value={query}
+              <SearchField
+                field={query}
                 placeholder="search Hugging Face  (/)"
-                onChange={(e) => setQuery(e.target.value)}
-                aria-label="Search Hugging Face"
+                label="Search Hugging Face"
               />
               <button type="submit" className="btn primary">
                 Search
@@ -193,7 +186,7 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
                   <li
                     key={variant.label}
                     className="row"
-                    onClick={() => run(api.hubVariant(variant.label))}
+                    onClick={() => run(api.hubVariant({ label: variant.label }))}
                   >
                     <div className="row-main">
                       <span>
@@ -283,10 +276,10 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
         bodyClassName="flush"
         actions={
           <>
-            <button type="button" className="btn" onClick={() => run(api.hubSelectFiles("all"))}>
+            <button type="button" className="btn" onClick={() => run(api.hubSelectFiles({ mode: "all" }))}>
               Select all <span className="dim">(a)</span>
             </button>
-            <button type="button" className="btn" onClick={() => run(api.hubSelectFiles("none"))}>
+            <button type="button" className="btn" onClick={() => run(api.hubSelectFiles({ mode: "none" }))}>
               None <span className="dim">(n)</span>
             </button>
             <button
@@ -328,7 +321,7 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
                 <input
                   type="checkbox"
                   checked={file.wanted}
-                  onChange={(e) => run(api.hubToggleFile(file.path, e.target.checked))}
+                  onChange={(e) => run(api.hubToggleFile({ path: file.path, wanted: e.target.checked }))}
                 />
                 <span className="truncate">{file.path}</span>
                 <span className="size">{bytes(file.size)}</span>

@@ -25,7 +25,7 @@ pub async fn list_repo(
     State(state): State<Shared>,
     Body(req): Body<RepoRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::list_template_repo(app, &req.repo)))
+    reply(state.act(|app| actions::list_template_repo(app, &req.repo)))
 }
 
 #[derive(Deserialize)]
@@ -36,9 +36,10 @@ pub struct FetchRequest {
 }
 
 pub async fn fetch(State(state): State<Shared>, Body(req): Body<FetchRequest>) -> ApiResult<Reply> {
-    state.write(|app| {
-        reply(actions::fetch_template(app, &req.repo, req.revision.as_deref(), &req.path))
-    })
+    reply(
+        state
+            .act(|app| actions::fetch_template(app, &req.repo, req.revision.as_deref(), &req.path)),
+    )
 }
 
 #[derive(Deserialize)]
@@ -48,7 +49,7 @@ pub struct ApplyRequest {
 }
 
 pub async fn apply(State(state): State<Shared>, Body(req): Body<ApplyRequest>) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::apply_template(app, &req.template, &req.model_path)))
+    reply(state.act(|app| actions::apply_template(app, &req.template, &req.model_path)))
 }
 
 #[derive(Deserialize)]
@@ -60,14 +61,14 @@ pub async fn revert(
     State(state): State<Shared>,
     Body(req): Body<RevertRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::request_revert_template(app, &req.model_path)))
+    reply(state.act(|app| actions::request_revert_template(app, &req.model_path)))
 }
 
 pub async fn verify(
     State(state): State<Shared>,
     Body(req): Body<ApplyRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::verify_template(app, &req.template, &req.model_path)))
+    reply(state.act(|app| actions::verify_template(app, &req.template, &req.model_path)))
 }
 
 #[derive(Deserialize)]
@@ -76,7 +77,7 @@ pub struct NameRequest {
 }
 
 pub async fn delete(State(state): State<Shared>, Body(req): Body<NameRequest>) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::delete_template(app, &req.name)))
+    reply(state.act(|app| actions::delete_template(app, &req.name)))
 }
 
 #[derive(Deserialize)]

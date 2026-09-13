@@ -85,8 +85,9 @@ describe("serve errors", () => {
    * §2.12: `serve.errors[].key` is whatever key was in the configuration, and
    * `serve.validate` emits `("<key>", "unknown knob")` for one the schema does not
    * know — a profile written against a newer FreeToken, or a hand-edited file. The
-   * Command pane resolves a key to its flag spelling and must fall back to the key
-   * itself rather than printing "undefined:".
+   * daemon resolves the key to a flag where it can and sends `flag: null` where it
+   * cannot, and the Command pane must print such a key as itself rather than
+   * "undefined:".
    */
   it("prints a non-knob error key as itself", async () => {
     const snapshot: Snapshot = {
@@ -94,8 +95,12 @@ describe("serve errors", () => {
       serve: {
         ...fixture.serve,
         errors: [
-          { key: "moe_fanout_beta", message: "unknown knob" },
-          { key: "model", message: "a model path or repo id is required" },
+          { key: "moe_fanout_beta", flag: null, message: "unknown knob" },
+          {
+            key: "model",
+            flag: "--model",
+            message: "a model path or repo id is required",
+          },
         ],
       },
     };

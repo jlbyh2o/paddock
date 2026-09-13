@@ -19,7 +19,7 @@ nothing to invent and the browser has nothing to re-derive.
 | | |
 |---|---|
 | API base path | `/api` |
-| Request bodies | `application/json`; an action with no parameters still accepts `{}` or an empty body |
+| Request bodies | `application/json`, and a `POST` that declares anything else is refused with `415` (section 1.2); an action with no parameters still accepts `{}`, an empty body, or no `Content-Type` at all |
 | Response bodies | `application/json`, except `GET /api/events` (`text/event-stream`) |
 | Character set | UTF-8 |
 | Field naming | `snake_case` throughout, matching what `#[derive(Serialize)]` produces from the Rust structs |
@@ -33,37 +33,64 @@ nothing to invent and the browser has nothing to re-derive.
 Every non-2xx `/api` response is:
 
 ```json
-{ "error": "human-readable sentence, lowercase, no trailing period" }
+{ "error": "human-readable sentence, lowercase, no trailing period", "toasted": true }
 ```
 
 | Status | When |
 |---|---|
-| `400 Bad Request` | Malformed JSON, a missing required field, an unparseable value, an unknown enum variant |
+| `400 Bad Request` | Malformed JSON, a missing required field, an unparseable value, an unknown enum variant, a `{id}` path segment that is not a number |
 | `401 Unauthorized` | Auth is required and the request carried no valid token (see 1.3) |
+| `403 Forbidden` | A state-changing request carried an `Origin` header naming another site (see below) |
 | `404 Not Found` | The target identity does not exist right now: no model at that `path`, no job with that `id`, no profile or template by that `name`, no knob with that `key` |
 | `409 Conflict` | The action is refused in the current state: an engine is already running, a GPU-exclusive job cannot start, a repo is already downloading, a knob value failed `knobs::validate_value`, `serve.validate()` returned errors on start |
+| `415 Unsupported Media Type` | A `POST` body declared a `Content-Type` other than `application/json` (see below) |
 | `500 Internal Server Error` | An I/O failure, a spawn failure, or an unexpected panic caught at the handler boundary |
 | `503 Service Unavailable` | The action needs something absent from this installation: the FreeToken CLI (`app.ft` is `None`), the `hf` CLI, or a running engine for a control-plane call |
 
-Rules the frontend can rely on:
+**`toasted`** is on every error body. It is `true` when the daemon also pushed this refusal
+onto `app.toasts`, so it arrives in the next snapshot; the client then renders *one*
+problem, not two — either the status body or the toast, never both. It is `false` for a
+refusal the client is expected to render where the reader is already looking.
 
-* A `409` or `503` is a *refusal*, not a failure — the equivalent TUI path shows a warn
-  toast and changes nothing. The same toast is pushed onto `app.toasts` and arrives in the
-  next snapshot, so the browser may render either the status body or the toast, but must
-  not render both as two separate problems.
-* **Exceptions — refusals that push no toast.** A refusal that belongs to one field is
-  rendered against that field, and a toast beside it is the same problem twice. There is
-  one such route today:
-  | Route | Case | Why |
-  |---|---|---|
-  | `POST /api/serve/knob` | `409` from `knobs::validate_value` | The message names the flag and the browser has an inline slot under the field. The TUI has none, so `input::commit_knob_edit` raises the toast on the terminal's own side of the shared action (section 4.8) |
-  Every other refusal toasts. A client can therefore treat "409 or 503 with no new toast"
-  as belonging to the field it just submitted.
+The rule the daemon follows, so a client can predict it:
+
+| Class | `toasted` | Why |
+|---|---|---|
+| `409`, `503`, `500` from an action | `true` | A refusal about the *state of the machine* — an engine already running, a GPU already busy, no FreeToken CLI. The terminal has always shown these as a toast and still does |
+| `400` and `404` from an action | `false` | A refusal about the *request*: an empty query, an empty profile name, a path that is no longer in the library, a knob key the schema does not know. It belongs against the field or the row that produced it |
+| `409` from `POST /api/serve/knob` | `false` | The one state-shaped code used for a field-shaped problem: `knobs::validate_value` names the flag, and the browser has an inline slot under the value (section 4.8) |
+| `401`, `403`, `404` (no such endpoint), `415` | `false` | Raised by the web layer before any action ran, so there was nothing to toast |
+
+The terminal keeps its old behavior throughout: where the shared action now stays silent,
+`ui::input` raises the toast on the TUI's own side, because a terminal has no inline slot.
+
 * An action that succeeds returns `200` with a small typed reply (section 4). Any state it
   changed arrives through the snapshot stream, never in the reply.
 * A `200` does **not** always mean "done". When `ui.confirm_destructive` is on, an action
   that needs confirmation returns `200 {"status":"confirm_pending", ...}` and nothing has
-  happened yet. Section 4 lists which routes can do this.
+  happened yet. Section 4 lists which routes can do this. An action that has to touch the
+  filesystem before it can even *word* the confirmation returns `{"status":"started"}`
+  instead, and the modal appears in a later snapshot — see 4.5.
+
+**Cross-origin and content type.** The daemon answers on a LAN address with a cookie
+session, which is exactly what a cross-site request forgery needs: any page open in the
+operator's browser can `fetch` this origin, the browser attaches the cookie, and
+`POST /api/models/delete` runs. Two checks close that, on every method other than `GET`,
+`HEAD` and `OPTIONS`, and on the open routes as well as the gated ones:
+
+* **`Origin`** — when the header is present its authority (host and port, case-insensitively)
+  must equal the request's `Host`. A browser sets it on every cross-origin request and
+  cannot be talked out of it; anything else is `403`. A **missing** `Origin` is allowed:
+  that is `curl`, and a tool with no origin has no cookie jar to be borrowed either. `null`
+  — what a sandboxed iframe or a `file://` page sends — matches nothing and is refused.
+* **`Content-Type`** — must be `application/json` (any `; charset=…` is ignored) or absent.
+  A cross-site form post is the one cross-origin request that needs no preflight at all, and
+  a form can only send `application/x-www-form-urlencoded`, `multipart/form-data` or
+  `text/plain`. Requiring JSON puts every state-changing route behind a preflight the
+  browser will refuse to make. Anything else is `415`.
+
+Neither check consumes a token or a round trip, and neither affects `GET`: the browser's
+own rules already keep another origin from reading a response it is not allowed to see.
 
 ### 1.3 Authentication
 
@@ -71,8 +98,16 @@ Optional, off by default, exactly as `[web] token` / `--token` describe in web-u
 
 * When a token is configured, every `/api` request must carry it as
   `Authorization: Bearer <token>` **or** as the `ft_man_token` cookie.
+* Both are checked, and either one matching authorizes the request. A stale or unrelated
+  `Authorization` header — a proxy's, a browser extension's — must not shadow a cookie the
+  browser holds, and a non-`Bearer` scheme is ignored rather than treated as a wrong token.
 * When no token is configured there is no authentication at all and every request is
   authorized.
+* The token must be a value a cookie can carry: no whitespace, control characters, `;`,
+  `=`, `,`, `"` or `\`. `ft-man web --token` **refuses to start** on one that is not, and
+  says why. The header path would work with any of those, so the failure would otherwise be
+  invisible to `curl` and to tests and total for every browser — `EventSource` has no other
+  way to authenticate.
 * Static assets (section 1.4) are never gated, so the login page can load.
 
 **`GET /api/auth`** — always reachable, never gated.
@@ -157,10 +192,27 @@ One `App` behind one mutex. Handlers lock it, act, unlock; nothing is held acros
 * Actions are serialized and take effect in arrival order.
 * Every action that mutates state bumps `Snapshot::seq`; a client that sends an action and
   then sees a snapshot with a higher `seq` has seen its effect (or the toast explaining
-  why it did nothing).
+  why it did nothing). An action that refused with `"toasted": false` changed nothing, so it
+  publishes nothing — there is no new state for any *other* client to render.
 * Long operations (conversion, benchmark, download, cache rebuild, template render check,
   Hub search) are spawned as tasks. The route returns as soon as the task is started, and
-  the result arrives later as a snapshot change plus a toast.
+  the result arrives later as a snapshot change plus a toast. So is anything that has to
+  touch the filesystem to decide what to *ask*: sizing a checkpoint before offering to
+  delete it, and removing it afterwards (section 4.5).
+* **One task builds the frames.** A state change wakes a single broadcaster, which
+  serializes the snapshot once and publishes the finished bytes; each connected stream only
+  forwards them. Nothing is serialized per client, and every client connected at a given
+  moment sees the identical document with the identical `seq`.
+* **Nothing publishes a frame that carries no news.** The supervisor tick runs five times a
+  second forever and on an idle machine changes nothing; it wakes the broadcaster only when
+  the engine's state moved, a toast expired, a download's rate was resampled, or the polled
+  endpoint changed. That is what leaves a second in which the heartbeat can fire.
+* **The snapshot may not touch the filesystem.** It is built under the one `App` mutex that
+  every route and both front ends share, so a `stat` on unmounted network storage would
+  stall the whole daemon. Every figure that needs the disk is sampled elsewhere and read
+  back here: template status and root existence at scan time, free space and the bench
+  profile path on the hardware tick (once a second) and after anything that moves real
+  bytes, and a job's output counter from its own in-memory ring.
 
 ---
 
@@ -309,12 +361,13 @@ and are not serialized.
 | `log_path` | string \| null | `app.engine.log_path` |
 | `endpoint` | string | `app.client.base_url()` — the URL actually polled, after `poll_host` turns a wildcard bind into loopback |
 | `server_reachable` | boolean | `app.server_reachable()` |
-| `context_fit` | `ContextFit \| null` | **`app.context_fit()`**. `{usable, ceiling, is_truncated, ratio, summary}` where `summary` is `ContextFit::summary()` (`"32k of 256k"`) and `ratio` is `ContextFit::ratio()`. `null` while the engine has published neither number |
+| `context_fit` | `ContextFit \| null` | **`app.context_fit()`**. `{usable, ceiling, is_truncated, ratio, summary, verdict}` where `summary` is `ContextFit::summary()` (`"32k of 256k"`), `ratio` is `ContextFit::ratio()`, and `verdict` is `ContextFit::verdict()` — the plan overlay's headline sentence, `"the full 256k this model offers"` or `"233.1k of the 256k this model offers  (91%)"`. `views::plan` prints the same string, so the terminal and the browser cannot word one number two ways. `null` while the engine has published neither number |
 | `prefix_reuse` | `Reuse \| null` | **`app.prefix_reuse()`**. `{fraction, cold_rate, samples, summary}`; `summary` is `Reuse::summary()` (`"~97%  (est. from 12 reqs)"`). `null` when the evidence is too thin — the browser shows nothing, never a zero |
 | `completed_rate` | number | **`app.completed_rate.get()`** — the smoothed completions per second the Dashboard prints as `0.31 completed/s` |
 | `active_jobs` | number | `app.active_jobs()` |
 | `active_downloads` | number | `app.active_downloads()` |
 | `gpu_busy_reason` | string \| null | **`app.gpu_busy_reason()`** — why a conversion or benchmark would be refused right now. `null` means the GPU is free |
+| `start_blocked` | string \| null | **`actions::start_blocked(app)`** — why `POST /api/engine/start` would be refused right now, computed by the same predicate the route runs, so a button that offers to start cannot disagree with the daemon that would refuse it. The reasons, in the order they are checked: an engine is already live; one another process started is recorded in the state file; a GPU-exclusive job is running; there is no FreeToken CLI; `serve.validate()` has an error, flag-prefixed. `null` when a start would be attempted. The cross-process check is refreshed once a second by `Engine::poll`, and forced by the route itself before it decides |
 
 ### 2.6 `telemetry`
 
@@ -342,6 +395,7 @@ them (all `null` when the source document is absent):
 | `swa_used_tokens` / `swa_total_tokens` / `swa_ratio` | number \| null | Same on `stats.swa` |
 | `mamba_ratio` | number \| null | `SlotPool::ratio()` on `stats.mamba` |
 | `last_rebuild_summary` | string \| null | The Cache view's `last_rebuild_summary(app)` — `"last rebuild: MoE 2,403  KV 8,192"` |
+| `sampling_summary` | string \| null | **`views::dashboard::format_sampling(stats.model.sampling)`** — the checkpoint's recommended sampling as the Dashboard prints it, `"temperature 0.6  top_p 0.95"`. Reasoning models ship these in `generation_config.json` and loop without them, so the browser must show what the engine will apply rather than re-derive which keys matter. `null` when the engine published none |
 
 ### 2.7 `series`
 
@@ -376,7 +430,7 @@ Each field is an array of non-negative integers, oldest first, at most 120 entri
 |---|---|---|
 | `scanning` | boolean | `app.models_view.scanning` — the pane title becomes `Library (scanning…)` |
 | `items` | `ModelEntry[]` | `app.models` in scan order (sorted by lowercased name). **Unfiltered** — filtering is a browser concern |
-| `roots` | `{path, exists}[]` | `config.library.effective_roots()`, each marked `is_dir()`. The empty-library message names every root and says which do not exist |
+| `roots` | `{path, exists}[]` | `config.library.effective_roots()` — the configured roots plus the Hugging Face cache and the FTW directory — each marked `is_dir()` **at scan time**, not when the snapshot is built. A snapshot may not stat a path: it is assembled under the one `App` mutex, and a root on unmounted network storage would stall every connected browser. The empty-library message names every root and says which do not exist |
 | `config_path` | string | `config::config_path()` — named in that same message |
 
 `ModelEntry` is `models::Model` verbatim plus derived fields:
@@ -405,7 +459,7 @@ Each field is an array of non-negative integers, oldest first, at most 120 entri
 | `served_name` | string | **`Model::served_name()`** — `repo:variant`, what `--served-model-name` is set to and the key `costs.json` is keyed by |
 | `convertible` | boolean | `Model::convertible()` |
 | `is_partial` | boolean | `Model::is_partial()` |
-| `template_status` | `TemplateStatus` (tagged) | **`templates::status(&model.path)`** via `app.template_status(model)`, with `label` from `Status::label()` |
+| `template_status` | `TemplateStatus` (tagged) | **`templates::status(&model.path)`** as recorded on the `Model` by the scan, read back through `app.template_status(model)`, with `label` from `Status::label()`. Re-read only when it can change — after a template apply or revert, both of which are already writing those directories |
 | `template_targets` | string[] | `templates::targets(model)` — the directories an apply would write into (the checkpoint, plus its FTW build when one exists) |
 | `ftw_output_path` | string | `models::ftw_output_path(...)` — where a conversion would write, whether or not it exists yet |
 | `guidance` | `{level, text}[]` | The detail pane's bullet list, computed server-side because every rule reads host RAM, GPU VRAM and the filesystem. `level` is `"good" \| "warn" \| "bad" \| "dim"`, matching the color the TUI uses |
@@ -460,7 +514,7 @@ The knob **schema** is static for the process lifetime and is served once by
 | Field | Type | Source |
 |---|---|---|
 | `values` | `{[key: string]: string}` | `app.serve` — only the knobs actually set. A `Flag` knob that is on is present with the value `"true"`; an off flag is absent |
-| `errors` | `{key, message}[]` | **`serve.validate()`**, sorted and deduplicated. Includes the always-present `("model", "a model path or repo id is required")` when no model is set, per-value domain failures from `knobs::validate_value`, `"unknown knob"`, and `"cannot be combined with --num-tokens"` for a mutual-exclusion clash |
+| `errors` | `{key, flag, message}[]` | **`serve.validate()`**, sorted and deduplicated. Includes the always-present `("model", "a model path or repo id is required")` when no model is set, per-value domain failures from `knobs::validate_value`, `"unknown knob"`, and `"cannot be combined with --num-tokens"` for a mutual-exclusion clash. `flag` is the knob's flag spelling resolved server-side, and is **`null` when the key names no knob** — which a profile from a newer FreeToken, or a hand-edited `profiles.toml`, really does produce. The browser prints `flag ?? key`, so an unresolved key reads `moe_fanout_beta: unknown knob` rather than `undefined: unknown knob` |
 | `command_preview` | string | **`serve.preview(program)`** where `program` is `app.ft.display_program()` or `"ft"`. The exact shell-quoted command line `g` would run |
 | `set_counts` | `{[group: string]: number}` | Per `knobs::Group`, how many knobs in it are set — the Groups pane's right-hand column |
 | `plan` | `Plan \| null` | `app.serve_view.plan`, present only after a successful plan build. See below |
@@ -472,7 +526,7 @@ The knob **schema** is static for the process lifetime and is served once by
 | Field | Type | Source |
 |---|---|---|
 | `steps` | `PlanStep[]` | `plan.steps` in order |
-| `fit` | `ContextFit \| null` | `plan.fit`, same shape as `engine.context_fit` |
+| `fit` | `ContextFit \| null` | `plan.fit`, same shape as `engine.context_fit`, including `verdict` — which is exactly the overlay's headline, so the browser renders it rather than rebuilding the sentence |
 | `unpriced` | string \| null | `plan.unpriced` — why the cache split was not planned |
 | `is_empty` | boolean | `Plan::is_empty()` |
 | `edit_count` | number | `plan.edits().len()` — the overlay's `A applies 3 changes` line |
@@ -490,7 +544,7 @@ The knob **schema** is static for the process lifetime and is served once by
 ### 2.13 `cache`
 
 The Cache tab's pool table, computed exactly as `src/ui/views/cache.rs` computes it. Only
-pools `views::cache::pool_present(&geo, pool)` accepts are listed, in `Pool::ALL` order.
+pools `cache_pools::present(&geo, pool)` accepts are listed, in `Pool::ALL` order.
 `null` for the whole section's `pools` when `telemetry.cache_status` is absent — the tab
 then shows its "only available while the engine is serving" message.
 
@@ -517,18 +571,21 @@ then shows its "only available while the engine is serving" message.
 | `pool` | `"moe" \| "kv" \| "mamba" \| "swa"` | `Pool` |
 | `label` | string | `Pool::label()` — `"MoE expert slots"`, `"KV pages"`, `"GDN state slots"`, `"SWA window pages"` |
 | `unit` | string | `Pool::unit()` — `"slots"` or `"pages"` |
-| `current` | number | **`views::cache::pool_current(&geo, pool)`** |
-| `max` | number | **`views::cache::pool_max(&geo, pool)`** — the engine's published `limits.<key>.max` converted into the pool's own unit (tokens ÷ `page_size` for KV and SWA), else the local fallback |
-| `min` | number \| null | `geo.limit(key, "min")`, converted the same way. The TUI does not display it; the web UI needs it to clamp a slider, so it is sent. `null` when the engine published no bound |
+| `current` | number | **`cache_pools::geometry().current`** |
+| `max` | number | **`cache_pools::geometry().max`** — the engine's published `limits.<key>.max` converted into the pool's own unit (tokens ÷ `page_size` for KV and SWA), else the local fallback, and never below `current` or 1 |
+| `min` | number | `cache_pools::geometry().min` — the engine's published `limits.<key>.min` converted into the pool's own unit, floored at **1** and never above `max`. Never null: a slider needs a floor, and a pool rebuilt to zero is a pool the engine no longer has. The TUI does not display it; `POST /api/cache/pending` clamps against exactly this number |
 | `pending` | number \| null | `CacheView::pending_for(pool)` — `null` means "leave this pool alone" |
 | `shown` | number | `pending ?? current` — what the bar and the number render |
 | `delta` | number \| null | `pending - current`, signed. The `(+581)` in the detail line |
 | `ratio` | number | `ratio(shown, max(max, current, 1))` — the bar fill |
-| `note` | string | **`views::cache::pool_note(&geo, pool, shown)`** — `"64% of 6,144 experts resident"`, `"262,144 tokens"`, `"32,768 tokens of window"`, or `""` |
+| `note` | string | **`cache_pools::note(&geo, pool, shown)`** — `"64% of 6,144 experts resident"`, `"262,144 tokens"`, `"32,768 tokens of window"`, or `""` |
 
 The limit keys are FreeToken's own (`moe_experts`, `kv_tokens`, `mamba_slots`,
 `swa_tokens`); the conversion from published tokens to pages is the server's job, and a
 mismatch is silent, so the browser must never read `cache_status.geometry.limits` itself.
+`src/cache_pools.rs` holds that conversion once — the Cache view draws from it, this table
+is built from it, and `POST /api/cache/pending` and `/adjust` clamp against it, so the
+number a slider is allowed to reach is the number the daemon will accept.
 
 ### 2.14 `jobs`
 
@@ -548,7 +605,7 @@ mismatch is silent, so the browser must never read `cache_status.geometry.limits
 | `title` | string | `Job::title` |
 | `command_line` | string | `Job::command_line` — the first line of the output pane |
 | `status` | `JobStatus` (tagged) | `Job::status` |
-| `status_label` | string | `"running"`, `"done"`, `"failed"`, `"canceled"` — what the list column prints |
+| `status_label` | string | **`JobStatus::label()`** — `"running"`, `"done"`, `"failed"`, `"canceled"`. The same function the Jobs view prints |
 | `progress` | `{phase, done, total, bytes}` | `Job::progress` (`JobProgress`) |
 | `progress_ratio` | number \| null | **`JobProgress::ratio()`** — `null` when no total is known, which is why the dense conversion phase has no bar |
 | `progress_detail` | string | The list's second-line text, formatted server-side exactly as `views::jobs::progress_detail` does: `"12.4 GiB / 21.0 GiB  (experts)  310 MiB/s"`, `"step 3 of 7  nvfp4"`, or the bare phase |
@@ -558,7 +615,7 @@ mismatch is silent, so the browser must never read `cache_status.geometry.limits
 | `finished_at` | string \| null | `Job::finished_at` |
 | `log_path` | string | `Job::log_path` |
 | `output_path` | string \| null | `Job::output_path` — where a bench run wrote its profile |
-| `output_bytes` | number | The size of `log_path` right now (`fs::metadata(&job.log_path).len()`), `0` when the file does not exist yet. **This is the change counter for `GET /api/jobs/{id}/output`** — it moves when and only when there is something new to fetch, so a client polls on the number rather than on a timer. It is a `stat` per job per snapshot, which is why it is here and not a second route |
+| `output_seq` | number | The job's output line counter, `LogRing::stats().last_seq`. **This is the change counter for `GET /api/jobs/{id}/output`** — it moves when and only when the job has written another line, so a client polls on the number rather than on a timer, and it moves with the job's final status line too, so no extra read is needed after the job stops. It replaced a `stat` of `log_path` per job per snapshot, which was filesystem I/O inside a document built under the mutex every browser shares. A cleared ring does not renumber, so a held value stays comparable |
 | `failure_reason` | string \| null | **`Job::failure_reason()`** — the most informative line the process printed, preferred over the exit code. `null` unless the job failed |
 | `is_running` | boolean | `Job::is_running()` |
 
@@ -577,7 +634,7 @@ mismatch is silent, so the browser must never read `cache_status.geometry.limits
 | `files_done` | number | `Download::files_done` |
 | `current` | string | `Download::current` — the file in flight |
 | `status` | `DownloadStatus` (tagged) | `Download::status` |
-| `status_label` | string | `"downloading"`, `"done"`, `"failed"`, `"canceled"` |
+| `status_label` | string | **`DownloadStatus::label()`** — `"downloading"`, `"done"`, `"failed"`, `"canceled"`. Note that `status.kind` for a running download is `"running"`: the discriminant is what a client switches on and the label is the verb a reader wants, so both spellings exist on purpose |
 | `rate_bps` | number | `Download::rate.get()`, sampled once per tick by `sample_rate()` |
 | `eta_s` | number \| null | `(total_bytes - done_bytes) / rate_bps`, `null` when the rate is not yet meaningful (≤ 1 B/s) — the TUI prints `--` |
 | `elapsed_s` | number | `Download::elapsed()` in seconds |
@@ -740,7 +797,7 @@ across both eviction and `clear`.
 
 ```jsonc
 {
-  "items": [ { "seq": 5118, "text": "INFO: loading weights", "err": false } ],
+  "items": [ { "seq": 5118, "text": "INFO: loading weights", "err": false, "severity": "normal" } ],
   "first_seq": 4096, "last_seq": 5120, "dropped": 4095, "next_after": 5120
 }
 ```
@@ -750,13 +807,19 @@ across both eviction and `clear`.
 | `seq` | number | Assigned at push |
 | `text` | string | `LogLine::text`, unmodified — no truncation, no wrapping, no ANSI stripping |
 | `err` | boolean | `LogLine::err`, true for stderr |
+| `severity` | `"error" \| "warn" \| "meta" \| "normal"` | **`views::logs::classify(text, err)`** — the same function that picks the terminal's color for the same line. Render it; do not re-derive it |
+
+`classify` in order: a line starting `[ft-man]` is `meta` (ft-man's own, and it wins over
+its content — the exit line names a status, not an error); `is_error_text` — `ERROR`,
+`CRITICAL`, `Traceback`, `Exception` — is `error`; `WARNING` or `WARN` is `warn`; anything
+else is `normal`. **`err` decides nothing**: FreeToken logs its whole life to stderr, so
+coloring on the stream would paint every informational line as a problem.
 
 Filtering (`/`), errors-only (`e`), wrapping (`w`), follow (`f`) and scrolling are all
 browser-side over the fetched lines, exactly as the TUI computes them over its snapshot.
-The errors-only rule is the TUI's: `err || is_error_text(text)` where `is_error_text`
-matches `ERROR`, `CRITICAL`, `Traceback` or `Exception`. The coloring rule is also the
-TUI's: lines starting `[ft-man]` are accents, error text is bad, `WARNING`/`WARN` is warn,
-`ready to serve` is good.
+The errors-only rule is the TUI's and is *not* the same as `severity`: it keeps a line when
+`err || is_error_text(text)`, so a stderr line with nothing alarming in it is still shown
+there while it renders as `normal`.
 
 **`POST /api/logs/clear`** — body `{}`. Calls `app.engine.log.clear()`. `dropped` absorbs
 the cleared lines and `first_seq`/`last_seq` both become `last_seq`, so a client's held
@@ -790,23 +853,40 @@ must be reconciled with what the TUI's output pane shows:
   "next_offset": 20480,
   "eof": true,
   "truncated": false,
-  "lines": ["[ft-man] $ ft checkpoint --model ...", "converting layer 3"]
+  "lines": [
+    {"text": "[ft-man] $ ft checkpoint --model ...", "severity": "meta"},
+    {"text": "converting layer 3", "severity": "normal"}
+  ]
 }
 ```
 
 | Field | Type | Meaning |
 |---|---|---|
 | `offset` | number | The offset the read started at, after clamping to the file size |
-| `next_offset` | number | Byte offset to pass next time. A partial final line is **not** returned and is not counted, so `next_offset` always lands on a line boundary |
+| `next_offset` | number | Byte offset to pass next time, always on a line boundary |
 | `eof` | boolean | True when `next_offset` is the end of the file |
 | `truncated` | boolean | True when the requested `offset` was past the end of the file (the file was rotated or removed) and the read restarted at 0 |
-| `lines` | string[] | Complete lines, progress protocol removed |
+| `lines` | `{text, severity}[]` | Complete lines, progress protocol removed, each classified by the same `views::logs::classify` section 3.1 describes — with `err` false, because a file whose streams are merged cannot recover it |
 
-**When to poll.** `JobEntry.output_bytes` (section 2.14) is the size of the very file this
-route reads. A client fetches once when it selects a job, then again whenever
-`output_bytes` differs from the value it last fetched at, and once more when the job stops
-running — the last lines can be written in the same tick that sets `finished_at`. There is
-no timer: an unchanged counter means an unchanged file.
+Three rules about where a read stops, because each of them was a way for a client to get
+stuck or to render half a sentence:
+
+* **While the job is running, a partial trailing line is withheld.** It is half of
+  something, the rest arrives on the next poll, and `next_offset` does not count it.
+* **Once the job has stopped, it is returned.** Nothing more is coming, and the last line a
+  crash printed is usually the only one worth reading; withholding it would hide it forever.
+* **A single line longer than `limit` is returned whole.** The read widens past `limit`
+  until it finds that line's ending, then stops at it. The alternative is a reply with no
+  lines and `next_offset == offset` — the same request, forever.
+
+**When to poll.** `JobEntry.output_seq` (section 2.14) is the job's own line counter. A
+client fetches once when it selects a job, then again whenever `output_seq` differs from
+the value it last fetched at. It moves with the job's final status line, so no extra read is
+needed after the job stops. There is no timer: an unchanged counter means nothing new was
+written.
+
+A `{id}` that is not a number is `400` **in the JSON envelope**, not axum's plain-text
+rejection; an id that is a number but names no job is `404`.
 
 The header the output pane shows above the text — command line, log path, bench profile
 path — comes from the snapshot's `JobEntry` (`command_line`, `log_path`, `output_path`),
@@ -988,9 +1068,13 @@ spawned a task (a conversion, the `hf` install, a cache rebuild).
 
 **`POST /api/engine/start`** — body `{}`. Mirrors `input::start_engine`.
 
+Every refusal below comes from **`actions::start_blocked`**, the same predicate
+`engine.start_blocked` (section 2.5) is built from, checked in this order:
+
 | Case | Result |
 |---|---|
 | An engine is already live | `409 "an engine is already running; stop it first"` (and the same warn toast) |
+| The state file names a live engine this process does not own | The route re-reads `serve.json` first, **adopts** that engine, and then refuses it as the case above. This is the cross-process race: a terminal and the daemon run side by side on one machine, and a start that trusted the last tick would put a second engine on the same GPU and port |
 | A job is using the GPU | `409 "a convert job is using the GPU; wait for it or cancel it first"` |
 | No FreeToken CLI | `503` with `app.ft_error` as the message |
 | `serve.validate()` non-empty | `409` with `"--model: a model path or repo id is required"` — the first error, flag-prefixed, exactly as the TUI toasts it |
@@ -1024,8 +1108,12 @@ already running. `200 {"status":"started"}`.
 * `409` when `Model::is_partial()` — `"… is an incomplete conversion and cannot be served;
   delete it with D"` (the web UI should say "delete it" rather than name the key).
 * Otherwise sets `serve.model` to the FTW build when one exists (`Model::converted_to`),
-  else the checkpoint path, and `serve.served_model_name` to `Model::served_name()`.
-  Emits the same info toast when the FTW build was preferred.
+  else the checkpoint path. Emits the same info toast when the FTW build was preferred.
+* `serve.served_model_name` is set to `Model::served_name()` **only when ft-man is the one
+  that put the current value there** — that is, when the knob is unset, or when its value
+  equals some library model's `served_name()`. A name typed by hand or loaded from a profile
+  is the API this engine publishes, and clients send it in request bodies; picking a
+  different checkpoint must not silently rewrite it.
 * `and_serve: true` then runs the engine-start path, with every refusal of
   `POST /api/engine/start` applying. Reply `200 {"status":"ok"}` or, when the engine
   started, `{"status":"started"}`.
@@ -1040,7 +1128,7 @@ already running. `200 {"status":"started"}`.
 | `app.gpu_busy_reason()` is set | `409 "cannot convert: <reason>"` |
 | A preflight is already in flight | `409 "a checkpoint check is already running"` |
 | The FTW output exists and is a *complete* build | `409 "… already exists; delete it from the Models tab to reconvert"` |
-| The FTW output exists and is *partial* | `200 {"status":"confirm_pending"}` — the `Retry conversion` confirmation, which deletes the leftovers and converts again (`ConfirmAction::ReconvertModel`) |
+| The FTW output exists and is *partial* | `200 {"status":"started"}` — sizing the leftovers is a full tree walk, so it runs on the blocking pool and the `Retry conversion` confirmation appears in a later snapshot rather than in this reply. Accepting it removes the leftovers (also on the blocking pool) and converts again (`ConfirmAction::ReconvertModel`) |
 | `config.convert.preflight` is on | `200 {"status":"started"}` — the preflight runs; a clean result starts the job silently, a warn or fail raises the `Convert anyway?` confirmation |
 | Preflight off, or no interpreter to run it with | `200 {"status":"started","job_id":N}` — `ft checkpoint` is spawned |
 
@@ -1048,9 +1136,21 @@ The spawned command matches the TUI's: `--model`, `--out`, `--moe-backend` (`tri
 `serve.moe_strategy == "fused"`, else `offload`), plus `--quant-backend` and `--gpu` when
 those knobs are set.
 
-**`POST /api/models/delete`** — body `{"path": "..."}`. ⚠ confirms. `404` when unknown;
-otherwise the destructive `Delete checkpoint` confirmation, whose body carries the path and
-`models::dir_size` of what will be freed. On accept: `remove_dir_all` then a rescan.
+**`POST /api/models/delete`** — body `{"path": "..."}`.
+
+| Case | Result |
+|---|---|
+| Not found | `404` |
+| The path is inside a Hugging Face hub cache (`templates::is_hub_cache_path`) | `409`, naming `hf cache delete <repo>`. The cache belongs to `huggingface_hub`: a snapshot directory is symlinks into `blobs/`, so `remove_dir_all` frees the links, leaves the blobs, and breaks `refs/`. ft-man reads that tree and does not write it |
+| Otherwise | `200 {"status":"started"}` |
+
+Not `confirm_pending`: the confirmation's body quotes `models::dir_size`, which is a
+recursive walk of a directory holding hundreds of gigabytes. It runs on the blocking pool —
+neither the TUI's event loop nor the web daemon's one `App` mutex may be held for it — and
+the destructive `Delete checkpoint` modal, naming the path and the space it frees, arrives
+in a later snapshot. Accepting it returns `{"status":"started"}` too: `remove_dir_all` is
+tens of thousands of `unlink`s and goes to the blocking pool as well, with the outcome
+arriving as a toast and a rescan.
 
 ### 4.6 Hub
 
@@ -1110,7 +1210,10 @@ Refusals mirror `begin_download`:
 | Otherwise | `200 {"status":"started"}` — the download registers a moment later (`Message::RegisterDownload`) and appears in `jobs.downloads` |
 
 Files always land in the Hugging Face cache (`config.library.hub_cache()`), never in an
-arbitrary directory; `hub.target` is informational.
+arbitrary directory; `hub.target` is informational. The `hf` child is given `HF_ENDPOINT`
+= `config.hub.endpoint` alongside `HF_HUB_CACHE`, so the weights come from the same Hub
+ft-man listed the repo from — otherwise a configured mirror decided what was offered and
+huggingface.co delivered it.
 
 **`POST /api/hub/install-cli`** — body `{}`. ⚠ confirms. `409` when `hf` is already
 present or an install is in flight. Otherwise the `Install the Hugging Face CLI`
@@ -1200,7 +1303,12 @@ agree.
 * On success `ServeConfig::set` runs, which also clears every knob in `exclusive_with`
   (setting `--moe-cache-size` clears `--moe-cache-rate` and `--moe-cache-auto`). Reply
   `200 {"status":"ok","set":true,"cleared":["moe_cache_rate"]}`.
-* `404` for an unknown key.
+* **`set` and `cleared` are read back after the write, not predicted from it.**
+  `ServeConfig::set` has one case that stores nothing: a `Flag` given `"false"` *unsets* the
+  knob and clears nothing. `"false"` is a valid value for a flag — `knobs::validate_value`
+  accepts it — so the reply there is `{"set": false, "cleared": []}`, and a browser that
+  believed `set: true` rendered a ticked box for a flag that was off.
+* `404` for an unknown key. Both this and the validation `409` carry `"toasted": false`.
 
 **`POST /api/serve/flag`** — body `{"key": "moe_cache_auto"}`, optionally `{"on": true}`.
 `409` when the knob is not `Kind::Flag`. Without `on` it toggles
@@ -1263,15 +1371,17 @@ tab's own message. A pool the geometry does not expose (`pool_present` is false)
 **`POST /api/cache/pending`** — body `{"pool": "kv", "value": 8192}`.
 
 * `value: null` clears the pending edit for that pool — the `r` key.
-* A number is clamped into `[max(min, 1), max]` from the same `PoolRow` bounds, and is
-  stored as `None` when it equals `pool_current`, matching `views::cache::adjust`'s
-  behavior of treating "back to where it started" as no edit.
+* A number is clamped into `[min, max]` by `cache_pools::PoolGeometry::clamp` — literally
+  the `PoolRow.min` and `PoolRow.max` the snapshot sent, from the one module that converts
+  FreeToken's published limits into the pool's own unit — and is stored as `None` when it
+  equals `current`, matching `views::cache::adjust`'s behavior of treating "back to where it
+  started" as no edit.
 * Reply `200 {"status":"ok","pending":8192}` (or `"pending":null`).
 
 **`POST /api/cache/adjust`** — body `{"pool": "kv", "percent": 0.01}`.
 The arrow keys: `±0.01` normally, `±0.10` with Shift. The step is `round(max * |percent|)`,
-at least 1, applied to `pending ?? current`, clamped to `[1, max]`, and cleared when the
-result equals `current` — `views::cache::adjust` verbatim. Reply as above. This route
+at least 1, applied to `pending ?? current`, clamped to `[min, max]`, and cleared when the
+result equals `current` — `views::cache::adjust` verbatim, against the same bounds. Reply as above. This route
 exists so a keyboard-driven web UI nudges by exactly the same amount the TUI does; a
 slider should use `/api/cache/pending` instead.
 
@@ -1635,9 +1745,11 @@ Notes on how:
    `err` is always false and coloring is by content, which is what the Logs view already
    does.
 5. **The Cache tab shows a maximum but no minimum.** The engine publishes both in
-   `limits.<pool>`. Resolved: `PoolRow.min` is sent (converted into the pool's own unit,
-   like `max`) so a web slider can clamp; it is `null` when the engine published no bound,
-   and nothing requires the UI to display it.
+   `limits.<pool>`. Resolved: `PoolRow.min` is sent, converted into the pool's own unit like
+   `max` and floored at 1, so a web slider can clamp against the same number the daemon
+   clamps against. It is never null — an absent published bound is 1, not "unknown", because
+   a slider still needs a floor. `src/cache_pools.rs` is the single conversion the Cache
+   view, this document and `POST /api/cache/pending` all read.
 6. **Job ids and download ids are independent counters and collide.** Both start at 1.
    Resolved: `POST /api/jobs/cancel` and `POST /api/downloads/cancel` are separate routes,
    and the two lists stay separate in the snapshot rather than being merged into the TUI's
@@ -1659,3 +1771,19 @@ Notes on how:
 12. **`hub.target` reads like an editable destination in the TUI** but downloads always go
     to the Hugging Face cache. Resolved: it is informational in the snapshot and no route
     accepts a target directory.
+13. **A browser session is a cookie, and a cookie is what a cross-site request forgery
+    spends.** The TUI has no equivalent exposure and so no equivalent rule. Resolved: an
+    `Origin` whose authority is not this daemon's `Host` is `403`, and a `POST` declaring
+    anything but `application/json` is `415` — together they put every state-changing route
+    behind a preflight no hostile page can get through, at no cost to `curl` (section 1.2).
+14. **A confirmation whose wording needs the filesystem cannot be raised synchronously.**
+    `Delete checkpoint` quotes `dir_size`, and `Retry conversion` quotes the size of the
+    leftovers; both are recursive walks of directories measured in hundreds of gigabytes.
+    Resolved: those routes reply `{"status":"started"}` and the modal arrives in a later
+    snapshot, so neither the TUI's event loop nor the daemon's shared mutex waits on a
+    filesystem (sections 4.5 and 1.2).
+15. **`err` on a log line says nothing**, because FreeToken logs its whole life to stderr —
+    yet both front ends have to color the same line the same way. Resolved: one classifier,
+    `views::logs::classify`, whose name is sent as `severity` on every `LogLine` and every
+    job output line (sections 3.1 and 3.2). The terminal turns it into a theme color; the
+    browser turns it into a class.

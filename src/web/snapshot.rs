@@ -98,6 +98,7 @@ pub struct EngineSnapshot<'a> {
     active_jobs: usize,
     active_downloads: usize,
     gpu_busy_reason: Option<String>,
+    start_blocked: Option<String>,
 }
 
 fn engine(app: &App) -> EngineSnapshot<'_> {
@@ -125,6 +126,9 @@ fn engine(app: &App) -> EngineSnapshot<'_> {
         active_jobs: app.active_jobs(),
         active_downloads: app.active_downloads(),
         gpu_busy_reason: app.gpu_busy_reason(),
+        // The same predicate `POST /api/engine/start` runs, so a button that offers to
+        // start cannot disagree with the daemon that would refuse.
+        start_blocked: crate::actions::start_blocked(app),
     }
 }
 
@@ -135,6 +139,7 @@ pub struct ContextFitOut {
     is_truncated: bool,
     ratio: f64,
     summary: String,
+    verdict: String,
 }
 
 fn context_fit(fit: ContextFit) -> ContextFitOut {
@@ -144,6 +149,9 @@ fn context_fit(fit: ContextFit) -> ContextFitOut {
         is_truncated: fit.is_truncated(),
         ratio: fit.ratio(),
         summary: fit.summary(),
+        // The plan overlay's headline, worded once: the terminal and the browser print it
+        // side by side on the same machine.
+        verdict: fit.verdict(),
     }
 }
 
@@ -175,6 +183,7 @@ pub struct TelemetrySnapshot<'a> {
     swa_ratio: Option<f64>,
     mamba_ratio: Option<f64>,
     last_rebuild_summary: Option<String>,
+    sampling_summary: Option<String>,
 }
 
 /// `PoolBytes` plus the total nothing on the wire should have to add up itself.
@@ -213,6 +222,11 @@ fn telemetry(app: &App) -> TelemetrySnapshot<'_> {
         swa_ratio: swa.map(|p| p.ratio()),
         mamba_ratio: t.stats.as_ref().and_then(|s| s.mamba).map(|p| p.ratio()),
         last_rebuild_summary: views::cache::last_rebuild_summary(app),
+        sampling_summary: t
+            .stats
+            .as_ref()
+            .and_then(|s| s.model.sampling.as_ref())
+            .and_then(views::dashboard::format_sampling),
     }
 }
 
@@ -294,10 +308,8 @@ fn hardware(app: &App) -> HardwareSnapshot<'_> {
         },
         bench_profile: app.bench_profile.as_ref(),
         bench_summary: app.bench_summary(),
-        bench_profile_path: crate::plan::bench_profile_status(
-            app.gpus.first().map(|g| g.uuid.as_str()),
-        )
-        .map(|p| p.display().to_string()),
+        // Resolved when the profile was loaded, not now: finding it reads a directory.
+        bench_profile_path: app.bench_profile_path.as_ref().map(|p| p.display().to_string()),
     }
 }
 
@@ -377,12 +389,12 @@ fn models(app: &App) -> ModelsSnapshot<'_> {
                     .collect(),
             })
             .collect(),
+        // Recorded by the scan, which runs on the blocking pool. Stat-ing a root here
+        // would do it under the mutex every connected browser shares.
         roots: app
-            .config
-            .library
-            .effective_roots()
-            .into_iter()
-            .map(|r| RootOut { exists: r.is_dir(), path: r.display().to_string() })
+            .model_roots
+            .iter()
+            .map(|r| RootOut { exists: r.exists, path: r.path.display().to_string() })
             .collect(),
         config_path: crate::config::config_path().display().to_string(),
     }
@@ -459,16 +471,22 @@ pub struct DiskFree {
     free_bytes: u64,
 }
 
-fn disk_free(path: &str) -> Option<DiskFree> {
-    crate::hub::disk_free_at(path).map(|(measured, free)| DiskFree {
+/// A sampled free-space figure, as the wire wants it.
+///
+/// Sampled, never measured here: `hub::disk_free_at` is a `statvfs` plus a walk up to an
+/// existing ancestor, and a snapshot is built under the one `App` mutex. `App` refreshes
+/// both figures on the hardware tick and after anything that moves real bytes.
+fn disk_free(sample: Option<&(std::path::PathBuf, u64)>) -> Option<DiskFree> {
+    sample.map(|(measured, free)| DiskFree {
         measured_path: measured.display().to_string(),
-        free_bytes: free,
+        free_bytes: *free,
     })
 }
 
 fn hub(app: &App) -> HubSnapshot<'_> {
     let v = &app.hub_view;
     let layout = &v.layout;
+    let (selected_bytes, selected_count) = v.selected();
     HubSnapshot {
         query: &v.query.value,
         searching: v.searching,
@@ -497,8 +515,8 @@ fn hub(app: &App) -> HubSnapshot<'_> {
         variant: v.variant.as_deref(),
         custom_selection: v.custom_selection,
         files: &v.files,
-        selected_bytes: v.files.iter().filter(|f| f.wanted).map(|f| f.size).sum(),
-        selected_count: v.files.iter().filter(|f| f.wanted).count(),
+        selected_bytes,
+        selected_count,
         compat: v.compat.as_ref().map(|r| CompatOut {
             report: r,
             verdict: r.verdict(),
@@ -508,7 +526,7 @@ fn hub(app: &App) -> HubSnapshot<'_> {
         compat_error: v.compat_error.as_deref(),
         checking_compat: v.checking_compat,
         target: &v.target.value,
-        disk_free: disk_free(&v.target.value),
+        disk_free: disk_free(app.disk_free_target.as_ref()),
         hf_cli: app.hf_cli.as_ref().map(|p| p.display().to_string()),
         hf_installing: app.hf_installing,
         hf_install_command: crate::hub::INSTALL_COMMAND,
@@ -615,7 +633,7 @@ pub struct ServeSnapshot<'a> {
     values: &'a crate::knobs::ServeConfig,
     errors: Vec<KnobError>,
     command_preview: String,
-    set_counts: std::collections::BTreeMap<&'static str, usize>,
+    set_counts: std::collections::BTreeMap<Group, usize>,
     plan: Option<PlanOut<'a>>,
     profiles: Vec<ProfileOut<'a>>,
     last_used_profile: Option<&'a str>,
@@ -624,6 +642,10 @@ pub struct ServeSnapshot<'a> {
 #[derive(Serialize)]
 pub struct KnobError {
     key: String,
+    /// The knob's flag spelling, resolved here rather than in the browser: `errors[].key`
+    /// is whatever the configuration held, which for a profile from a newer FreeToken is a
+    /// key the schema does not know. `null` then, and the client prints the key.
+    flag: Option<&'static str>,
     message: String,
 }
 
@@ -652,17 +674,6 @@ pub struct ProfileOut<'a> {
     model: Option<&'a str>,
 }
 
-pub fn group_name(g: Group) -> &'static str {
-    match g {
-        Group::Model => "model",
-        Group::Server => "server",
-        Group::Runtime => "runtime",
-        Group::Memory => "memory",
-        Group::Moe => "moe",
-        Group::Api => "api",
-    }
-}
-
 fn serve(app: &App) -> ServeSnapshot<'_> {
     let program = app.ft.as_ref().map(|f| f.display_program()).unwrap_or_else(|| "ft".into());
     ServeSnapshot {
@@ -671,14 +682,18 @@ fn serve(app: &App) -> ServeSnapshot<'_> {
             .serve
             .validate()
             .into_iter()
-            .map(|(key, message)| KnobError { key, message })
+            .map(|(key, message)| KnobError {
+                flag: crate::knobs::knob(&key).map(|k| k.flag),
+                key,
+                message,
+            })
             .collect(),
         command_preview: app.serve.preview(&program),
         set_counts: Group::ALL
             .iter()
             .map(|g| {
                 let n = crate::knobs::knobs_in(*g).filter(|k| app.serve.is_set(k.key)).count();
-                (group_name(*g), n)
+                (*g, n)
             })
             .collect(),
         plan: app.serve_view.plan.as_ref().map(|p| PlanOut {
@@ -734,7 +749,7 @@ pub struct PoolRow {
     unit: &'static str,
     current: u64,
     max: u64,
-    min: Option<u64>,
+    min: u64,
     pending: Option<u64>,
     shown: u64,
     delta: Option<i64>,
@@ -765,24 +780,25 @@ fn cache(app: &App) -> CacheSnapshot {
     let rows: Vec<PoolRow> = Pool::ALL
         .iter()
         .copied()
-        .filter(|p| views::cache::pool_present(geo, *p))
+        .filter(|p| crate::cache_pools::present(geo, *p))
         .map(|pool| {
-            let current = views::cache::pool_current(geo, pool);
-            let max = views::cache::pool_max(geo, pool).max(current.max(1));
+            // One implementation of the bounds, shared with the Cache view and with the
+            // clamping `POST /api/cache/pending` does.
+            let bounds = crate::cache_pools::geometry(geo, pool);
             let pending = app.cache_view.pending_for(pool);
-            let shown = pending.unwrap_or(current);
+            let shown = pending.unwrap_or(bounds.current);
             PoolRow {
                 pool,
                 label: pool.label(),
-                unit: pool.unit(),
-                current,
-                max,
-                min: views::cache::pool_min(geo, pool),
+                unit: bounds.unit,
+                current: bounds.current,
+                max: bounds.max,
+                min: bounds.min,
                 pending,
                 shown,
-                delta: pending.map(|p| p as i64 - current as i64),
-                ratio: crate::util::ratio(shown, max),
-                note: views::cache::pool_note(geo, pool, shown),
+                delta: pending.map(|p| p as i64 - bounds.current as i64),
+                ratio: crate::util::ratio(shown, bounds.max),
+                note: crate::cache_pools::note(geo, pool, shown),
             }
         })
         .collect();
@@ -837,10 +853,11 @@ pub struct JobEntry {
     finished_at: Option<String>,
     log_path: String,
     output_path: Option<String>,
-    /// Size of the job's output file right now, so a client polling
-    /// `GET /api/jobs/{id}/output` knows there is something new without asking. `0` when
-    /// the file does not exist yet, which is also what a job that has written nothing has.
-    output_bytes: u64,
+    /// The job's output line counter, so a client polling `GET /api/jobs/{id}/output`
+    /// knows there is something new without asking — and without the daemon stat-ing a
+    /// file per job per frame. It moves with the job's final status line too, so no extra
+    /// read is needed after the job stops.
+    output_seq: u64,
     failure_reason: Option<String>,
     is_running: bool,
 }
@@ -879,12 +896,7 @@ fn jobs(app: &App) -> JobsSnapshot {
                 kind_label: j.kind.label(),
                 title: j.title.clone(),
                 command_line: j.command_line.clone(),
-                status_label: match &j.status {
-                    JobStatus::Running => "running",
-                    JobStatus::Done => "done",
-                    JobStatus::Failed(_) => "failed",
-                    JobStatus::Canceled => "canceled",
-                },
+                status_label: j.status.label(),
                 status: j.status.clone(),
                 progress_ratio: j.progress.ratio(),
                 progress_detail: views::jobs::progress_detail(j),
@@ -895,7 +907,7 @@ fn jobs(app: &App) -> JobsSnapshot {
                 finished_at: j.finished_at.map(|t| t.to_rfc3339()),
                 log_path: j.log_path.display().to_string(),
                 output_path: j.output_path.as_ref().map(|p| p.display().to_string()),
-                output_bytes: std::fs::metadata(&j.log_path).map(|m| m.len()).unwrap_or(0),
+                output_seq: j.log.stats().last_seq,
                 failure_reason: matches!(j.status, JobStatus::Failed(_))
                     .then(|| j.failure_reason())
                     .flatten(),
@@ -919,12 +931,7 @@ fn jobs(app: &App) -> JobsSnapshot {
                     file_count: d.file_count,
                     files_done: d.files_done,
                     current: d.current.clone(),
-                    status_label: match &d.status {
-                        DownloadStatus::Running => "downloading",
-                        DownloadStatus::Done => "done",
-                        DownloadStatus::Failed(_) => "failed",
-                        DownloadStatus::Canceled => "canceled",
-                    },
+                    status_label: d.status.label(),
                     status: d.status.clone(),
                     rate_bps: rate,
                     // Below a byte a second the arithmetic produces centuries, which is
@@ -934,10 +941,7 @@ fn jobs(app: &App) -> JobsSnapshot {
                     elapsed_s: d.elapsed().as_secs(),
                     started_at: d.started_at.to_rfc3339(),
                     finished_at: d.finished_at.map(|t| t.to_rfc3339()),
-                    failure_reason: match &d.status {
-                        DownloadStatus::Failed(why) => Some(why.clone()),
-                        _ => None,
-                    },
+                    failure_reason: d.status.failure_reason().map(str::to_string),
                     is_running: d.is_running(),
                 }
             })
@@ -1068,7 +1072,7 @@ fn config(app: &App) -> ConfigSnapshot {
         poll_ms: c.server.poll_ms,
         server_host: c.server.host.clone(),
         server_port: c.server.port,
-        disk_free: disk_free(&download_dir.display().to_string()),
+        disk_free: disk_free(app.disk_free_download.as_ref()),
         download_dir: download_dir.display().to_string(),
         ftw_dir: c.library.ftw_dir().display().to_string(),
         hub_cache: c.library.hub_cache().display().to_string(),

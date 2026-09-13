@@ -225,7 +225,11 @@ fn close_field(app: &mut App, commit: bool) {
             app.serve_view.naming = false;
             if commit {
                 let name = app.serve_view.profile_name.value.clone();
-                let _ = actions::save_profile(app, &name);
+                // A terminal has no inline slot under the field, so the refusal the shared
+                // action leaves for its caller becomes a toast here.
+                if let Err(refusal) = actions::save_profile(app, &name) {
+                    app.warn(refusal.message);
+                }
             }
         }
         Some(Field::LogFilter) => {
@@ -238,7 +242,10 @@ fn close_field(app: &mut App, commit: bool) {
             app.templates_view.editing_repo = false;
             if commit {
                 let repo = app.templates_view.repo.value.clone();
-                let _ = actions::list_template_repo(app, &repo);
+                // As with the profile name: no inline slot, so the toast is raised here.
+                if let Err(refusal) = actions::list_template_repo(app, &repo) {
+                    app.warn(refusal.message);
+                }
             }
         }
         None => {}
@@ -419,7 +426,11 @@ fn hub_variants_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('d') => {
             // `d` on a highlighted row means that row. Nobody presses download expecting
             // the quantization under the cursor to be the one left out.
-            if app.hub_view.variant.is_none() {
+            //
+            // Unless files have been ticked by hand: that selection is the answer, and
+            // replacing it with a whole quantization would download something the reader
+            // deliberately did not ask for.
+            if app.hub_view.variant.is_none() && !app.hub_view.custom_selection {
                 choose_highlighted_variant(app);
             }
             let _ = actions::download(app, None, None);
@@ -465,11 +476,6 @@ fn hub_files_key(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
-}
-
-#[cfg(test)]
-pub fn hub_client_for_tests(app: &App) -> Result<crate::hub::Hub, String> {
-    actions::hub_client(app)
 }
 
 // ---------------------------------------------------------------- templates
@@ -733,7 +739,7 @@ fn suggested_profile_name(app: &App) -> String {
 fn cache_key(app: &mut App, key: KeyEvent) {
     let Some(geo) = app.telemetry.cache.as_ref().map(|c| c.geometry.clone()) else { return };
     let pools: Vec<Pool> =
-        Pool::ALL.iter().copied().filter(|p| views::cache::pool_present(&geo, *p)).collect();
+        Pool::ALL.iter().copied().filter(|p| crate::cache_pools::present(&geo, *p)).collect();
     if pools.is_empty() {
         return;
     }

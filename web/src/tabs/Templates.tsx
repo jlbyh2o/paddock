@@ -7,7 +7,7 @@
  * depends on what any other tab is showing.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import type { Severity, Sibling, Snapshot, StoredTemplateEntry } from "../api/types.ts";
 import { api } from "../api/client.ts";
@@ -15,6 +15,7 @@ import { reportError, run } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Empty, Field, Pane } from "../ui/primitives.tsx";
+import { SearchField, useFilterField } from "../ui/SearchField.tsx";
 import { DASH, basename, bytes, count, shortSha, text, timestamp } from "../format.ts";
 
 const OUTCOME_TONE: Record<string, Severity> = { ok: "good", warn: "warn", fail: "bad" };
@@ -23,13 +24,15 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
   const t = s.templates;
 
-  const [repo, setRepo] = useState(t.repo);
-  const [modelPath, setModelPath] = useState<string>(() => s.models.items[0]?.path ?? "");
+  // The repo is being composed, not filtering anything on screen, so Escape gives the
+  // keyboard back rather than emptying it.
+  const repo = useFilterField(t.repo, { clearOnEscape: false });
+  /** The checkpoint the reader picked, if they picked one and it is still there. */
+  const [chosenPath, setChosenPath] = useState<string | null>(null);
   const [pane, setPane] = useState<"stored" | "remote">("stored");
   const [preview, setPreview] = useState<{ name: string; textBody: string; truncated: boolean } | null>(
     null,
   );
-  const repoRef = useRef<HTMLInputElement>(null);
 
   const stored = useSelection(t.stored, useCallback((e: StoredTemplateEntry) => e.name, []));
   const remote = useSelection(t.remote, useCallback((f: Sibling) => f.path, []));
@@ -58,38 +61,53 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
     };
   }, [selectedName]);
 
-  const model = s.models.items.find((m) => m.path === modelPath) ?? null;
+  /**
+   * The apply target, reconciled against the library on every snapshot.
+   *
+   * A rescan, a delete or a conversion can remove the checkpoint that was chosen, and
+   * a path that is no longer in the library is not a target an action may be aimed at
+   * — so the choice falls back to the first checkpoint, and to nothing at all when the
+   * library is empty.
+   */
+  const model = useMemo(() => {
+    const items = s.models.items;
+    const chosen = chosenPath === null ? null : items.find((m) => m.path === chosenPath);
+    return chosen ?? items[0] ?? null;
+  }, [chosenPath, s.models.items]);
+  const modelPath = model?.path ?? null;
 
   const listRepo = useCallback(
     (event?: FormEvent) => {
       event?.preventDefault();
-      if (repo.trim() === "") return;
-      run(api.templatesListRepo(repo.trim()));
+      if (repo.needle === "") return;
+      run(api.templatesListRepo({ repo: repo.needle }));
     },
     [repo],
   );
 
   const fetchSelected = useCallback(() => {
     const file = remote.item;
-    const source = t.remote_repo ?? repo;
+    const source = t.remote_repo ?? repo.needle;
     if (!file || source.trim() === "") return;
-    run(api.templatesFetch(source, file.path, t.remote_revision ?? undefined));
+    run(
+      api.templatesFetch({
+        repo: source,
+        path: file.path,
+        ...(t.remote_revision === null ? {} : { revision: t.remote_revision }),
+      }),
+    );
   }, [remote.item, t.remote_repo, t.remote_revision, repo]);
 
   useTabKeys(
     useCallback(
       (event: KeyboardEvent) => {
-        if (event.key === "Escape") {
-          repoRef.current?.blur();
-          return false;
-        }
+        if (repo.handleKey(event)) return true;
+        if (event.key === "Escape") return false;
         const active = pane === "stored" ? stored : remote;
         if (active.handleKey(event)) return true;
         switch (event.key) {
           case "r":
-          case "/":
-            repoRef.current?.focus();
-            repoRef.current?.select();
+            repo.focus();
             return true;
           case "Enter":
             if (pane === "remote") fetchSelected();
@@ -99,22 +117,26 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
             fetchSelected();
             return true;
           case "a":
-            if (selectedName && modelPath) run(api.templatesApply(selectedName, modelPath));
+            if (selectedName && modelPath) {
+              run(api.templatesApply({ template: selectedName, model_path: modelPath }));
+            }
             return true;
           case "u":
-            if (modelPath) run(api.templatesRevert(modelPath));
+            if (modelPath) run(api.templatesRevert({ model_path: modelPath }));
             return true;
           case "v":
-            if (selectedName && modelPath) run(api.templatesVerify(selectedName, modelPath));
+            if (selectedName && modelPath) {
+              run(api.templatesVerify({ template: selectedName, model_path: modelPath }));
+            }
             return true;
           case "D":
-            if (selectedName) run(api.templatesDelete(selectedName));
+            if (selectedName) run(api.templatesDelete({ name: selectedName }));
             return true;
           default:
             return false;
         }
       },
-      [pane, stored, remote, fetchSelected, listRepo, selectedName, modelPath],
+      [pane, repo, stored, remote, fetchSelected, listRepo, selectedName, modelPath],
     ),
   );
 
@@ -125,14 +147,11 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
     <div className="stack">
       <Pane title="Browse a repo" note={t.loading ? "(loading…)" : undefined}>
         <form className="inline-form" onSubmit={listRepo}>
-          <input
-            ref={repoRef}
-            type="text"
-            value={repo}
+          <SearchField
+            field={repo}
             list="template-sources"
             placeholder="org/templates  (r)"
-            onChange={(e) => setRepo(e.target.value)}
-            aria-label="Template repository"
+            label="Template repository"
           />
           <datalist id="template-sources">
             {t.sources.map((src) => (
@@ -177,7 +196,7 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
         </Pane>
 
         <Pane
-          title={`In ${basename(t.remote_repo ?? repo)}`}
+          title={`In ${basename(t.remote_repo ?? repo.value)}`}
           note={count(t.remote.length)}
           bodyClassName="flush"
           actions={
@@ -232,7 +251,9 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
                 type="button"
                 className="btn"
                 onClick={() => {
-                  if (selectedName && modelPath) run(api.templatesVerify(selectedName, modelPath));
+                  if (selectedName && modelPath) {
+                    run(api.templatesVerify({ template: selectedName, model_path: modelPath }));
+                  }
                 }}
                 disabled={!selectedName || !modelPath}
               >
@@ -242,7 +263,7 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
                 type="button"
                 className="btn danger"
                 onClick={() => {
-                  if (selectedName) run(api.templatesDelete(selectedName));
+                  if (selectedName) run(api.templatesDelete({ name: selectedName }));
                 }}
                 disabled={!selectedName}
               >
@@ -300,7 +321,9 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
                 type="button"
                 className="btn primary"
                 onClick={() => {
-                  if (selectedName && modelPath) run(api.templatesApply(selectedName, modelPath));
+                  if (selectedName && modelPath) {
+                    run(api.templatesApply({ template: selectedName, model_path: modelPath }));
+                  }
                 }}
                 disabled={!selectedName || !modelPath}
               >
@@ -310,7 +333,7 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
                 type="button"
                 className="btn"
                 onClick={() => {
-                  if (modelPath) run(api.templatesRevert(modelPath));
+                  if (modelPath) run(api.templatesRevert({ model_path: modelPath }));
                 }}
                 disabled={!modelPath}
               >
@@ -323,11 +346,12 @@ export function Templates(props: { snapshot: Snapshot }): ReactNode {
             <label htmlFor="apply-model">Model</label>
             <select
               id="apply-model"
-              value={modelPath}
-              onChange={(e) => setModelPath(e.target.value)}
+              value={modelPath ?? ""}
+              disabled={s.models.items.length === 0}
+              onChange={(e) => setChosenPath(e.target.value === "" ? null : e.target.value)}
               style={{ flex: "1 1 220px" }}
             >
-              <option value="">— choose a checkpoint —</option>
+              {modelPath === null ? <option value="">— no checkpoint in the library —</option> : null}
               {s.models.items.map((m) => (
                 <option key={m.path} value={m.path}>
                   {m.name}

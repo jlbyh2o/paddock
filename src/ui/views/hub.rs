@@ -196,12 +196,7 @@ fn files(f: &mut Frame, app: &mut App, area: Rect) {
     let t = &app.theme;
     let focused = app.hub_view.focus == HubFocus::Files;
 
-    let (selected_bytes, selected_count) = app
-        .hub_view
-        .files
-        .iter()
-        .filter(|x| x.wanted)
-        .fold((0u64, 0usize), |(b, c), x| (b + x.size, c + 1));
+    let (selected_bytes, selected_count) = app.hub_view.selected();
 
     let title = if app.hub_view.loading_info {
         "Files (loading…)".to_string()
@@ -357,9 +352,11 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let selected: u64 = app.hub_view.files.iter().filter(|x| x.wanted).map(|x| x.size).sum();
+    let (selected, _) = app.hub_view.selected();
     if selected > 0 {
-        let disk = crate::hub::disk_free_at(&app.hub_view.target.value);
+        // Sampled on the hardware tick, not here: `statvfs` on network storage is not
+        // something a render pass may wait on.
+        let disk = app.disk_free_target.clone();
         let mut spans = vec![Span::styled(format!("{} to download", bytes(selected)), t.muted())];
         if let Some((measured, free_disk)) = disk {
             let color = if selected > free_disk { t.bad } else { t.dim };

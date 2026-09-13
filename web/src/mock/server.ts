@@ -4,16 +4,19 @@
  * It holds the fixture as mutable state, answers the routes `client.ts` calls,
  * and pushes a snapshot roughly ten times a second the way the real SSE stream
  * does. Actions that would touch the machine are no-ops that still produce the
- * toast, the confirmation or the value change the real daemon would, so every
- * screen can be driven end to end with no FreeToken anywhere.
+ * toast, the confirmation, the refusal or the value change the real daemon would, so
+ * every screen can be driven end to end with no FreeToken anywhere — including the two
+ * refusal shapes of §1.2, because "which problem does the reader see" is exactly the
+ * kind of thing a fixture should be able to reproduce.
  *
- * It is imported dynamically behind the `MOCK` guard, so it lands in its own chunk and
- * a production page never fetches it.
+ * It is imported dynamically behind `__FT_MAN_MOCK__`, which a production build
+ * replaces with `false`, so the chunk is folded away and never reaches `dist/`.
  */
 
 import type {
   Confirm,
   JobOutputPage,
+  Knob,
   LogLine,
   LogPage,
   PoolId,
@@ -50,6 +53,28 @@ function toast(text: string, kind: ToastKind = "info"): void {
   const entry: Toast = { id: toastId, text, kind, age_ms: 0, ttl_ms: ttl };
   state.toasts = [...state.toasts, entry].slice(-4);
   emit();
+}
+
+/**
+ * The error envelope of §1.2. `toasted` is the daemon's own word for "I have already
+ * said this out loud": true for a refusal that also went onto `app.toasts`, false for
+ * one that belongs to the field it came from and is rendered there instead.
+ */
+export interface MockRefusal {
+  error: string;
+  status: number;
+  toasted: boolean;
+}
+
+/** A refusal the daemon explains with a toast as well, as most of them do. */
+function refuse(message: string, status = 409): MockRefusal {
+  toast(message, "warn");
+  return { error: message, status, toasted: true };
+}
+
+/** A refusal that belongs to one field: no toast, the browser renders it inline. */
+function refuseQuietly(message: string, status = 409): MockRefusal {
+  return { error: message, status, toasted: false };
 }
 
 function ask(confirm: Confirm): { status: "confirm_pending" } {
@@ -198,7 +223,10 @@ const logRing: LogLine[] = clone(mockLogLines);
 
 // ---------------------------------------------------------------- the router
 
-/** Answer one request. Throws nothing: the mock daemon never refuses. */
+/**
+ * Answer one request. A refusal comes back as a `MockRefusal` envelope, which
+ * `client.ts` turns into the same `ApiError` a real non-2xx reply produces.
+ */
 export function handle(method: string, rawPath: string, body: unknown): unknown {
   const url = new URL(rawPath, "http://mock.local");
   const path = url.pathname;
@@ -241,11 +269,14 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       const id = Number(output[1]);
       const lines = mockJobOutput[id] ?? [];
       const offset = num("offset", 0);
+      // The whole tail arrives on the first read; a second read from the end of it
+      // finds nothing new, which is what an unchanged `output_seq` means anyway.
       const fresh = offset > 0 ? [] : lines;
+      const bytes = fresh.reduce((sum, line) => sum + line.text.length + 1, 0);
       return {
         id,
         offset,
-        next_offset: offset + fresh.join("\n").length,
+        next_offset: offset + bytes,
         eof: true,
         truncated: false,
         lines: fresh,
@@ -270,8 +301,8 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
     }
 
     case "/api/engine/start":
-      toast("an engine is already running; stop it first", "warn");
-      return { status: "ok" };
+      // §4.4, and the same sentence `engine.start_blocked` carries in the snapshot.
+      return refuse("an engine is already running; stop it first");
     case "/api/engine/stop":
       return ask({
         title: payload["force"] === true ? "Force-stop the engine" : "Stop the engine",
@@ -441,7 +472,12 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         return { status: "ok", set: false, cleared: [] };
       }
       const knob = mockKnobs.knobs.find((k) => k.key === key);
-      const cleared = (knob?.exclusive_with ?? []).filter((other) => other !== key);
+      if (!knob) return refuse(`no knob named ${key}`, 404);
+      const complaint = validateValue(knob, String(raw));
+      // The one refusal in the whole API that pushes no toast (§1.2): it names the
+      // flag, and the Serve tab has a slot for it under the field.
+      if (complaint) return refuseQuietly(`${knob.flag}: ${complaint}`);
+      const cleared = knob.exclusive_with.filter((other) => other !== key);
       for (const other of cleared) delete state.serve.values[other];
       state.serve.values[key] = String(raw);
       recount();
@@ -461,20 +497,34 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       return { status: "ok", on };
     }
     case "/api/serve/cycle": {
+      // `actions::cycle_knob`: a flag toggles, a choice walks its options and wraps
+      // through unset in both directions, and anything else is refused.
       const key = str("key");
       const knob = mockKnobs.knobs.find((k) => k.key === key);
       const delta = Number(payload["delta"] ?? 1);
-      if (!knob || knob.kind.kind !== "choice") {
+      if (!knob) return refuse(`no knob named ${key}`, 404);
+      if (knob.kind.kind === "flag") {
+        const on = state.serve.values[key] === undefined;
+        if (on) state.serve.values[key] = "true";
+        else delete state.serve.values[key];
+        recount();
         emit();
-        return { status: "ok", value: state.serve.values[key] ?? null };
+        return { status: "ok", value: on ? "true" : null };
+      }
+      if (knob.kind.kind !== "choice") {
+        return refuse(`${knob.flag} is not a choice knob`);
       }
       const options = knob.kind.options;
       const current = state.serve.values[key];
       const index = current === undefined ? -1 : options.indexOf(current);
-      const next = index + delta;
       let value: string | null;
-      if (next < 0 || next >= options.length) value = null;
-      else value = options[next] ?? null;
+      if (index < 0) {
+        // Unset is the slot before the first option and after the last one.
+        value = (delta > 0 ? options[0] : options[options.length - 1]) ?? null;
+      } else {
+        const next = index + delta;
+        value = next < 0 || next >= options.length ? null : (options[next] ?? null);
+      }
       if (value === null) delete state.serve.values[key];
       else state.serve.values[key] = value;
       recount();
@@ -515,6 +565,7 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
           is_truncated: true,
           ratio: 0.932,
           summary: "233.1k of 256k",
+          verdict: "233.1k of the 256k this model offers (93%)",
         },
         unpriced: null,
         is_empty: false,
@@ -573,7 +624,7 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         const raw = payload["value"];
         if (raw === null) row.pending = null;
         else {
-          const clamped = Math.max(Math.max(row.min ?? 1, 1), Math.min(row.max, Number(raw)));
+          const clamped = Math.max(row.min, Math.min(row.max, Number(raw)));
           row.pending = clamped === row.current ? null : clamped;
         }
         repricePools();
@@ -588,7 +639,7 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         const percent = Number(payload["percent"] ?? 0);
         const step = Math.max(1, Math.round(row.max * Math.abs(percent)));
         const base = row.pending ?? row.current;
-        const next = Math.max(1, Math.min(row.max, base + (percent < 0 ? -step : step)));
+        const next = Math.max(row.min, Math.min(row.max, base + (percent < 0 ? -step : step)));
         row.pending = next === row.current ? null : next;
         repricePools();
         emit();
@@ -666,4 +717,36 @@ function recountHubSelection(): void {
   state.hub.selected_count = wanted.length;
   state.hub.selected_bytes = wanted.reduce((sum, f) => sum + f.size, 0);
   emit();
+}
+
+/**
+ * `knobs::validate_value`, as far as the fixture needs it: enough to produce the one
+ * refusal the Serve tab renders inline.
+ */
+function validateValue(knob: Knob, raw: string): string | null {
+  const value = raw.trim();
+  if (value === "") return null;
+  switch (knob.kind.kind) {
+    case "text":
+      return null;
+    case "flag":
+      return value === "true" || value === "false" ? null : "must be true or false";
+    case "int": {
+      if (!/^[+-]?\d+$/.test(value)) return "must be a whole number";
+      const n = Number(value);
+      if (knob.kind.min !== null && n < knob.kind.min) return `must be at least ${knob.kind.min}`;
+      if (knob.kind.max !== null && n > knob.kind.max) return `must be at most ${knob.kind.max}`;
+      return null;
+    }
+    case "float": {
+      const x = Number(value);
+      if (!Number.isFinite(x)) return "must be a number";
+      const { min, max } = knob.kind;
+      return x < min || x > max ? `must be between ${min} and ${max}` : null;
+    }
+    case "choice":
+      return knob.kind.options.includes(value)
+        ? null
+        : `must be one of: ${knob.kind.options.join(", ")}`;
+  }
 }

@@ -416,6 +416,12 @@ textarea {
   border-top: 1px solid var(--border);
 }
 
+/* A sentence about the buttons above it, on its own row beneath them. */
+.pane-actions .actions-note {
+  flex: 1 0 100%;
+  color: var(--dim);
+}
+
 /* ---------------------------------------------------------------- fields */
 
 .field {
@@ -806,11 +812,9 @@ input.error {
 .logline.warn {
   color: var(--warn);
 }
-.logline.accent {
-  color: var(--accent);
-}
-.logline.ready {
-  color: var(--good);
+/* `[ft-man]`'s own lines: present, but never louder than the engine's. */
+.logline.meta {
+  color: var(--dim);
 }
 
 .gap-notice {

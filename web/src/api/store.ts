@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import type {
+  JobOutputLine,
   JobOutputPage,
   LogLine,
   LogsSnapshot,
@@ -89,9 +90,9 @@ export function useConnection(): ConnectionState {
 // ---------------------------------------------------------------- local toasts
 
 /**
- * Problems the daemon never heard about: a network failure, a 400, a 500. Server
- * refusals (409/503) are *not* raised here — the daemon has already pushed its own
- * toast and §1.2 says to render one problem, not two.
+ * Problems the daemon never heard about: a network failure, a 400, a 500. A refusal
+ * the daemon has already toasted (`ApiError.toasted`) is *not* raised here — §1.2 says
+ * to render one problem, not two.
  */
 export interface LocalToast {
   id: number;
@@ -130,11 +131,17 @@ export function pushLocalToast(text: string, kind: ToastKind = "error"): void {
 /**
  * The single place a failed action is turned into something the reader sees.
  * Returns true when the error was swallowed because the daemon is reporting it.
+ *
+ * The daemon says which of the two it is: `toasted` means the same sentence is on its
+ * way in the next snapshot. A refusal with `toasted: false` belongs to the field that
+ * was submitted, so a caller with an inline slot for it (the Serve tab) handles it
+ * before this is reached; anything that gets here has no such slot and is toasted
+ * locally, because a silent refusal is worse than a duplicated one.
  */
 export function reportError(error: unknown): boolean {
   if (error instanceof ApiError) {
     if (error.isUnauthorized) return true; // the login page is already coming
-    if (error.isRefusal) return true; // the daemon's own toast explains it
+    if (error.toasted) return true; // the daemon's own toast explains it
     pushLocalToast(error.message, error.status === 0 ? "warn" : "error");
     return false;
   }
@@ -232,8 +239,11 @@ function lastSeqOf<T extends { seq: number }>(items: T[]): number {
  * lines we hold are gone from the server and must go from here too.
  */
 export function syncBuffer<T>(prev: SeqBuffer<T>, counters: SeqCounters): SeqBuffer<T> {
-  if (prev.heldSeq > 0 && counters.last_seq > 0 && counters.last_seq < prev.heldSeq) {
-    // The daemon restarted underneath us.
+  if (prev.heldSeq > 0 && counters.last_seq < prev.heldSeq) {
+    // The daemon's counter is below what we hold, so it restarted and renumbered
+    // underneath us. `last_seq` is 0 for an empty collection, which is exactly what a
+    // fresh process publishes, so a zero is the *most* likely restart and not a case
+    // to exclude.
     return emptyBuffer<T>();
   }
   if (counters.count === 0 && prev.items.length > 0) {
@@ -340,7 +350,7 @@ export function useRequestFeed(
 export interface OutputBuffer {
   id: number | null;
   offset: number;
-  lines: string[];
+  lines: JobOutputLine[];
   eof: boolean;
   /** The file was rotated or removed under us and the read restarted at 0. */
   restarted: boolean;
@@ -373,62 +383,101 @@ export const jobOutputStore = new Store<OutputBuffer>(emptyOutput());
 /**
  * Poll one job's output.
  *
- * `JobEntry.output_bytes` (§2.14) is the change counter: it is the size of the file
- * this route reads, so a new value means new bytes and an unchanged one means there
- * is nothing to ask for. Selecting a job reads once; after that a fetch happens only
- * when the size moved, plus one final read when the job stops running — the last
- * lines can land in the same tick that sets `finished_at`.
+ * `JobEntry.output_seq` (§2.14) is the change counter: it is the job's output line
+ * counter, so a new value means new lines and an unchanged one means there is nothing
+ * to ask for. Selecting a job reads once; after that a fetch happens only when the
+ * counter moves — and because the final status line moves it too, there is no special
+ * case for a job that stopped.
+ *
+ * Two races are handled here rather than left to luck. A counter that moves while a
+ * read is in flight is remembered and re-read when that read lands, so the pane never
+ * stops one page short of the end. And a page that arrives after the reader picked a
+ * different job is dropped, so job 3's tail is never shown under job 4's heading.
  */
-export function useJobOutput(
-  jobId: number | null,
-  active: boolean,
-  running: boolean,
-  outputBytes: number,
-): OutputBuffer {
+export function useJobOutput(jobId: number | null, active: boolean, outputSeq: number): OutputBuffer {
   const buffer = useStore(jobOutputStore);
   const busy = useRef(false);
+  /** A job whose output was asked for while a read was already in flight. */
+  const queued = useRef<number | null>(null);
+  /** The job the reader is looking at right now. */
+  const wanted = useRef<number | null>(jobId);
 
-  const poll = useCallback(async (id: number) => {
-    if (busy.current) return;
+  const poll = useCallback(async (first: number) => {
+    if (busy.current) {
+      queued.current = first;
+      return;
+    }
     busy.current = true;
     try {
-      const current = jobOutputStore.get();
-      const offset = current.id === id ? current.offset : 0;
-      const page = await api.jobOutput(id, offset);
-      jobOutputStore.update((prev) => applyOutput(prev, page));
+      let id: number | null = first;
+      while (id !== null) {
+        const current = jobOutputStore.get();
+        const offset = current.id === id ? current.offset : 0;
+        const page = await api.jobOutput(id, offset);
+        // The selection may have moved on while this was in flight.
+        if (wanted.current === page.id) {
+          jobOutputStore.update((prev) => applyOutput(prev, page));
+        }
+        id = queued.current;
+        queued.current = null;
+      }
     } catch (error) {
       reportError(error);
     } finally {
+      queued.current = null;
       busy.current = false;
     }
   }, []);
 
   useEffect(() => {
+    wanted.current = jobId;
     if (jobId === null) {
       jobOutputStore.set(emptyOutput());
       return;
     }
+    // Never leave one job's lines on screen under another job's heading while the
+    // first page for the new one is in flight.
+    if (jobOutputStore.get().id !== jobId) jobOutputStore.set(emptyOutput());
     if (!active) return;
-    // `outputBytes` and `running` are in the dependency list rather than the body: the
-    // effect is the poll, and it re-runs exactly when one of them changed.
+    // `outputSeq` is in the dependency list rather than the body: the effect is the
+    // poll, and it re-runs exactly when the counter moved.
     void poll(jobId);
-  }, [jobId, active, running, outputBytes, poll]);
+  }, [jobId, active, outputSeq, poll]);
 
   return buffer;
 }
 
 // ---------------------------------------------------------------- wiring
 
+/** The `seq` of the newest document applied, which is what makes a rewind detectable. */
+let appliedSeq = 0;
+
 /** Drop every incremental buffer: the daemon restarted and renumbered. */
 export function resetFeeds(): void {
   logFeed.reset();
   requestFeed.reset();
   jobOutputStore.set(emptyOutput());
+  appliedSeq = 0;
 }
 
-/** Replace the held snapshot. */
-export function applySnapshot(snapshot: Snapshot): void {
+/**
+ * Replace the held snapshot, unless it would rewind the view.
+ *
+ * §2.2: `seq` is monotonic for the life of the daemon, so a document that is not newer
+ * than the one already applied carries nothing new and may carry something stale. The
+ * first paint's `GET /api/snapshot` routinely loses that race against the stream's
+ * first frame, and applying its older document would undo a state the reader already
+ * saw. A genuinely *lower* `seq` is the daemon having restarted, which `events.ts`
+ * detects and answers with `resetFeeds`, clearing this counter so the new process's
+ * first frame is accepted.
+ *
+ * Returns true when the document was applied.
+ */
+export function applySnapshot(snapshot: Snapshot): boolean {
+  if (appliedSeq > 0 && snapshot.seq <= appliedSeq) return false;
+  appliedSeq = snapshot.seq;
   snapshotStore.set(snapshot);
+  return true;
 }
 
 export function setConnected(connected: boolean): void {

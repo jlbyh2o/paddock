@@ -7,6 +7,7 @@
 mod assets;
 pub mod auth;
 mod events;
+mod guard;
 mod routes;
 pub mod snapshot;
 pub mod state;
@@ -48,12 +49,13 @@ pub async fn run(
     crate::runtime::spawn_all(&app, tx.clone());
 
     let tick = Duration::from_millis(app.config.ui.tick_ms);
-    let auth = auth::Auth::new(token);
+    let auth = auth::Auth::new(token).map_err(|e| anyhow::anyhow!("{e}"))?;
     let authenticated = auth.required();
     let state = WebState::new(app, auth);
 
     spawn_drain(state.clone(), rx);
     spawn_ticker(state.clone(), tick);
+    events::spawn_broadcaster(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&listen)
         .await
@@ -145,7 +147,12 @@ pub fn router(state: Shared) -> Router {
         .route("/api/jobs/clear-finished", post(routes::jobs::clear_finished))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::gate));
 
-    open.merge(api)
+    // Applied to the open routes too: `POST /api/login` is the one request that turns a
+    // browser into an authenticated one, so it is the one a hostile page most wants to
+    // make on the operator's behalf.
+    let guarded = open.merge(api).layer(axum::middleware::from_fn(guard::guard));
+
+    guarded
         // An unknown path under /api is a 404 in the error envelope, never index.html: a
         // typo'd route that returns a page with status 200 is a debugging afternoon.
         .fallback(fallback)
@@ -186,7 +193,13 @@ fn spawn_ticker(state: Shared, period: Duration) {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
-            state.write(|app| app.tick());
+            // Only wake the stream when the tick actually moved something: five identical
+            // snapshots a second to every open browser is what this used to do, and it
+            // left no second in which the heartbeat could fire.
+            state.write_if(|app| {
+                let changed = app.tick();
+                ((), changed)
+            });
         }
     });
 }

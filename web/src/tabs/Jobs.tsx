@@ -4,8 +4,8 @@
  * Jobs and downloads are two lists with two id counters that collide (§7.6), so a
  * row's identity here is the pair of kind and id, and cancel goes to whichever of
  * the two routes matches. Output comes from `GET /api/jobs/{id}/output`, which
- * already has the progress protocol filtered out so the browser sees what the TUI's
- * pane shows.
+ * already has the progress protocol filtered out, and each line classified, so the
+ * browser sees what the TUI's pane shows and colors it the same way.
  */
 
 import { useCallback, useMemo } from "react";
@@ -16,7 +16,7 @@ import { run, useJobOutput } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Bar, Empty, Field, Pane } from "../ui/primitives.tsx";
-import { bytes, duration, eta, fixed, gbs, rate, text, timestamp } from "../format.ts";
+import { bytes, duration, eta, fixed, gbs, rate, severityClass, text, timestamp } from "../format.ts";
 
 type Row =
   | { kind: "job"; id: number; key: string }
@@ -41,17 +41,12 @@ export function Jobs(props: { snapshot: Snapshot }): ReactNode {
   const download =
     selected?.kind === "download" ? jobs.downloads.find((d) => d.id === selected.id) ?? null : null;
 
-  const output = useJobOutput(
-    job ? job.id : null,
-    true,
-    job?.is_running ?? false,
-    job?.output_bytes ?? 0,
-  );
+  const output = useJobOutput(job ? job.id : null, true, job?.output_seq ?? 0);
 
   const cancel = useCallback(() => {
     if (!selected) return;
-    if (selected.kind === "job") run(api.cancelJob(selected.id));
-    else run(api.cancelDownload(selected.id));
+    if (selected.kind === "job") run(api.cancelJob({ id: selected.id }));
+    else run(api.cancelDownload({ id: selected.id }));
   }, [selected]);
 
   useTabKeys(
@@ -217,7 +212,13 @@ export function Jobs(props: { snapshot: Snapshot }): ReactNode {
                 {job.failure_reason}
               </Field>
             ) : null}
-            <pre className="loglist">{output.lines.join("\n")}</pre>
+            <div className="loglist">
+              {output.lines.map((line, i) => (
+                <div key={i} className={`logline ${severityClass(line.severity)}`}>
+                  {line.text}
+                </div>
+              ))}
+            </div>
           </>
         ) : download ? (
           <>

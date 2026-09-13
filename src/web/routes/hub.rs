@@ -5,10 +5,8 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::actions;
-use crate::web::state::{reply, ApiResult, Body, Reply, Shared};
-
-#[derive(Deserialize)]
-pub struct Empty {}
+use crate::actions::Refusal;
+use crate::web::state::{reply, ApiResult, Body, Empty, Reply, Shared};
 
 #[derive(Deserialize)]
 pub struct SearchRequest {
@@ -20,7 +18,7 @@ pub async fn search(
     State(state): State<Shared>,
     Body(req): Body<SearchRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::search(app, &req.query)))
+    reply(state.act(|app| actions::search(app, &req.query)))
 }
 
 #[derive(Deserialize)]
@@ -30,7 +28,7 @@ pub struct OpenRequest {
 }
 
 pub async fn open(State(state): State<Shared>, Body(req): Body<OpenRequest>) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::open_repo(app, &req.repo_id, req.revision.as_deref())))
+    reply(state.act(|app| actions::open_repo(app, &req.repo_id, req.revision.as_deref())))
 }
 
 #[derive(Deserialize)]
@@ -42,7 +40,7 @@ pub async fn variant(
     State(state): State<Shared>,
     Body(req): Body<VariantRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::choose_variant(app, &req.label)))
+    reply(state.act(|app| actions::choose_variant(app, &req.label)))
 }
 
 #[derive(Deserialize)]
@@ -57,7 +55,7 @@ pub async fn toggle_file(
     State(state): State<Shared>,
     Body(req): Body<ToggleRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let wanted = state.write(|app| actions::toggle_file(app, &req.path, req.wanted))?;
+    let wanted = state.act(|app| actions::toggle_file(app, &req.path, req.wanted))?;
     Ok(Json(serde_json::json!({ "status": "ok", "wanted": wanted })))
 }
 
@@ -99,28 +97,30 @@ pub async fn download(
 ) -> ApiResult<Reply> {
     // `repo_id` and `revision` describe the repo already open; downloads always act on
     // the listing the server holds, so they are accepted and checked rather than obeyed.
-    state.write(|app| {
+    // Both mismatches are about the request rather than the machine, so neither toasts.
+    reply(state.act(|app| {
         if let Some(wanted) = &req.repo_id {
             if app.hub_view.info.as_ref().is_some_and(|i| i.id != *wanted) {
-                return Err(crate::web::state::ApiError::conflict(format!(
-                    "{wanted} is not the repo currently listed; open it first"
-                )));
+                return Err(Refusal::quiet(
+                    409,
+                    format!("{wanted} is not the repo currently listed; open it first"),
+                ));
             }
         }
         if let Some(rev) = &req.revision {
             if app.hub_view.revision != *rev {
-                return Err(crate::web::state::ApiError::conflict(format!(
-                    "the listing is at revision {}, not {rev}",
-                    app.hub_view.revision
-                )));
+                return Err(Refusal::quiet(
+                    409,
+                    format!("the listing is at revision {}, not {rev}", app.hub_view.revision),
+                ));
             }
         }
-        reply(actions::download(app, req.variant.as_deref(), req.files.as_deref()))
-    })
+        actions::download(app, req.variant.as_deref(), req.files.as_deref())
+    }))
 }
 
 pub async fn install_cli(State(state): State<Shared>, Body(_): Body<Empty>) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::offer_hf_install(app)))
+    reply(state.act(actions::offer_hf_install))
 }
 
 #[derive(Deserialize)]
@@ -132,5 +132,5 @@ pub async fn cancel_download(
     State(state): State<Shared>,
     Body(req): Body<IdRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::cancel_download(app, req.id)))
+    reply(state.act(|app| actions::cancel_download(app, req.id)))
 }

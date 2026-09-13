@@ -5,10 +5,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::actions;
-use crate::web::state::{reply, ApiResult, Body, Reply, Shared};
-
-#[derive(Deserialize)]
-pub struct Empty {}
+use crate::web::state::{reply, ApiResult, Body, Empty, Reply, Shared};
 
 #[derive(Deserialize)]
 pub struct KnobRequest {
@@ -22,7 +19,7 @@ pub async fn knob(
     State(state): State<Shared>,
     Body(req): Body<KnobRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let set = state.write(|app| actions::set_knob(app, &req.key, req.value.as_deref()))?;
+    let set = state.act(|app| actions::set_knob(app, &req.key, req.value.as_deref()))?;
     Ok(Json(serde_json::json!({
         "status": "ok",
         "set": set.set,
@@ -41,7 +38,7 @@ pub async fn flag(
     State(state): State<Shared>,
     Body(req): Body<FlagRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let on = state.write(|app| actions::toggle_flag(app, &req.key, req.on))?;
+    let on = state.act(|app| actions::toggle_flag(app, &req.key, req.on))?;
     Ok(Json(serde_json::json!({ "status": "ok", "on": on })))
 }
 
@@ -60,7 +57,7 @@ pub async fn cycle(
     State(state): State<Shared>,
     Body(req): Body<CycleRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let value = state.write(|app| actions::cycle_knob(app, &req.key, req.delta as isize))?;
+    let value = state.act(|app| actions::cycle_knob(app, &req.key, req.delta as isize))?;
     Ok(Json(serde_json::json!({ "status": "ok", "value": value })))
 }
 
@@ -68,7 +65,7 @@ pub async fn plan(
     State(state): State<Shared>,
     Body(_): Body<Empty>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let held = state.write(actions::build_plan)?;
+    let held = state.act(actions::build_plan)?;
     Ok(Json(serde_json::json!({ "status": "ok", "plan": held })))
 }
 
@@ -76,7 +73,7 @@ pub async fn apply_plan(
     State(state): State<Shared>,
     Body(_): Body<Empty>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let changed = state.write(actions::apply_plan)?;
+    let changed = state.act(actions::apply_plan)?;
     Ok(Json(serde_json::json!({ "status": "ok", "changed": changed })))
 }
 
@@ -84,7 +81,12 @@ pub async fn dismiss_plan(
     State(state): State<Shared>,
     Body(_): Body<Empty>,
 ) -> Json<serde_json::Value> {
-    state.write(actions::dismiss_plan);
+    // Dismissing an overlay that was not open changed nothing.
+    state.write_if(|app| {
+        let held = app.serve_view.plan.is_some();
+        actions::dismiss_plan(app);
+        ((), held)
+    });
     Json(serde_json::json!({ "status": "ok" }))
 }
 
@@ -98,7 +100,7 @@ pub async fn save_profile(
     State(state): State<Shared>,
     Body(req): Body<NameRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let created = state.write(|app| actions::save_profile(app, &req.name))?;
+    let created = state.act(|app| actions::save_profile(app, &req.name))?;
     Ok(Json(serde_json::json!({ "status": "ok", "created": created })))
 }
 
@@ -106,12 +108,12 @@ pub async fn load_profile(
     State(state): State<Shared>,
     Body(req): Body<NameRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::load_profile(app, &req.name)))
+    reply(state.act(|app| actions::load_profile(app, &req.name)))
 }
 
 pub async fn delete_profile(
     State(state): State<Shared>,
     Body(req): Body<NameRequest>,
 ) -> ApiResult<Reply> {
-    state.write(|app| reply(actions::delete_profile(app, &req.name)))
+    reply(state.act(|app| actions::delete_profile(app, &req.name)))
 }

@@ -19,7 +19,7 @@ export function Login(props: { onAuthorized: () => void }): ReactNode {
     setBusy(true);
     setError(null);
     api
-      .login(token)
+      .login({ token })
       .then((reply) => {
         if (reply.authorized) props.onAuthorized();
         else setError("that token is not correct");

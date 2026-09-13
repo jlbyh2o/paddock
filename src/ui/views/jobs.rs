@@ -88,11 +88,12 @@ fn list(f: &mut Frame, app: &mut App, area: Rect) {
 fn job_rows<'a>(app: &App, idx: usize, is_sel: bool, width: usize) -> Vec<Line<'a>> {
     let t = &app.theme;
     let job = &app.jobs[idx];
-    let (label, color) = match &job.status {
-        JobStatus::Running => ("running", t.warn),
-        JobStatus::Done => ("done", t.good),
-        JobStatus::Failed(_) => ("failed", t.bad),
-        JobStatus::Canceled => ("canceled", t.dim),
+    let label = job.status.label();
+    let color = match &job.status {
+        JobStatus::Running => t.warn,
+        JobStatus::Done => t.good,
+        JobStatus::Failed(_) => t.bad,
+        JobStatus::Canceled => t.dim,
     };
 
     let title_w = width.saturating_sub(30);
@@ -180,11 +181,12 @@ pub fn progress_detail(job: &crate::ft::Job) -> String {
 fn download_rows<'a>(app: &App, idx: usize, is_sel: bool, width: usize) -> Vec<Line<'a>> {
     let t = &app.theme;
     let d = &app.downloads[idx];
-    let (label, color) = match &d.status {
-        DownloadStatus::Running => ("downloading", t.warn),
-        DownloadStatus::Done => ("done", t.good),
-        DownloadStatus::Failed(_) => ("failed", t.bad),
-        DownloadStatus::Canceled => ("canceled", t.dim),
+    let label = d.status.label();
+    let color = match &d.status {
+        DownloadStatus::Running => t.warn,
+        DownloadStatus::Done => t.good,
+        DownloadStatus::Failed(_) => t.bad,
+        DownloadStatus::Canceled => t.dim,
     };
 
     let title_w = width.saturating_sub(34);

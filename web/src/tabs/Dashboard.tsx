@@ -27,23 +27,6 @@ import {
   tps,
 } from "../format.ts";
 
-function sampling(raw: Record<string, unknown> | null | undefined): string {
-  if (!raw) return DASH;
-  const keys: [string, string][] = [
-    ["temperature", "temp"],
-    ["top_p", "top_p"],
-    ["top_k", "top_k"],
-    ["min_p", "min_p"],
-    ["repetition_penalty", "rep"],
-  ];
-  const parts: string[] = [];
-  for (const [key, label] of keys) {
-    const value = raw[key];
-    if (typeof value === "number" && Number.isFinite(value)) parts.push(`${label} ${value}`);
-  }
-  return parts.length === 0 ? DASH : parts.join("  ");
-}
-
 export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
   const { engine, telemetry, series, hardware } = s;
@@ -55,10 +38,10 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     run(api.engineStart());
   }, []);
   const stop = useCallback(() => {
-    run(api.engineStop(false));
+    run(api.engineStop({ force: false }));
   }, []);
   const forceStop = useCallback(() => {
-    run(api.engineStop(true));
+    run(api.engineStop({ force: true }));
   }, []);
   const smoke = useCallback(() => {
     run(api.smokeTest());
@@ -113,21 +96,19 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     <div className="panes">
       <Pane
         title="Engine"
-        note={engine.gpu_busy_reason ?? undefined}
         actions={
           <>
             <button
               type="button"
               className="btn"
               onClick={start}
-              disabled={engine.is_live}
-              // A disabled control that does not say why is a dead end: the terminal
-              // answers the same question with a toast, which a greyed button cannot.
-              title={
-                engine.is_live
-                  ? "an engine is already running; stop it first"
-                  : (engine.gpu_busy_reason ?? "start the engine with the Serve configuration")
-              }
+              // `start_blocked` is the route's own refusal predicate, so the button is
+              // disabled exactly when the POST would be refused and says why in the
+              // daemon's words. A disabled control that does not say why is a dead
+              // end: the terminal answers the same question with a toast, which a
+              // grayed button cannot.
+              disabled={engine.start_blocked !== null}
+              title={engine.start_blocked ?? "start the engine with the Serve configuration"}
             >
               Start <span className="dim">(e)</span>
             </button>
@@ -165,6 +146,14 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             <button type="button" className="btn" onClick={rescan}>
               Rescan <span className="dim">(r)</span>
             </button>
+            {/*
+              Under the buttons rather than in the pane header: this sentence is about
+              what can be started right now, and in the header it pushed the pane's own
+              title out of its column.
+            */}
+            {engine.gpu_busy_reason ? (
+              <span className="actions-note">{engine.gpu_busy_reason}</span>
+            ) : null}
           </>
         }
       >
@@ -196,7 +185,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             KV holds {tokens(fit.usable)} of {tokens(fit.ceiling)} — plan a fix on the Serve tab
           </div>
         ) : null}
-        <Field label="Sampling">{sampling(stats?.model.sampling)}</Field>
+        <Field label="Sampling">{text(telemetry.sampling_summary)}</Field>
         {telemetry.error ? (
           <Field label="Poll" tone="bad">
             {telemetry.error}

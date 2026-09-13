@@ -27,14 +27,42 @@ use crate::ui::widgets::{Confirm, ConfirmAction, ToastKind};
 const SIZES: &[(u16, u16)] = &[(40, 12), (60, 20), (80, 24), (120, 40), (200, 60)];
 
 pub(crate) async fn app() -> App {
+    app_with_inbox().await.0
+}
+
+/// An `App` plus the receiving half of its message channel.
+///
+/// Actions that touch the filesystem answer through a `Message` rather than inline, so a
+/// test that drives one has to be able to deliver it. [`pump`] does that.
+pub(crate) async fn app_with_inbox() -> (App, mpsc::UnboundedReceiver<Message>) {
     crate::config::isolate_paths_for_tests();
     // App::new reads the serve state file to re-adopt a running engine, so it must not
     // race the supervision tests that write it.
     let _guard = crate::config::lock_serve_state().await;
-    let (tx, _rx) = mpsc::unbounded_channel::<Message>();
+    let (tx, rx) = mpsc::unbounded_channel::<Message>();
     let mut config = Config::default();
     config.ui.theme = "dark".into();
-    App::new(config, Profiles::default(), None, None, tx).expect("app should construct")
+    let app = App::new(config, Profiles::default(), None, None, tx).expect("app should construct");
+    (app, rx)
+}
+
+/// Deliver every message queued so far, waiting briefly for one that a blocking task is
+/// still producing. Returns how many were handled.
+pub(crate) async fn pump(app: &mut App, rx: &mut mpsc::UnboundedReceiver<Message>) -> usize {
+    let mut handled = 0;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    // Wait for one message, then take whatever else is already queued behind it. Not "drain
+    // until empty": a rescan keeps the channel alive indefinitely and nothing here is
+    // waiting on it.
+    if let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+        app.handle(msg);
+        handled += 1;
+        while let Ok(next) = rx.try_recv() {
+            app.handle(next);
+            handled += 1;
+        }
+    }
+    handled
 }
 
 fn draw_all(app: &mut App) {
@@ -171,6 +199,8 @@ pub(crate) fn populate(app: &mut App) {
             ftw_fingerprint: None,
             converted_to: Some("/models/Qwen3.6-35B-A3B-ftw".into()),
             modified: Some(std::time::SystemTime::now()),
+            template_status: Default::default(),
+            has_inference_config: false,
         },
         crate::models::Model {
             name: "Qwen3.6-35B-A3B-ftw".into(),
@@ -189,6 +219,8 @@ pub(crate) fn populate(app: &mut App) {
             ftw_fingerprint: Some("9f2c1ab4e7".into()),
             converted_to: None,
             modified: None,
+            template_status: Default::default(),
+            has_inference_config: false,
         },
     ];
 
@@ -933,18 +965,46 @@ async fn toggling_hub_files_updates_the_selection() {
     assert!(before > 0);
 }
 
+/// Sizing the directory is a full tree walk, so it runs on the blocking pool and the
+/// confirmation arrives as a message. The keypress itself must therefore ask for nothing
+/// and change nothing until that lands.
 #[tokio::test]
 async fn deleting_a_model_is_confirmed_and_names_the_path() {
-    let mut a = app().await;
+    let (mut a, mut rx) = app_with_inbox().await;
     populate(&mut a);
     a.tab = Tab::Models;
     a.models_view.sel.index = 0;
 
     press(&mut a, KeyCode::Char('D'));
+    assert!(a.confirm.is_none(), "nothing may be asked before the size is known");
+    pump(&mut a, &mut rx).await;
+
     let confirm = a.confirm.as_ref().expect("deletion must be confirmed");
     assert!(confirm.destructive);
     assert!(!confirm.accepted(), "the safe option must be preselected");
     assert!(confirm.body.iter().any(|l| l.contains("/models/Qwen3.6-35B-A3B")));
+}
+
+/// The Hugging Face cache is `huggingface_hub`'s: a snapshot is symlinks into `blobs/`,
+/// so `remove_dir_all` frees the links, leaves the blobs, and breaks `refs/`.
+#[tokio::test]
+async fn deleting_a_checkpoint_inside_the_hub_cache_is_refused_with_the_right_command() {
+    let mut a = app().await;
+    populate(&mut a);
+    let cached =
+        std::path::PathBuf::from("/cache/hub/models--Qwen--Qwen3.6-35B-A3B/snapshots/abc123");
+    a.models[0].path = cached.clone();
+    a.models[0].repo = Some("Qwen/Qwen3.6-35B-A3B".into());
+
+    let refusal = crate::actions::delete_model(&mut a, &cached).expect_err("must be refused");
+    assert_eq!(refusal.status, 409);
+    assert!(refusal.toasted, "a state refusal reaches the terminal as a toast");
+    assert!(
+        refusal.message.contains("hf cache delete Qwen/Qwen3.6-35B-A3B"),
+        "{}",
+        refusal.message
+    );
+    assert!(cached.starts_with("/cache"), "nothing was deleted");
 }
 
 #[tokio::test]
@@ -1052,13 +1112,13 @@ async fn the_hub_view_reports_the_token_the_app_actually_holds() {
 async fn the_download_client_uses_the_apps_token() {
     let mut a = app().await;
     a.hub_token = None;
-    assert!(!super::input::hub_client_for_tests(&a).unwrap().has_token());
+    assert!(!crate::actions::hub_client(&a).unwrap().has_token());
 
     a.hub_token = Some(crate::config::HubToken {
         value: "hf_secret".into(),
         source: "hub.token in the config",
     });
-    assert!(super::input::hub_client_for_tests(&a).unwrap().has_token());
+    assert!(crate::actions::hub_client(&a).unwrap().has_token());
 }
 
 // ---------------------------------------------------------------- templates
@@ -1511,4 +1571,208 @@ async fn a_check_that_could_not_run_says_so_instead_of_looking_unchecked() {
     let screen = render_text(&mut a, Tab::Hub, 130, 34);
     assert!(screen.contains("could not check"), "the title should say so:\n{screen}");
     assert!(screen.contains("404"), "and quote the reason:\n{screen}");
+}
+
+// ---------------------------------------------------------------- shared actions
+
+/// A new search replaces the repo, so everything derived from the old one has to go with
+/// it. Leaving the grouping behind offered a quantization the new listing does not have,
+/// and left the keyboard in a pane with nothing in it.
+#[tokio::test]
+async fn a_new_hub_search_clears_everything_the_old_repo_left_behind() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.hub_view.layout = crate::variants::analyze(&[
+        crate::hub::Sibling { path: "UD-IQ3_XXS/model.gguf".into(), size: Some(9) },
+        crate::hub::Sibling { path: "Q8_0/model.gguf".into(), size: Some(18) },
+    ]);
+    a.hub_view.variant = Some("Q8_0".into());
+    a.hub_view.variant_sel.index = 1;
+    a.hub_view.custom_selection = true;
+    a.hub_view.focus = crate::ui::app::HubFocus::Variants;
+
+    a.handle(Message::HubSearch(Ok(vec![crate::hub::RepoSummary {
+        id: "org/other".into(),
+        ..Default::default()
+    }])));
+
+    assert!(a.hub_view.layout.variants.is_empty(), "the old grouping is gone");
+    assert_eq!(a.hub_view.variant, None);
+    assert_eq!(a.hub_view.variant_sel.index, 0);
+    assert!(!a.hub_view.custom_selection);
+    assert_eq!(a.hub_view.focus, crate::ui::app::HubFocus::Results);
+    assert!(a.hub_view.files.is_empty());
+}
+
+/// `d` in the Variants pane normally means "the row under the cursor". It must not mean
+/// that once files have been ticked by hand: that selection is the answer, and replacing
+/// it with a whole quantization downloads something nobody asked for.
+#[tokio::test]
+async fn hub_download_does_not_overwrite_a_hand_made_file_selection() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.tab = Tab::Hub;
+    a.hub_view.layout = crate::variants::analyze(&[
+        crate::hub::Sibling { path: "UD-IQ3_XXS/model.gguf".into(), size: Some(9) },
+        crate::hub::Sibling { path: "Q8_0/model.gguf".into(), size: Some(18) },
+    ]);
+    a.hub_view.files = vec![
+        crate::hub::RepoFile { path: "UD-IQ3_XXS/model.gguf".into(), size: 9, wanted: true },
+        crate::hub::RepoFile { path: "Q8_0/model.gguf".into(), size: 18, wanted: false },
+    ];
+    a.hub_view.focus = crate::ui::app::HubFocus::Variants;
+    a.hub_view.custom_selection = true;
+    a.hub_view.variant = None;
+    a.hub_view.variant_sel.index = 1; // Q8_0 is highlighted, and is not what was ticked
+
+    press(&mut a, KeyCode::Char('d'));
+    assert_eq!(a.hub_view.variant, None, "no quantization may be chosen on the reader's behalf");
+    assert!(a.hub_view.files[0].wanted, "the hand-made selection stands");
+    assert!(!a.hub_view.files[1].wanted);
+}
+
+/// Setting a `Flag` to "false" unsets it, so the reply has to say so. Reporting `set:
+/// true` there was a lie the browser rendered as a ticked box.
+#[tokio::test]
+async fn setting_a_flag_to_false_reports_that_it_is_now_unset() {
+    let mut a = app().await;
+
+    let done = crate::actions::set_knob(&mut a, "moe_cache_auto", Some("true")).unwrap();
+    assert!(done.set);
+    assert!(a.serve.flag("moe_cache_auto"));
+
+    let done = crate::actions::set_knob(&mut a, "moe_cache_auto", Some("false")).unwrap();
+    assert!(!done.set, "a flag set to false is a flag that is not set");
+    assert!(done.cleared.is_empty(), "unsetting a flag clears nothing else");
+    assert!(!a.serve.is_set("moe_cache_auto"));
+
+    // And the exclusion report is read back rather than predicted: turning the flag on
+    // really does clear the other two MoE sizing knobs.
+    crate::actions::set_knob(&mut a, "moe_cache_size", Some("512")).unwrap();
+    let done = crate::actions::set_knob(&mut a, "moe_cache_auto", Some("true")).unwrap();
+    assert!(done.set);
+    assert_eq!(done.cleared, vec!["moe_cache_size".to_string()]);
+}
+
+/// The cursor follows the checkpoint through the list the Models pane actually draws.
+/// Indexing `app.models` while a filter was active moved it to a different model.
+#[tokio::test]
+async fn retrying_a_conversion_moves_the_cursor_through_the_filtered_list() {
+    let (mut a, mut rx) = app_with_inbox().await;
+    populate(&mut a);
+    // A filter that hides the first entry, so the raw index and the drawn one differ.
+    a.models_view.filter.set("ftw".to_string());
+    let filtered = a.filtered_models().len();
+    assert_eq!(filtered, 1, "the fixture has exactly one FTW build");
+    let source = a.models[1].path.clone();
+
+    a.handle(Message::LeftoversRemoved(source.clone(), Ok(())));
+    assert_eq!(
+        a.models_view.sel.index, 0,
+        "the checkpoint is the only filtered row, so the cursor belongs on row 0"
+    );
+    assert!(a.models_view.sel.index < filtered, "and never past the end of what is drawn");
+    pump(&mut a, &mut rx).await;
+}
+
+/// `start_blocked` is what the web snapshot advertises, so it must be the same answer the
+/// start itself gives — including the message.
+#[tokio::test]
+async fn the_advertised_start_refusal_is_the_one_a_start_actually_gives() {
+    let mut a = app().await;
+    populate(&mut a);
+    a.engine.state = crate::ft::EngineState::Running;
+
+    let blocked = crate::actions::start_blocked(&a).expect("a live engine blocks a start");
+    let refusal = crate::actions::start_engine(&mut a).expect_err("and so does the route");
+    assert_eq!(blocked, refusal.message);
+    assert_eq!(refusal.status, 409);
+    assert!(refusal.toasted);
+
+    // With nothing in the way and no FreeToken CLI, the reason is the missing CLI — and
+    // it is still the same string on both paths. The fixture leaves a conversion running,
+    // which would otherwise be the answer first.
+    a.engine.state = crate::ft::EngineState::Stopped;
+    a.jobs.clear();
+    a.serve.set("model", "/models/Qwen3.6-35B-A3B");
+    let blocked = crate::actions::start_blocked(&a).expect("no CLI blocks a start");
+    let refusal = crate::actions::start_engine(&mut a).expect_err("and the route agrees");
+    assert_eq!(blocked, refusal.message);
+    assert_eq!(refusal.status, 503);
+}
+
+/// The cross-process race: a second ft-man on this machine starts an engine between two
+/// of our ticks. The state file is the handoff, so a start re-reads it rather than
+/// trusting the last poll — and attaches to what it finds instead of putting a second
+/// engine on the same GPU and port.
+#[tokio::test]
+async fn a_start_attaches_to_an_engine_another_process_already_started() {
+    // After `app`, not before: `app` takes the same lock to read the state file, and
+    // tokio's mutex is not reentrant.
+    let mut a = app().await;
+    let _guard = crate::config::lock_serve_state().await;
+    populate(&mut a);
+    a.jobs.clear();
+    a.engine.state = crate::ft::EngineState::Stopped;
+    a.engine.pid = None;
+    a.serve.set("model", "/models/Qwen3.6-35B-A3B");
+
+    // This test process stands in for the engine: it is alive, and its start time matches.
+    let pid = std::process::id();
+    crate::ft::proc::ServeState {
+        pid,
+        starttime: crate::ft::proc::proc_starttime(pid).expect("/proc says when we started"),
+        model: "Qwen3.6-35B-A3B".into(),
+        port: 1919,
+        args: vec![],
+        log_path: std::path::PathBuf::from("/tmp/elsewhere.log"),
+        started_at: 0,
+    }
+    .save()
+    .expect("the state file is writable under the test root");
+
+    let refusal = crate::actions::start_engine(&mut a).expect_err("a second engine is refused");
+    assert_eq!(refusal.status, 409);
+    assert!(refusal.toasted);
+    assert_eq!(
+        a.engine.state,
+        crate::ft::EngineState::Adopted,
+        "the engine another process started is attached to, not orphaned"
+    );
+    assert_eq!(a.engine.pid, Some(pid));
+    // And the snapshot says the same thing the route just did.
+    assert_eq!(crate::actions::start_blocked(&a).as_deref(), Some(refusal.message.as_str()));
+
+    crate::ft::proc::ServeState::clear();
+}
+
+/// `use_model` derives `--served-model-name` from the checkpoint, but only when ft-man is
+/// the one that put the current value there. A name typed by hand is the API this engine
+/// publishes; clients send it in request bodies, and picking a different model must not
+/// silently rewrite it.
+#[tokio::test]
+async fn using_a_model_never_overwrites_a_hand_set_served_name() {
+    let mut a = app().await;
+    populate(&mut a);
+    let first = a.models[0].path.clone();
+
+    // Unset: ft-man fills it in.
+    assert!(!a.serve.is_set("served_model_name"));
+    crate::actions::use_model(&mut a, &first, false).unwrap();
+    assert_eq!(a.serve.get("served_model_name"), Some("Qwen3.6-35B-A3B"));
+
+    // Still ft-man's own value, so switching models moves it along.
+    let second = a.models[1].path.clone();
+    crate::actions::use_model(&mut a, &second, false).unwrap();
+    assert_eq!(a.serve.get("served_model_name"), Some("Qwen3.6-35B-A3B-ftw"));
+
+    // Chosen by hand — a name clients already send — and it stays.
+    a.serve.set("served_model_name", "production");
+    crate::actions::use_model(&mut a, &first, false).unwrap();
+    assert_eq!(a.serve.get("served_model_name"), Some("production"));
+    assert_eq!(
+        a.serve.get("model"),
+        Some("/models/Qwen3.6-35B-A3B-ftw"),
+        "the model itself still follows"
+    );
 }

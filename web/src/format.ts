@@ -11,6 +11,8 @@
  * value, so no view ever prints `undefined` or `NaN`.
  */
 
+import type { LogSeverity } from "./api/types.ts";
+
 /** What an absent value renders as, everywhere. */
 export const DASH = "—";
 
@@ -219,4 +221,23 @@ export function basename(path: string | null | undefined): string {
 /** A tokens-in/tokens-out pair, either half of which may be missing. */
 export function tokenPair(a: Maybe, b: Maybe): string {
   return `${count(a)} / ${count(b)}`;
+}
+
+/**
+ * The CSS class for a line the daemon already classified (§3.1).
+ *
+ * The rule itself lives in `views::logs::classify`, so both front ends color a line
+ * the same way and the browser never re-reads the text to guess.
+ */
+export function severityClass(severity: LogSeverity): string {
+  switch (severity) {
+    case "error":
+      return "bad";
+    case "warn":
+      return "warn";
+    case "meta":
+      return "meta";
+    case "normal":
+      return "";
+  }
 }

@@ -221,9 +221,10 @@ pub struct AppliedTemplate {
     pub had_original: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Status {
     /// The checkpoint's own template, however it ships it.
+    #[default]
     BuiltIn,
     /// ft-man applied an override.
     Overridden(Box<AppliedTemplate>),
@@ -590,6 +591,8 @@ mod tests {
             ftw_fingerprint: None,
             converted_to: None,
             modified: None,
+            template_status: Default::default(),
+            has_inference_config: false,
         };
         let targets = targets(&model);
         assert_eq!(targets.len(), 1, "a cache checkpoint must still be writable: {targets:?}");
@@ -650,6 +653,8 @@ mod tests {
             ftw_fingerprint: None,
             converted_to: None,
             modified: None,
+            template_status: Default::default(),
+            has_inference_config: false,
         };
         assert_eq!(targets(&model), vec![PathBuf::from("/models/m")]);
 

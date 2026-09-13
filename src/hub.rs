@@ -122,6 +122,11 @@ impl Hub {
         self.token.is_some()
     }
 
+    /// The Hub this client talks to, so the `hf` child can be pointed at the same one.
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
     fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.token {
             Some(t) => req.bearer_auth(t),
@@ -327,6 +332,29 @@ pub enum DownloadStatus {
     Done,
     Failed(String),
     Canceled,
+}
+
+impl DownloadStatus {
+    /// The one word both front ends print in the status column. A running download says
+    /// "downloading" rather than "running", which is what the variant is called on the
+    /// wire — the verb is what a reader wants and the discriminant is what a client
+    /// switches on, so both spellings exist on purpose.
+    pub fn label(&self) -> &'static str {
+        match self {
+            DownloadStatus::Running => "downloading",
+            DownloadStatus::Done => "done",
+            DownloadStatus::Failed(_) => "failed",
+            DownloadStatus::Canceled => "canceled",
+        }
+    }
+
+    /// The failure message, when it failed.
+    pub fn failure_reason(&self) -> Option<&str> {
+        match self {
+            DownloadStatus::Failed(why) => Some(why),
+            _ => None,
+        }
+    }
 }
 
 // Written out for the same reason as `JobStatus`: serde cannot internally tag a newtype
@@ -563,6 +591,11 @@ pub async fn start_download(
         cmd.arg(&f.path);
     }
     cmd.env("HF_HUB_CACHE", &cache_dir)
+        // The mirror ft-man itself searches and reads metadata from. Without it a
+        // configured `hub.endpoint` decided which repos were listed and `hf` then fetched
+        // the weights from huggingface.co — two different hosts for one download, which on
+        // an air-gapped mirror simply fails and on a proxy quietly bypasses it.
+        .env("HF_ENDPOINT", hub.endpoint())
         // Only read for diagnostics, so the bars are noise that would interleave with the
         // one line that matters when a download fails.
         .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
