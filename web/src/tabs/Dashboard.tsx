@@ -85,6 +85,8 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     fit && fit.is_truncated ? fit.summary : stats ? tokens(stats.model.ctx) : null,
     stats?.model.attn ?? null,
     stats?.model.moe ? "MoE" : null,
+    // Anything past "text" is an encoder tower this engine built and is holding VRAM for.
+    ...(stats?.model.input_modalities ?? []).filter((m) => m !== "text"),
   ]
     .filter((part): part is string => Boolean(part))
     .join(" · ");

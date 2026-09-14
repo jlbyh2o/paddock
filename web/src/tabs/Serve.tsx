@@ -216,6 +216,36 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
       );
     }
 
+    if (knob.kind.kind === "multi") {
+      // Checkboxes rather than a multi-select list: there are two options, both need their
+      // own label, and a list box that scrolls at two rows helps nobody. The stored value
+      // is the space-separated argv the flag takes, so the order of `options` is kept
+      // rather than the order they were clicked.
+      const chosen = new Set((stored ?? "").split(/\s+/).filter(Boolean));
+      const options = knob.kind.options;
+      return (
+        <span className="multi" ref={register} tabIndex={-1}>
+          {options.map((option) => (
+            <label key={option} className="toggle">
+              <input
+                type="checkbox"
+                checked={chosen.has(option)}
+                aria-label={`${knob.label}: ${option}`}
+                onChange={(e) => {
+                  const next = new Set(chosen);
+                  if (e.target.checked) next.add(option);
+                  else next.delete(option);
+                  commit(knob, options.filter((o) => next.has(o)).join(" "));
+                }}
+              />
+              <span className={chosen.has(option) ? "" : "dim"}>{option}</span>
+            </label>
+          ))}
+          {chosen.size === 0 ? <span className="dim">({knob.default})</span> : null}
+        </span>
+      );
+    }
+
     const numeric = knob.kind.kind === "int" || knob.kind.kind === "float";
     return (
       <input

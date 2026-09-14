@@ -21,6 +21,10 @@
       "title": "MoE offload"
     },
     {
+      "group": "multimodal",
+      "title": "Multimodal"
+    },
+    {
       "group": "api",
       "title": "API behavior"
     }
@@ -630,6 +634,130 @@
         ]
       },
       "label": "Reasoning parser"
+    },
+    {
+      "default": "off",
+      "exclusive_with": [],
+      "flag": "--text-model-only",
+      "group": "multimodal",
+      "help": "Serve a multimodal checkpoint without its encoder towers: none are built, the VRAM they would hold goes to the KV and expert pools instead, and every image request is rejected. The lever to reach for when a vision-capable checkpoint is being served for text.",
+      "key": "text_model_only",
+      "kind": {
+        "kind": "flag"
+      },
+      "label": "Text only"
+    },
+    {
+      "default": "none",
+      "exclusive_with": [],
+      "flag": "--mm-disable",
+      "group": "multimodal",
+      "help": "Encoder towers to leave unbuilt, chosen one kind at a time; every input they would serve is rejected. Naming every kind is exactly what --text-model-only does.",
+      "key": "mm_disable",
+      "kind": {
+        "kind": "multi",
+        "options": [
+          "vision",
+          "audio"
+        ]
+      },
+      "label": "Disable encoders"
+    },
+    {
+      "default": "host",
+      "exclusive_with": [],
+      "flag": "--mm-encoder-weights",
+      "group": "multimodal",
+      "help": "Where the encoder tower's block weights live. 'host' streams them from pinned host banks two blocks at a time behind the compute — about 60 MiB of VRAM rather than the whole tower, at roughly 17 ms instead of 7 ms for a 448x448 image. 'gpu' keeps them resident.",
+      "key": "mm_encoder_weights",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "host",
+          "gpu"
+        ]
+      },
+      "label": "Encoder weights"
+    },
+    {
+      "default": "the processor's own limit",
+      "exclusive_with": [],
+      "flag": "--image-min-tokens",
+      "group": "multimodal",
+      "help": "Fewest tokens one image may take; smaller images are scaled up to it. Counted in the family's own units — Qwen VL spends one token per 32x32 pixels of the resized image. Only families with dynamic resolution honor it.",
+      "key": "image_min_tokens",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Image min tokens"
+    },
+    {
+      "default": "the processor's own limit",
+      "exclusive_with": [],
+      "flag": "--image-max-tokens",
+      "group": "multimodal",
+      "help": "Most tokens one image may take; larger images are scaled down to it. Same units as the minimum, and the number that decides how much prefill a single image can cost.",
+      "key": "image_max_tokens",
+      "kind": {
+        "kind": "int",
+        "max": null,
+        "min": 1
+      },
+      "label": "Image max tokens"
+    },
+    {
+      "default": "none",
+      "exclusive_with": [],
+      "flag": "--mm-processor-kwargs",
+      "group": "multimodal",
+      "help": "JSON object of extra keyword arguments for the checkpoint's image processor, for family-specific knobs — Qwen VL takes {\"size\": {\"longest_edge\": 1048576}}. Applied after the token budget, so it overrides it.",
+      "key": "mm_processor_kwargs",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Processor kwargs"
+    },
+    {
+      "default": "cpu",
+      "exclusive_with": [],
+      "flag": "--mm-embed-cache-device",
+      "group": "multimodal",
+      "help": "Where encoded image embeddings wait between prefill chunks. 'cpu' keeps them out of the VRAM budget; 'cuda' skips the copy back.",
+      "key": "mm_embed_cache_device",
+      "kind": {
+        "kind": "choice",
+        "options": [
+          "cpu",
+          "cuda"
+        ]
+      },
+      "label": "Embedding cache"
+    },
+    {
+      "default": "any",
+      "exclusive_with": [],
+      "flag": "--allowed-media-domains",
+      "group": "multimodal",
+      "help": "Comma-separated hostname allowlist for the image URLs a client may send; anything else is refused with a 400. Empty admits any domain, which means the server will fetch whatever a request names.",
+      "key": "allowed_media_domains",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Allowed media domains"
+    },
+    {
+      "default": "off",
+      "exclusive_with": [],
+      "flag": "--allowed-local-media-path",
+      "group": "multimodal",
+      "help": "Directory that file:// image references may be read from. Unset rejects local files outright; FreeToken checks the directory exists and refuses to start if it does not.",
+      "key": "allowed_local_media_path",
+      "kind": {
+        "kind": "text"
+      },
+      "label": "Local media path"
     },
     {
       "default": "model",

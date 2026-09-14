@@ -108,7 +108,9 @@ export type KnobKind =
   | { kind: "flag" }
   | { kind: "int"; min: number | null; max: number | null }
   | { kind: "float"; min: number; max: number }
-  | { kind: "choice"; options: string[] };
+  | { kind: "choice"; options: string[] }
+  /** Any subset of `options`, stored space-separated. */
+  | { kind: "multi"; options: string[] };
 
 /**
  * What a pending confirmation would do if accepted. Mirrors
@@ -175,6 +177,12 @@ export interface ModelCard {
   /** `mha`, `hybrid_linear`, or `hybrid_swa`. */
   attn: string | null;
   moe: boolean;
+  /**
+   * What the API accepts right now, e.g. `["text"]` or `["text", "image"]`. The server's
+   * current behavior, not the checkpoint's capability: a vision checkpoint served with
+   * `--text-model-only` reports text alone.
+   */
+  input_modalities: string[];
   /** The checkpoint's recommended sampling parameters, raw JSON. */
   sampling: Record<string, unknown> | null;
 }

@@ -90,6 +90,11 @@ pub struct ModelCard {
     pub attn: Option<String>,
     #[serde(default)]
     pub moe: bool,
+    /// What the API accepts right now, e.g. `["text"]` or `["text", "image"]`. This is the
+    /// server's current behavior, not the checkpoint's capability: a vision checkpoint
+    /// served with `--text-model-only` reports text alone.
+    #[serde(default)]
+    pub input_modalities: Vec<String>,
     /// The checkpoint's recommended sampling parameters, when the server reports them.
     #[serde(default)]
     pub sampling: Option<serde_json::Value>,

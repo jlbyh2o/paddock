@@ -18,12 +18,20 @@ pub enum Group {
     Runtime,
     Memory,
     Moe,
+    Multimodal,
     Api,
 }
 
 impl Group {
-    pub const ALL: [Group; 6] =
-        [Group::Model, Group::Server, Group::Runtime, Group::Memory, Group::Moe, Group::Api];
+    pub const ALL: [Group; 7] = [
+        Group::Model,
+        Group::Server,
+        Group::Runtime,
+        Group::Memory,
+        Group::Moe,
+        Group::Multimodal,
+        Group::Api,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -32,6 +40,7 @@ impl Group {
             Group::Runtime => "Runtime & scheduling",
             Group::Memory => "KV cache & memory",
             Group::Moe => "MoE offload",
+            Group::Multimodal => "Multimodal",
             Group::Api => "API behavior",
         }
     }
@@ -50,6 +59,9 @@ pub enum Kind {
     /// One of a fixed set. The first entry is the "leave it to FreeToken" choice where
     /// one exists (`auto`), and is what an unset knob resolves to.
     Choice(&'static [&'static str]),
+    /// Any subset of a fixed set, stored space-separated and emitted as one flag followed
+    /// by each chosen value — the shape argparse's `nargs="+"` reads.
+    Multi(&'static [&'static str]),
 }
 
 #[derive(Serialize)]
@@ -89,6 +101,10 @@ impl Serialize for Kind {
             }
             Kind::Choice(options) => {
                 m.serialize_entry("kind", "choice")?;
+                m.serialize_entry("options", options)?;
+            }
+            Kind::Multi(options) => {
+                m.serialize_entry("kind", "multi")?;
                 m.serialize_entry("options", options)?;
             }
         }
@@ -252,6 +268,53 @@ pub static KNOBS: &[Knob] = &[
         Kind::Choice(&["auto", "off", "qwen3", "glm", "deepseekv32", "gpt_oss", "minimax",
                        "minimax_m3", "muse_glimmer", "gemma4"]),
         "auto", "Splits chain-of-thought into reasoning_content. 'off' leaves it inline in the message."),
+    // ---- Multimodal ------------------------------------------------------
+    // Qwen3.6, Qwen3.8-Flash-Next and Qwen3-VL serve image input by default, and the
+    // encoder tower they build for it is taken out of the same VRAM the KV and expert
+    // pools are priced against. That makes this group a memory group as much as an API
+    // one, which is why it sits beside the MoE knobs rather than under "API behavior".
+    knob!("text_model_only", "--text-model-only", "Text only", Group::Multimodal,
+        Kind::Flag, "off",
+        "Serve a multimodal checkpoint without its encoder towers: none are built, the VRAM they \
+         would hold goes to the KV and expert pools instead, and every image request is rejected. \
+         The lever to reach for when a vision-capable checkpoint is being served for text."),
+    knob!("mm_disable", "--mm-disable", "Disable encoders", Group::Multimodal,
+        Kind::Multi(&["vision", "audio"]), "none",
+        "Encoder towers to leave unbuilt, chosen one kind at a time; every input they would serve \
+         is rejected. Naming every kind is exactly what --text-model-only does."),
+    knob!("mm_encoder_weights", "--mm-encoder-weights", "Encoder weights", Group::Multimodal,
+        Kind::Choice(&["host", "gpu"]), "host",
+        "Where the encoder tower's block weights live. 'host' streams them from pinned host banks \
+         two blocks at a time behind the compute — about 60 MiB of VRAM rather than the whole \
+         tower, at roughly 17 ms instead of 7 ms for a 448x448 image. 'gpu' keeps them resident."),
+    knob!("image_min_tokens", "--image-min-tokens", "Image min tokens", Group::Multimodal,
+        Kind::Int { min: Some(1), max: None }, "the processor's own limit",
+        "Fewest tokens one image may take; smaller images are scaled up to it. Counted in the \
+         family's own units — Qwen VL spends one token per 32x32 pixels of the resized image. \
+         Only families with dynamic resolution honor it."),
+    knob!("image_max_tokens", "--image-max-tokens", "Image max tokens", Group::Multimodal,
+        Kind::Int { min: Some(1), max: None }, "the processor's own limit",
+        "Most tokens one image may take; larger images are scaled down to it. Same units as the \
+         minimum, and the number that decides how much prefill a single image can cost."),
+    knob!("mm_processor_kwargs", "--mm-processor-kwargs", "Processor kwargs", Group::Multimodal,
+        Kind::Text, "none",
+        "JSON object of extra keyword arguments for the checkpoint's image processor, for \
+         family-specific knobs — Qwen VL takes {\"size\": {\"longest_edge\": 1048576}}. Applied \
+         after the token budget, so it overrides it."),
+    knob!("mm_embed_cache_device", "--mm-embed-cache-device", "Embedding cache", Group::Multimodal,
+        Kind::Choice(&["cpu", "cuda"]), "cpu",
+        "Where encoded image embeddings wait between prefill chunks. 'cpu' keeps them out of the \
+         VRAM budget; 'cuda' skips the copy back."),
+    knob!("allowed_media_domains", "--allowed-media-domains", "Allowed media domains",
+        Group::Multimodal, Kind::Text, "any",
+        "Comma-separated hostname allowlist for the image URLs a client may send; anything else is \
+         refused with a 400. Empty admits any domain, which means the server will fetch whatever a \
+         request names."),
+    knob!("allowed_local_media_path", "--allowed-local-media-path", "Local media path",
+        Group::Multimodal, Kind::Text, "off",
+        "Directory that file:// image references may be read from. Unset rejects local files \
+         outright; FreeToken checks the directory exists and refuses to start if it does not."),
+
     knob!("sampling_defaults", "--sampling-defaults", "Sampling defaults", Group::Api,
         Kind::Choice(&["model", "none"]), "model",
         "'model' fills unspecified temperature/top_k/top_p from the checkpoint's generation_config.json, which reasoning models generally need."),
@@ -440,6 +503,15 @@ impl ServeConfig {
                         args.push(k.flag.to_string());
                     }
                 }
+                // `nargs="+"`: the flag once, then each value as its own argv element.
+                Kind::Multi(_) => {
+                    let mut values = value.split_whitespace().peekable();
+                    if values.peek().is_none() {
+                        continue;
+                    }
+                    args.push(k.flag.to_string());
+                    args.extend(values.map(str::to_string));
+                }
                 _ => {
                     if value.is_empty() {
                         continue;
@@ -490,6 +562,18 @@ impl ServeConfig {
                 }
             }
         }
+        // FreeToken rejects this pair at startup; catching it here means the Serve tab says
+        // so while it can still be fixed, rather than after a launch that dies.
+        if let (Some(lo), Some(hi)) = (self.get("image_min_tokens"), self.get("image_max_tokens")) {
+            if let (Ok(lo), Ok(hi)) = (lo.trim().parse::<i64>(), hi.trim().parse::<i64>()) {
+                if lo > hi {
+                    errors.push((
+                        "image_min_tokens".into(),
+                        format!("{lo} is more than --image-max-tokens {hi}"),
+                    ));
+                }
+            }
+        }
         errors.sort();
         errors.dedup();
         errors
@@ -504,6 +588,15 @@ pub fn validate_value(k: &Knob, value: &str) -> Option<String> {
     }
     if k.key == "quant_backend" {
         return validate_quant_backend(v);
+    }
+    // FreeToken parses this one with json.loads and refuses to start on anything that is
+    // not an object, so it is worth catching here rather than in a failed launch.
+    if k.key == "mm_processor_kwargs" {
+        return match serde_json::from_str::<serde_json::Value>(v) {
+            Ok(serde_json::Value::Object(_)) => None,
+            Ok(_) => Some("must be a JSON object".into()),
+            Err(e) => Some(format!("not valid JSON: {e}")),
+        };
     }
     match k.kind {
         Kind::Text => None,
@@ -532,6 +625,19 @@ pub fn validate_value(k: &Knob, value: &str) -> Option<String> {
         }
         Kind::Choice(options) => {
             (!options.contains(&v)).then(|| format!("must be one of: {}", options.join(", ")))
+        }
+        Kind::Multi(options) => {
+            let mut chosen: Vec<&str> = Vec::new();
+            for token in v.split_whitespace() {
+                if !options.contains(&token) {
+                    return Some(format!("must be one or more of: {}", options.join(", ")));
+                }
+                if chosen.contains(&token) {
+                    return Some(format!("{token} is named twice"));
+                }
+                chosen.push(token);
+            }
+            None
         }
     }
 }
@@ -666,5 +772,71 @@ mod tests {
         cfg.set("memory_ratio", "1.5");
         let errs = cfg.validate();
         assert!(errs.iter().any(|(k, _)| k == "memory_ratio"), "{errs:?}");
+    }
+
+    /// `--mm-disable` is argparse's `nargs="+"`: the flag once, then a separate argv
+    /// element per value. Joining them into one word is the mistake this guards.
+    #[test]
+    fn a_multi_knob_emits_one_argv_element_per_value() {
+        let mut c = ServeConfig::default();
+        c.set("model", "/models/Qwen3.6-35B-A3B");
+        c.set("mm_disable", "vision audio");
+        let args = c.to_args();
+
+        let at = args.iter().position(|a| a == "--mm-disable").expect("the flag is emitted");
+        assert_eq!(&args[at + 1..at + 3], ["vision", "audio"]);
+        // And not as one joined word, which argparse would take as a single bad choice.
+        assert!(!args.iter().any(|a| a == "vision audio"), "{args:?}");
+    }
+
+    /// An empty selection is an unset knob: no flag at all, rather than a flag with no
+    /// values, which argparse rejects outright.
+    #[test]
+    fn a_multi_knob_with_nothing_chosen_emits_no_flag() {
+        let mut c = ServeConfig::default();
+        c.set("model", "/models/Qwen3.6-35B-A3B");
+        c.set("mm_disable", "   ");
+        assert!(!c.to_args().iter().any(|a| a == "--mm-disable"));
+    }
+
+    /// Any subset in any order, but only from the declared set, and never twice.
+    #[test]
+    fn a_multi_knob_accepts_subsets_and_rejects_the_rest() {
+        let k = knob("mm_disable").expect("the mm-disable knob exists");
+        for good in ["vision", "audio", "vision audio", "audio vision", ""] {
+            assert_eq!(validate_value(k, good), None, "{good:?} is a valid subset");
+        }
+        assert!(validate_value(k, "video").is_some(), "an unlisted kind is refused");
+        let twice = validate_value(k, "vision vision").expect("a repeat is refused");
+        assert!(twice.contains("twice"), "{twice}");
+    }
+
+    /// FreeToken parses `--mm-processor-kwargs` with `json.loads` and requires an object,
+    /// so a typo should be caught on the Serve tab rather than by a launch that dies.
+    #[test]
+    fn processor_kwargs_must_be_a_json_object() {
+        let k = knob("mm_processor_kwargs").expect("the processor-kwargs knob exists");
+        assert_eq!(validate_value(k, r#"{"size": {"longest_edge": 1048576}}"#), None);
+        assert_eq!(validate_value(k, "{}"), None);
+        assert!(validate_value(k, "[1, 2]").is_some_and(|m| m.contains("JSON object")));
+        assert!(validate_value(k, "size=1").is_some_and(|m| m.contains("not valid JSON")));
+    }
+
+    /// The one cross-knob check in this group: FreeToken refuses to start when the image
+    /// token budget is inverted, and it should be visible before the launch.
+    #[test]
+    fn an_inverted_image_token_budget_is_an_error() {
+        let mut c = ServeConfig::default();
+        c.set("model", "/models/Qwen3.6-35B-A3B");
+        c.set("image_min_tokens", "4096");
+        c.set("image_max_tokens", "64");
+        let errors = c.validate();
+        assert!(
+            errors.iter().any(|(key, msg)| key == "image_min_tokens" && msg.contains("more than")),
+            "{errors:?}"
+        );
+
+        c.set("image_max_tokens", "16384");
+        assert!(c.validate().is_empty(), "a budget the right way round is fine");
     }
 }

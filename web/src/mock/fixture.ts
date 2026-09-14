@@ -425,6 +425,7 @@ export const fixture: Snapshot = {
         ctx: 262144,
         attn: "hybrid_linear",
         moe: true,
+        input_modalities: ["text", "image"],
         sampling: {
           temperature: 0.7,
           top_p: 0.8,

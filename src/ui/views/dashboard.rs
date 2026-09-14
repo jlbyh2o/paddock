@@ -139,6 +139,11 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
         if model.moe {
             facts.push("MoE".into());
         }
+        // Anything past "text" is a tower this engine built and is holding VRAM for, so it
+        // belongs on the line that says what is loaded.
+        for modality in model.input_modalities.iter().filter(|m| *m != "text") {
+            facts.push(modality.clone());
+        }
         if !facts.is_empty() {
             let truncated = fit.is_some_and(|f| f.is_truncated());
             if truncated {

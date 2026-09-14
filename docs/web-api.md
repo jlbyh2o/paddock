@@ -297,6 +297,7 @@ Rust enums that carry data are **internally tagged objects** with a `kind` discr
 {"kind": "int", "min": 1, "max": null}
 {"kind": "float", "min": 0.0, "max": 1.0}
 {"kind": "choice", "options": ["auto", "offload", "hybrid", "cpu", "fused"]}
+{"kind": "multi",  "options": ["vision", "audio"]}
 
 // ConfirmAction — see 2.15
 {"kind": "stop_engine", "force": false}
@@ -1067,9 +1068,14 @@ Knobs are in `KNOBS` order, which is the order the Serve view presents them with
 group. `exclusive_with` is verbatim, including the knob's own key where the schema lists it
 — the UI filters that out when it renders "excludes", as `views::serve::help` does.
 
+A `multi` knob holds any subset of its options, stored as one space-separated string and
+emitted as the flag followed by each chosen value as its own argv element — the shape
+argparse's `nargs="+"` reads. `POST /api/serve/knob` takes the whole subset as the value;
+`POST /api/serve/cycle` does not apply to it.
+
 The Serve tab's right-hand "What it does" pane is built entirely from this document plus
-the browser's own cursor: `flag`, `help`, `default`, the `choice` options, and the
-exclusions.
+the browser's own cursor: `flag`, `help`, `default`, the `choice` or `multi` options, and
+the exclusions.
 
 ### 4.3 `POST /api/confirm`
 

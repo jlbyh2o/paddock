@@ -475,6 +475,14 @@ textarea {
   display: none;
 }
 
+/* A multi-valued knob: its options side by side, each with its own checkbox. */
+.multi {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
 /* ---------------------------------------------------------------- fields */
 
 .field {

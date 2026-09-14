@@ -93,6 +93,9 @@ pub(crate) fn populate(app: &mut App) {
                 ctx: 262_144,
                 attn: Some("hybrid_linear".into()),
                 moe: true,
+                // A Qwen3.6 serves image input unless it was started --text-model-only, so
+                // the fixture that stands in for one says so.
+                input_modalities: vec!["text".into(), "image".into()],
                 sampling: Some(serde_json::json!({"temperature": 0.7, "top_p": 0.8, "top_k": 20})),
             },
             uptime_s: 4231,

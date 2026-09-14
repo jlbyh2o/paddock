@@ -748,5 +748,15 @@ function validateValue(knob: Knob, raw: string): string | null {
       return knob.kind.options.includes(value)
         ? null
         : `must be one of: ${knob.kind.options.join(", ")}`;
+    case "multi": {
+      const options = knob.kind.options;
+      const chosen: string[] = [];
+      for (const token of value.split(/\s+/)) {
+        if (!options.includes(token)) return `must be one or more of: ${options.join(", ")}`;
+        if (chosen.includes(token)) return `${token} is named twice`;
+        chosen.push(token);
+      }
+      return null;
+    }
   }
 }

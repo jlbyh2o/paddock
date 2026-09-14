@@ -189,11 +189,17 @@ fn help(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![Span::styled("default  ", t.label()), Span::styled(k.default, t.muted())]),
     ];
 
-    if let Kind::Choice(options) = k.kind {
+    if let Kind::Choice(options) | Kind::Multi(options) = k.kind {
         lines.push(Line::from(vec![
             Span::styled("options  ", t.label()),
             Span::styled(options.join(", "), t.muted()),
         ]));
+        if matches!(k.kind, Kind::Multi(_)) {
+            lines.push(Line::from(Span::styled(
+                "         any number of them, separated by spaces",
+                t.muted(),
+            )));
+        }
     }
     if !k.exclusive_with.is_empty() {
         let others: Vec<&str> = k
