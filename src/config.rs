@@ -74,6 +74,13 @@ pub fn migrate_legacy_dirs() {
     }
 }
 
+/// Reported on stderr rather than through `tracing`, because this necessarily runs before
+/// logging is initialized and a `tracing` call from here goes nowhere — which is how the
+/// first real migration completed without saying a word.
+///
+/// That order is not incidental and must not be swapped to fix the logging: `init_logging`
+/// opens a file under the *new* state directory, which creates it, which would make the
+/// `to.exists()` check below decline the move and quietly strand the old install.
 fn migrate_one(from: &Path, to: &Path) {
     if to.exists() || !from.is_dir() {
         return;
@@ -82,12 +89,13 @@ fn migrate_one(from: &Path, to: &Path) {
         let _ = std::fs::create_dir_all(parent);
     }
     match std::fs::rename(from, to) {
-        Ok(()) => {
-            tracing::info!(from = %from.display(), to = %to.display(), "migrated the pre-rename directory")
-        }
-        Err(e) => {
-            tracing::warn!(from = %from.display(), error = %e, "could not migrate the pre-rename directory; starting fresh")
-        }
+        Ok(()) => eprintln!("paddock: moved {} to {}", from.display(), to.display()),
+        Err(e) => eprintln!(
+            "paddock: could not move {} to {} ({e}); starting with fresh defaults. The old \
+             directory is untouched.",
+            from.display(),
+            to.display(),
+        ),
     }
 }
 
