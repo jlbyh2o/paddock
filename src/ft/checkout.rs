@@ -158,10 +158,8 @@ pub fn check(dir: &Path) -> Option<FtCheckout> {
 /// every pull, including the many that only move Python around.
 fn kernels_stale(dir: &Path) -> Option<bool> {
     let built = newest_object(&dir.join(KERNEL_DIR))?;
-    let touched: u64 = git_get(&format!("log -1 --format=%ct -- {KERNEL_SRC}"), dir)?
-        .trim()
-        .parse()
-        .ok()?;
+    let touched: u64 =
+        git_get(&format!("log -1 --format=%ct -- {KERNEL_SRC}"), dir)?.trim().parse().ok()?;
     Some(touched > built)
 }
 
@@ -172,14 +170,8 @@ fn newest_object(dir: &Path) -> Option<u64> {
         if entry.path().extension().is_none_or(|e| e != "so") {
             continue;
         }
-        let secs = entry
-            .metadata()
-            .ok()?
-            .modified()
-            .ok()?
-            .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_secs();
+        let secs =
+            entry.metadata().ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs();
         newest = Some(newest.map_or(secs, |n: u64| n.max(secs)));
     }
     newest
@@ -252,9 +244,7 @@ fn count_commits(from: &str, to: &str, workdir: &Path) -> usize {
         .stderr(std::process::Stdio::null())
         .output()
         .ok()
-        .and_then(|out| {
-            String::from_utf8(out.stdout).ok().and_then(|s| s.trim().parse().ok())
-        })
+        .and_then(|out| String::from_utf8(out.stdout).ok().and_then(|s| s.trim().parse().ok()))
         .unwrap_or(0)
 }
 
@@ -269,8 +259,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("ft-man-checkout-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ft-man-checkout-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).expect("the scratch directory");
         dir
@@ -295,8 +285,7 @@ mod tests {
         let root = scratch("program");
         let clone = root.join("FreeToken");
         fake_checkout(&clone);
-        let cfg =
-            FreetokenCfg { binary: Some(clone.join(".venv/bin/ft")), ..Default::default() };
+        let cfg = FreetokenCfg { binary: Some(clone.join(".venv/bin/ft")), ..Default::default() };
 
         assert_eq!(locate(&cfg, None).as_deref(), Some(clone.as_path()));
         std::fs::remove_dir_all(&root).ok();

@@ -86,13 +86,7 @@ pub struct FreetokenCfg {
 
 impl Default for FreetokenCfg {
     fn default() -> Self {
-        Self {
-            binary: None,
-            venv: None,
-            env: Vec::new(),
-            checkout: None,
-            checkout_poll_min: 30,
-        }
+        Self { binary: None, venv: None, env: Vec::new(), checkout: None, checkout_poll_min: 30 }
     }
 }
 

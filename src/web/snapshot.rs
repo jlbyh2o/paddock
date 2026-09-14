@@ -1156,10 +1156,7 @@ fn checkout_note(c: &crate::ft::FtCheckout) -> String {
         // the kernels were never rebuilt.
         "kernels need a rebuild".into()
     } else if c.origin_ahead > 0 || c.origin_behind > 0 {
-        format!(
-            "{} ahead, {} behind origin",
-            c.origin_ahead, c.origin_behind
-        )
+        format!("{} ahead, {} behind origin", c.origin_ahead, c.origin_behind)
     } else if c.dirty {
         "local changes present".into()
     } else {

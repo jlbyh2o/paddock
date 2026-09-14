@@ -170,20 +170,14 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
 
     // Git status of the FreeToken checkout this machine builds from.
     if let Some(c) = &app.ft_checkout {
-        lines.push(Line::from(Span::styled(
-            format!("Local checkout  {}", c.local_sha),
-            t.label(),
-        )));
+        lines.push(Line::from(Span::styled(format!("Local checkout  {}", c.local_sha), t.label())));
         let width = (inner.width.saturating_sub(4)).max(20) as usize;
         lines.push(Line::from(Span::styled(
             format!("  {}", crate::util::truncate(&c.path, width)),
             t.muted(),
         )));
         let upstream = crate::util::truncate(&c.upstream, (inner.width - 18).max(20) as usize);
-        lines.push(Line::from(Span::styled(
-            format!("  {upstream}"),
-            t.muted(),
-        )));
+        lines.push(Line::from(Span::styled(format!("  {upstream}"), t.muted())));
         if c.upstream_sha.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  (could not read upstream; is git installed?)",
