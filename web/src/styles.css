@@ -456,6 +456,25 @@ textarea {
   color: var(--dim);
 }
 
+/*
+ * The checkout block at the foot of the Engine pane: a rule and a little air separate
+ * "which FreeToken source is on this machine" from the running engine above it.
+ */
+.checkout {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+.checkout .facts {
+  /* Empty whenever the tree is clean and current, and an empty row should take no space. */
+  gap: 10px;
+}
+
+.checkout .facts:empty {
+  display: none;
+}
+
 /* ---------------------------------------------------------------- fields */
 
 .field {

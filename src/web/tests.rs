@@ -1336,6 +1336,27 @@ async fn wire_populated() -> Shared {
     app.templates_view.preflight =
         Some(("qwen-sharp".into(), crate::ft::Preflight::Ok("renders in 4 ms".into())));
 
+    // The probe runs a real `ft --version`, which this test has no business doing, so the
+    // line the Engine pane draws is seeded rather than read.
+    app.set_ft_version(Some("freetoken version 0.1.2".into()));
+
+    // A checkout behind upstream, because that is the state the Engine pane has something
+    // to say about. Reading a real one here would make the fixture depend on whichever
+    // tree the machine running the tests happens to have.
+    app.set_ft_checkout(Some(crate::ft::FtCheckout {
+        path: "/home/user/FreeToken".into(),
+        upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
+        origin: "https://github.com/user/FreeToken.git".into(),
+        local_sha: "9f8e7d6".into(),
+        upstream_sha: "a1b2c3d".into(),
+        origin_sha: "9f8e7d6".into(),
+        origin_ahead: 0,
+        origin_behind: 3,
+        upstream_behind: 3,
+        dirty: false,
+        kernels_stale: Some(false),
+    }));
+
     if let Some(health) = app.telemetry.health.as_mut() {
         health.phase = Some("experts".into());
         health.progress = Some(crate::ft::types::LoadProgress {

@@ -1257,6 +1257,9 @@ export const fixture: Snapshot = {
     ft_origin_behind: 0,
     ft_dirty: false,
     ft_checkout_note: "3 commits behind upstream",
+    ft_local_sha: "9f8e7d6",
+    ft_checkout_path: "/home/user/FreeToken",
+    ft_kernels_stale: false,
   },
 };
 

@@ -65,7 +65,7 @@ pub struct Config {
 /// How to invoke FreeToken. `ft` is normally on PATH inside the venv it was installed
 /// into; pointing `venv` at that venv is enough and is the friendliest option, since it
 /// also makes `python -m freetoken.cli` available as a fallback.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FreetokenCfg {
     /// Explicit path to the `ft` executable. Overrides `venv` and PATH lookup.
@@ -74,6 +74,26 @@ pub struct FreetokenCfg {
     pub venv: Option<PathBuf>,
     /// Extra environment variables applied to every spawned FreeToken process.
     pub env: Vec<(String, String)>,
+    /// The FreeToken git checkout this machine builds from, when it is not the directory
+    /// `venv` or `binary` sits inside. Normally unset: a `.venv` made in the clone is
+    /// found without help.
+    pub checkout: Option<PathBuf>,
+    /// Minutes between `git fetch` checks of that checkout. This is the one poll that
+    /// leaves the machine, so it is deliberately slow. Zero checks once at startup and
+    /// never again.
+    pub checkout_poll_min: u64,
+}
+
+impl Default for FreetokenCfg {
+    fn default() -> Self {
+        Self {
+            binary: None,
+            venv: None,
+            env: Vec::new(),
+            checkout: None,
+            checkout_poll_min: 30,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

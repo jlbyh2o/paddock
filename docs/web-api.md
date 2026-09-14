@@ -757,6 +757,25 @@ provenance (section 2.18), never as a value.
 | `hub_token_source` | string \| null | `HubToken::source` — `"the HF_TOKEN environment variable"`, `"hub.token in the config"`, `"the token cached by the hf CLI"`. **The token value is never sent** |
 | `endpoint` | string | `app.client.base_url()` — the polled URL, repeated here for the status bar |
 | `hostname` | string | `app.host.hostname` |
+| `ft_version` | string \| null | `app.ft_version` — the first line of `ft --version`, probed once at startup |
+
+The rest of the block describes the FreeToken **git checkout** this machine builds from,
+for an install built from source rather than from a wheel. The tree is found at run time
+(`freetoken.checkout`, else the tree enclosing `freetoken.venv` or the `ft` binary, else a
+development `vendor-freetoken/`), read on a background timer (`freetoken.checkout_poll_min`,
+default 30), and every field below is `null` when no such tree was found.
+
+| Field | Type | Source |
+|---|---|---|
+| `ft_checkout_path` | string \| null | `FtCheckout::path` — which tree was read. Shown, because it is resolved rather than configured |
+| `ft_local_sha` | string \| null | `FtCheckout::local_sha` — the commit the working tree is on |
+| `ft_upstream_sha` | string \| null | `upstream/main` after a fetch, or `""` when there is no such remote |
+| `ft_origin_sha` | string \| null | `origin/main` after a fetch |
+| `ft_upstream_behind` | number \| null | Commits from `local_sha` to `upstream/main`. **Non-zero is the "a newer FreeToken exists" signal** |
+| `ft_origin_ahead`, `ft_origin_behind` | number \| null | `git rev-list --left-right HEAD...origin/main` |
+| `ft_dirty` | boolean \| null | The working tree has uncommitted changes |
+| `ft_kernels_stale` | boolean \| null | The newest built `.so` under `python/freetoken/kernel/` predates the last commit to touch `kernel/csrc/`: pulled, but not rebuilt, so the engine is not running the code on disk. `null` when nothing is built to compare against |
+| `ft_checkout_note` | string \| null | The one-line summary the panes gate on, worst-first: behind upstream, then kernels stale, then diverged from origin, then dirty, then `"up to date"` |
 
 ---
 

@@ -188,27 +188,48 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
           </div>
         ) : null}
         {s.environment.ft_checkout_note ? (
-          <div className="facts" style={{ borderTop: `1px solid var(--border)`, paddingTop: 6, marginTop: 6 }}>
-            <span className="mono" style={{ color: "var(--fg)", fontWeight: 600 }}>
-              Local checkout
-            </span>
+          <div className="checkout">
+            <Field label="Checkout" mono>
+              {text(s.environment.ft_checkout_path)}
+            </Field>
             {s.environment.ft_upstream_sha ? (
               <>
-                <span className="mono">{s.environment.ft_upstream_sha}</span>
-                {s.environment.ft_upstream_behind !== null && s.environment.ft_upstream_behind > 0 ? (
-                  <span className="warn">{s.environment.ft_upstream_behind} commit(s) behind upstream</span>
-                ) : (
-                  <span className="good">up to date</span>
-                )}
-                {s.environment.ft_origin_sha && (s.environment.ft_origin_ahead ?? 0) > 0 && (
-                  <span className="mono">origin {(s.environment.ft_origin_ahead ?? 0)} ahead, {s.environment.ft_origin_behind ?? 0} behind</span>
-                )}
-                {s.environment.ft_dirty ? (
-                  <span className="warn">⚠ local changes present</span>
-                ) : null}
+                {/*
+                  The one line that answers "are we running the latest?": the commit the
+                  tree is on, and how far that has fallen behind the remote it tracks.
+                */}
+                <Field
+                  label="Commit"
+                  tone={(s.environment.ft_upstream_behind ?? 0) > 0 ? "warn" : "good"}
+                >
+                  <span className="mono">{text(s.environment.ft_local_sha)}</span>{" "}
+                  {(s.environment.ft_upstream_behind ?? 0) > 0
+                    ? `— ${s.environment.ft_upstream_behind} behind upstream ${s.environment.ft_upstream_sha}`
+                    : "— up to date with upstream"}
+                </Field>
+                <div className="facts">
+                  {(s.environment.ft_origin_ahead ?? 0) > 0 ||
+                  (s.environment.ft_origin_behind ?? 0) > 0 ? (
+                    <span className="mono">
+                      origin {s.environment.ft_origin_ahead ?? 0} ahead,{" "}
+                      {s.environment.ft_origin_behind ?? 0} behind
+                    </span>
+                  ) : null}
+                  {s.environment.ft_dirty ? (
+                    <span className="warn">working tree has local changes</span>
+                  ) : null}
+                  {/*
+                    Sitting on the right commit is not the same as running it: the kernels
+                    are compiled, so a pull that touched their sources leaves the engine on
+                    the old objects until someone rebuilds.
+                  */}
+                  {s.environment.ft_kernels_stale ? (
+                    <span className="warn">kernels older than csrc/ — rebuild to run this commit</span>
+                  ) : null}
+                </div>
               </>
             ) : (
-              <span className="dim">(git not available)</span>
+              <span className="dim">(no upstream remote, or git is not available)</span>
             )}
           </div>
         ) : null}

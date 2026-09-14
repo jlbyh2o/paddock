@@ -42,7 +42,12 @@ pub async fn run(
         Err(e) => (None, Some(e)),
     };
     let mut app = App::new(config, profiles, ft_ok, ft_err.clone(), tx.clone())?;
-    app.set_ft_checkout(crate::ft::checkout::check());
+    // Probed once at startup exactly as the TUI does it, and for the same reason: the
+    // Dashboard says which FreeToken is answering, and `--version` costs a process
+    // spawn, not a poll. Without this the web snapshot carries `ft_version: null`
+    // forever and the Engine pane simply omits the line.
+    let ft_version = app.ft.as_ref().and_then(crate::ft::locate::probe_version);
+    app.set_ft_version(ft_version);
     if let Some(e) = ft_err {
         app.error(e);
     }

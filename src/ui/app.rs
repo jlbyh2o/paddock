@@ -144,6 +144,9 @@ pub enum Message {
     },
     /// FreeToken's model registry, read once at startup.
     Architectures(Result<Vec<String>, String>),
+    /// The FreeToken checkout was read again. `None` means there is no checkout to
+    /// report on — a wheel install, or a tree git could not answer for.
+    Checkout(Option<Box<crate::ft::FtCheckout>>),
     /// A candidate repo's `config.json`, evaluated for compatibility.
     Compatibility(Box<Result<crate::compat::Report, String>>),
     /// The `.jinja` listing for a template repo.
@@ -1089,6 +1092,7 @@ impl App {
                 // inventing a verdict.
                 Err(e) => tracing::warn!("could not read FreeToken's model registry: {e}"),
             },
+            Message::Checkout(c) => self.set_ft_checkout(c.map(|c| *c)),
             Message::Compatibility(res) => {
                 self.hub_view.checking_compat = false;
                 match *res {

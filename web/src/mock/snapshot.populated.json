@@ -78,7 +78,7 @@
     "state": "serving"
   },
   "config": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-2074203/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-320279/config.toml",
     "confirm_destructive": true,
     "convert_preflight": true,
     "disk_free": {
@@ -101,7 +101,7 @@
     "poll_ms": 1000,
     "server_host": "0.0.0.0",
     "server_port": 1919,
-    "state_dir": "/home/user/.cache/tmp/ft-man-tests-2074203/state",
+    "state_dir": "/home/user/.cache/tmp/ft-man-tests-320279/state",
     "template_sources": [
       "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
     ],
@@ -164,17 +164,20 @@
   },
   "environment": {
     "endpoint": "http://127.0.0.1:1919",
-    "ft_checkout_note": "up to date",
+    "ft_checkout_note": "3 commits behind upstream",
+    "ft_checkout_path": "/home/user/FreeToken",
     "ft_dirty": false,
     "ft_display": null,
     "ft_error": null,
     "ft_found": false,
+    "ft_kernels_stale": false,
+    "ft_local_sha": "9f8e7d6",
     "ft_origin": null,
     "ft_origin_ahead": 0,
-    "ft_origin_behind": 0,
-    "ft_origin_sha": "a1b2c3d",
+    "ft_origin_behind": 3,
+    "ft_origin_sha": "9f8e7d6",
     "ft_program": null,
-    "ft_upstream_behind": 0,
+    "ft_upstream_behind": 3,
     "ft_upstream_sha": "a1b2c3d",
     "ft_version": "freetoken version 0.1.2",
     "hostname": "inference-01",
@@ -404,13 +407,13 @@
         "file_count": 12,
         "files_done": 3,
         "finished_at": null,
-        "id": 19,
+        "id": 47,
         "is_running": true,
         "rate_bps": 0.0,
         "ratio": 0.36666666666666664,
         "repo": "nvidia/GLM-5.2-NVFP4",
         "revision": "main",
-        "started_at": "2026-09-13T11:14:17.746579532-06:00",
+        "started_at": "2026-09-14T13:28:51.911304432-06:00",
         "status": {
           "kind": "running"
         },
@@ -425,7 +428,7 @@
         "elapsed_s": 0,
         "failure_reason": null,
         "finished_at": null,
-        "id": 38,
+        "id": 98,
         "is_running": true,
         "kind": "convert",
         "kind_label": "convert",
@@ -441,7 +444,7 @@
         "progress_detail": "27.9 GiB / 63.3 GiB  (experts)",
         "progress_ratio": 0.4411764705882353,
         "rate_bps": 0.0,
-        "started_at": "2026-09-13T11:14:17.746539372-06:00",
+        "started_at": "2026-09-14T13:28:51.911267350-06:00",
         "status": {
           "kind": "running"
         },
@@ -453,7 +456,7 @@
         "elapsed_s": 0,
         "failure_reason": "loading weights",
         "finished_at": null,
-        "id": 39,
+        "id": 99,
         "is_running": false,
         "kind": "bench",
         "kind_label": "bench",
@@ -469,7 +472,7 @@
         "progress_detail": "",
         "progress_ratio": null,
         "rate_bps": 0.0,
-        "started_at": "2026-09-13T11:14:17.746578305-06:00",
+        "started_at": "2026-09-14T13:28:51.911303273-06:00",
         "status": {
           "kind": "failed",
           "reason": "with status 1"
@@ -488,7 +491,7 @@
     "log_path": null
   },
   "models": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-2074203/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-320279/config.toml",
     "items": [
       {
         "arch": "Qwen3MoeForCausalLM",
@@ -517,7 +520,7 @@
         "is_partial": false,
         "max_position": 262144,
         "model_type": "qwen3_moe",
-        "modified_ms": 1789319657746,
+        "modified_ms": 1789414131911,
         "name": "Qwen3.6-35B-A3B",
         "num_experts": 128,
         "num_layers": 48,
@@ -1048,20 +1051,20 @@
   },
   "toasts": [
     {
-      "age_ms": 13,
-      "id": 39,
+      "age_ms": 14,
+      "id": 78,
       "kind": "info",
       "text": "engine started",
       "ttl_ms": 4000
     },
     {
-      "age_ms": 13,
-      "id": 40,
+      "age_ms": 14,
+      "id": 79,
       "kind": "warn",
       "text": "the hf CLI is not installed",
       "ttl_ms": 8000
     }
   ],
-  "ts_ms": 1789319657759,
+  "ts_ms": 1789414131925,
   "version": "0.3.0"
 }

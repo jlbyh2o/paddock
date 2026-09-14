@@ -1110,10 +1110,18 @@ pub struct EnvironmentSnapshot<'a> {
     ft_origin_behind: Option<usize>,
     ft_dirty: Option<bool>,
     ft_checkout_note: Option<String>,
+    /// The commit the working tree is on.
+    ft_local_sha: Option<&'a str>,
+    /// Which tree was read. The checkout is found at run time, so the pane has to be
+    /// able to say which one it found.
+    ft_checkout_path: Option<&'a str>,
+    /// The built kernels are older than the last commit to touch their sources: the tree
+    /// was pulled but not rebuilt, so the running engine is not the code on disk.
+    ft_kernels_stale: Option<bool>,
 }
 
 fn environment(app: &App) -> EnvironmentSnapshot<'_> {
-    let note = app.ft_checkout.as_ref().map(|c| checkout_note(c));
+    let note = app.ft_checkout.as_ref().map(checkout_note);
     EnvironmentSnapshot {
         ft_found: app.ft.is_some(),
         ft_program: app.ft.as_ref().map(|f| f.program.display().to_string()),
@@ -1132,6 +1140,9 @@ fn environment(app: &App) -> EnvironmentSnapshot<'_> {
         ft_origin_ahead: app.ft_checkout.as_ref().map(|c| c.origin_ahead),
         ft_origin_behind: app.ft_checkout.as_ref().map(|c| c.origin_behind),
         ft_dirty: app.ft_checkout.as_ref().map(|c| c.dirty),
+        ft_local_sha: app.ft_checkout.as_ref().map(|c| c.local_sha.as_str()),
+        ft_checkout_path: app.ft_checkout.as_ref().map(|c| c.path.as_str()),
+        ft_kernels_stale: app.ft_checkout.as_ref().and_then(|c| c.kernels_stale),
         ft_checkout_note: note,
     }
 }
@@ -1140,6 +1151,10 @@ fn environment(app: &App) -> EnvironmentSnapshot<'_> {
 fn checkout_note(c: &crate::ft::FtCheckout) -> String {
     if c.upstream_behind > 0 {
         format!("{} commits behind upstream", c.upstream_behind)
+    } else if c.kernels_stale == Some(true) {
+        // Current with upstream and still not running that code: the pull landed but
+        // the kernels were never rebuilt.
+        "kernels need a rebuild".into()
     } else if c.origin_ahead > 0 || c.origin_behind > 0 {
         format!(
             "{} ahead, {} behind origin",

@@ -1045,7 +1045,8 @@ export interface EnvironmentSnapshot {
   hub_token_source: string | null;
   endpoint: string;
   hostname: string;
-  // Local FreeToken vendor checkout status.
+  // Git status of the FreeToken checkout this machine builds from. Null throughout when
+  // there is no checkout — FreeToken installed from a wheel, or git unavailable.
   ft_upstream_sha: string | null;
   ft_origin_sha: string | null;
   ft_upstream_behind: number | null;
@@ -1053,6 +1054,12 @@ export interface EnvironmentSnapshot {
   ft_origin_behind: number | null;
   ft_dirty: boolean | null;
   ft_checkout_note: string | null;
+  /** The commit the working tree is on. */
+  ft_local_sha: string | null;
+  /** Which tree was read; it is resolved at run time, not baked into the binary. */
+  ft_checkout_path: string | null;
+  /** The built kernels predate their sources: pulled, but not rebuilt. */
+  ft_kernels_stale: boolean | null;
 }
 
 // ---------------------------------------------------------------- the snapshot

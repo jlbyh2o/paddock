@@ -298,10 +298,11 @@ async fn run(cli: Cli, config: Config, ft: Result<ft::Freetoken, String>) -> Res
         Err(e) => (None, Some(e)),
     };
     let mut app = App::new(config, profiles, ft_ok, ft_err.clone(), tx.clone())?;
-    app.set_ft_version(crate::ft::locate::probe_version(
-        &app.ft.as_ref().expect("app was constructed with ft_ok"),
-    ));
-    app.set_ft_checkout(ft::checkout::check());
+    // `ft` is None whenever locating FreeToken failed, which is the very case the
+    // `ft_err` arm below reports — so this has to be a probe of an Option, not an
+    // unwrap of one.
+    let ft_version = app.ft.as_ref().and_then(crate::ft::locate::probe_version);
+    app.set_ft_version(ft_version);
 
     if let Some(name) = &cli.tab {
         if let Some(t) = Tab::ALL.iter().find(|t| t.title().eq_ignore_ascii_case(name)) {
