@@ -349,6 +349,30 @@ textarea {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+/*
+ * Three fixed columns, filled top-to-bottom so each column is one subject: the
+ * Dashboard's six panes read as three pairs (§5.2), not as whatever the width
+ * happened to fit. Both rows are 1fr and the panes stretch, so every card on a
+ * row ends at the same line — the grid stays legible even when one pane has
+ * twice the fields of its neighbor. Adding a seventh pane would open a fourth
+ * column; give the grid a taller `grid-template-rows` instead.
+ */
+.panes.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  align-items: stretch;
+}
+
+@media (max-width: 1500px) {
+  .panes.three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: none;
+    grid-auto-rows: minmax(0, 1fr);
+    grid-auto-flow: row;
+  }
+}
+
 .panes.wide {
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
 }
@@ -356,8 +380,16 @@ textarea {
 @media (max-width: 1100px) {
   .panes,
   .panes.two,
-  .panes.wide {
+  .panes.wide,
+  .panes.three {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* One column: a shared row height would stretch every card to the tallest. */
+  .panes.three {
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    grid-auto-flow: row;
   }
 }
 
@@ -402,6 +434,8 @@ textarea {
 .pane-body {
   padding: 8px 10px;
   min-width: 0;
+  /* Take the slack in a stretched pane so the actions bar sits on the floor. */
+  flex: 1 1 auto;
 }
 
 .pane-body.flush {

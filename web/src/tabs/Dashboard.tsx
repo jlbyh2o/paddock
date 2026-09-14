@@ -93,7 +93,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
   const bench = hardware.bench_profile;
 
   return (
-    <div className="panes">
+    <div className="panes three">
       {/* Column 1: Engine + Throughput */}
       <Pane
         title="Engine"
