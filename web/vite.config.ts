@@ -17,6 +17,15 @@ import react from "@vitejs/plugin-react";
  * `"production"` for `npm run build`, so the render tests keep their fixture and the
  * shipped bundle carries no `assets/server-*.js`.
  */
+// This file is the one thing here that runs in Node rather than the browser, and the
+// project carries no `@types/node` on purpose: `src/` is a browser bundle, and the types
+// package is global, so installing it would put Buffer, __dirname and a
+// NodeJS.Timeout-returning setTimeout into the frontend's scope as well. One Node global
+// is used, so it is declared beside its only use. Without this the build passes on any
+// machine with a stray `@types/node` in a parent directory and fails on a clean runner,
+// which is exactly how it was found.
+declare const process: { env: Record<string, string | undefined> };
+
 export default defineConfig(({ mode }) => {
   const mock = process.env["VITE_MOCK"] === "1" || mode === "test";
   return {
