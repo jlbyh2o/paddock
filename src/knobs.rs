@@ -269,10 +269,12 @@ pub static KNOBS: &[Knob] = &[
                        "minimax_m3", "muse_glimmer", "gemma4"]),
         "auto", "Splits chain-of-thought into reasoning_content. 'off' leaves it inline in the message."),
     // ---- Multimodal ------------------------------------------------------
-    // Qwen3.6, Qwen3.8-Flash-Next and Qwen3-VL serve image input by default, and the
-    // encoder tower they build for it is taken out of the same VRAM the KV and expert
-    // pools are priced against. That makes this group a memory group as much as an API
-    // one, which is why it sits beside the MoE knobs rather than under "API behavior".
+    // Every family that registers a vision encoder serves image input by default — the Qwen
+    // families, and Gemma-4 since #467 — and the encoder tower built for it comes out of the
+    // same VRAM the KV and expert pools are priced against. That makes this group a memory
+    // group as much as an API one, which is why it sits beside the MoE knobs rather than
+    // under "API behavior". The flags are read in each family's own units, so the help below
+    // describes what they mean rather than quoting one family's numbers.
     knob!("text_model_only", "--text-model-only", "Text only", Group::Multimodal,
         Kind::Flag, "off",
         "Serve a multimodal checkpoint without its encoder towers: none are built, the VRAM they \
@@ -285,22 +287,25 @@ pub static KNOBS: &[Knob] = &[
     knob!("mm_encoder_weights", "--mm-encoder-weights", "Encoder weights", Group::Multimodal,
         Kind::Choice(&["host", "gpu"]), "host",
         "Where the encoder tower's block weights live. 'host' streams them from pinned host banks \
-         two blocks at a time behind the compute — about 60 MiB of VRAM rather than the whole \
-         tower, at roughly 17 ms instead of 7 ms for a 448x448 image. 'gpu' keeps them resident."),
+         two blocks at a time behind the compute, so the GPU holds two blocks instead of the whole \
+         tower: small images pay the copy time, large ones hide it. 'gpu' keeps them resident. An \
+         encoder with no block stack stays resident either way."),
     knob!("image_min_tokens", "--image-min-tokens", "Image min tokens", Group::Multimodal,
         Kind::Int { min: Some(1), max: None }, "the processor's own limit",
-        "Fewest tokens one image may take; smaller images are scaled up to it. Counted in the \
-         family's own units — Qwen VL spends one token per 32x32 pixels of the resized image. \
-         Only families with dynamic resolution honor it."),
+        "Fewest tokens one image may take; smaller images are scaled up to it. Each family reads \
+         this in its own units — a dynamic-resolution family as a pixel area, and a family with \
+         fixed budgets not at all, since it has nothing between its budgets to choose."),
     knob!("image_max_tokens", "--image-max-tokens", "Image max tokens", Group::Multimodal,
         Kind::Int { min: Some(1), max: None }, "the processor's own limit",
-        "Most tokens one image may take; larger images are scaled down to it. Same units as the \
-         minimum, and the number that decides how much prefill a single image can cost."),
+        "Most tokens one image may take, and so the cap on what one image costs in prefill. A \
+         family with fixed budgets picks the largest budget within it and refuses at start-up a \
+         maximum below its smallest — the one value here that can stop a serve from starting."),
     knob!("mm_processor_kwargs", "--mm-processor-kwargs", "Processor kwargs", Group::Multimodal,
         Kind::Text, "none",
-        "JSON object of extra keyword arguments for the checkpoint's image processor, for \
-         family-specific knobs — Qwen VL takes {\"size\": {\"longest_edge\": 1048576}}. Applied \
-         after the token budget, so it overrides it."),
+        "JSON object of extra keyword arguments for the checkpoint's image processor, for knobs \
+         the token budget does not cover — {\"size\": {\"longest_edge\": 1048576}} for a \
+         dynamic-resolution family, {\"max_soft_tokens\": 1120} for a fixed-budget one. Applied \
+         after the budget, so an explicit key wins."),
     knob!("mm_embed_cache_device", "--mm-embed-cache-device", "Embedding cache", Group::Multimodal,
         Kind::Choice(&["cpu", "cuda"]), "cpu",
         "Where encoded image embeddings wait between prefill chunks. 'cpu' keeps them out of the \

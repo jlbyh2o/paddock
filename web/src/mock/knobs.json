@@ -668,7 +668,7 @@
       "exclusive_with": [],
       "flag": "--mm-encoder-weights",
       "group": "multimodal",
-      "help": "Where the encoder tower's block weights live. 'host' streams them from pinned host banks two blocks at a time behind the compute — about 60 MiB of VRAM rather than the whole tower, at roughly 17 ms instead of 7 ms for a 448x448 image. 'gpu' keeps them resident.",
+      "help": "Where the encoder tower's block weights live. 'host' streams them from pinned host banks two blocks at a time behind the compute, so the GPU holds two blocks instead of the whole tower: small images pay the copy time, large ones hide it. 'gpu' keeps them resident. An encoder with no block stack stays resident either way.",
       "key": "mm_encoder_weights",
       "kind": {
         "kind": "choice",
@@ -684,7 +684,7 @@
       "exclusive_with": [],
       "flag": "--image-min-tokens",
       "group": "multimodal",
-      "help": "Fewest tokens one image may take; smaller images are scaled up to it. Counted in the family's own units — Qwen VL spends one token per 32x32 pixels of the resized image. Only families with dynamic resolution honor it.",
+      "help": "Fewest tokens one image may take; smaller images are scaled up to it. Each family reads this in its own units — a dynamic-resolution family as a pixel area, and a family with fixed budgets not at all, since it has nothing between its budgets to choose.",
       "key": "image_min_tokens",
       "kind": {
         "kind": "int",
@@ -698,7 +698,7 @@
       "exclusive_with": [],
       "flag": "--image-max-tokens",
       "group": "multimodal",
-      "help": "Most tokens one image may take; larger images are scaled down to it. Same units as the minimum, and the number that decides how much prefill a single image can cost.",
+      "help": "Most tokens one image may take, and so the cap on what one image costs in prefill. A family with fixed budgets picks the largest budget within it and refuses at start-up a maximum below its smallest — the one value here that can stop a serve from starting.",
       "key": "image_max_tokens",
       "kind": {
         "kind": "int",
@@ -712,7 +712,7 @@
       "exclusive_with": [],
       "flag": "--mm-processor-kwargs",
       "group": "multimodal",
-      "help": "JSON object of extra keyword arguments for the checkpoint's image processor, for family-specific knobs — Qwen VL takes {\"size\": {\"longest_edge\": 1048576}}. Applied after the token budget, so it overrides it.",
+      "help": "JSON object of extra keyword arguments for the checkpoint's image processor, for knobs the token budget does not cover — {\"size\": {\"longest_edge\": 1048576}} for a dynamic-resolution family, {\"max_soft_tokens\": 1120} for a fixed-budget one. Applied after the budget, so an explicit key wins.",
       "key": "mm_processor_kwargs",
       "kind": {
         "kind": "text"
