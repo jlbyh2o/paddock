@@ -776,13 +776,29 @@ pub fn summarize_upstream(app: &mut App) -> Outcome {
     let tx = app.tx.clone();
     tokio::spawn(async move {
         let res = client
-            .chat(&model, SUMMARY_SYSTEM, &prompt, 1200, std::time::Duration::from_secs(600))
+            .chat(
+                &model,
+                SUMMARY_SYSTEM,
+                &prompt,
+                SUMMARY_MAX_TOKENS,
+                Some("low"),
+                std::time::Duration::from_secs(600),
+            )
             .await
             .map_err(|e| format!("{e:#}"));
         let _ = tx.send(Message::UpstreamSummary(Box::new(res)));
     });
     Ok(Done::started())
 }
+
+/// Output budget for a summary, thinking included.
+///
+/// A reasoning model spends this before it answers, and the graded ladder the checkpoint
+/// advertises has no "off" gear on every family — so the request asks for the low gear and
+/// still leaves room for a model that thinks anyway. Six bullet points need a few hundred
+/// tokens; the rest of this is headroom for the reasoning that precedes them, because
+/// running out mid-thought produces no answer at all rather than a short one.
+const SUMMARY_MAX_TOKENS: u32 = 4096;
 
 /// Bytes of patch text sent with a summary request. Large enough for an ordinary upstream
 /// week, small enough that prefill is seconds rather than minutes on a loaded engine.

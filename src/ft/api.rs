@@ -120,6 +120,7 @@ impl Client {
         system: &str,
         user: &str,
         max_tokens: u32,
+        reasoning_effort: Option<&str>,
         timeout: Duration,
     ) -> Result<String> {
         #[derive(Serialize)]
@@ -134,6 +135,13 @@ impl Client {
             max_tokens: u32,
             temperature: f32,
             stream: bool,
+            /// Graded by the checkpoint's own template; `/v1/models` advertises the
+            /// vocabulary. Omitted rather than guessed when the caller has nothing to say,
+            /// and harmless where a template does not read it — Jinja never sees an
+            /// undeclared variable, which is why FreeToken broadcasts these rather than
+            /// routing them per family.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            reasoning_effort: Option<&'a str>,
         }
         let body = Body {
             model,
@@ -146,6 +154,7 @@ impl Client {
             // mode and the wording is not the point.
             temperature: 0.2,
             stream: false,
+            reasoning_effort,
         };
         let resp = self
             .http
@@ -169,8 +178,14 @@ impl Client {
         }
         // A reasoning model that spent its whole budget thinking answers with an empty
         // content and a full reasoning_content. Saying so beats returning nothing.
-        if message["reasoning_content"].as_str().is_some_and(|r| !r.trim().is_empty()) {
-            anyhow::bail!("the model reasoned to the token limit without writing an answer");
+        if let Some(thought) =
+            message["reasoning_content"].as_str().filter(|r| !r.trim().is_empty())
+        {
+            anyhow::bail!(
+                "the model spent all {max_tokens} tokens reasoning ({} of them) without \
+                 writing an answer",
+                thought.split_whitespace().count(),
+            );
         }
         anyhow::bail!("the model returned an empty answer");
     }
