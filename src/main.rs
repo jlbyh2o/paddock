@@ -298,6 +298,7 @@ async fn run(cli: Cli, config: Config, ft: Result<ft::Freetoken, String>) -> Res
         Err(e) => (None, Some(e)),
     };
     let mut app = App::new(config, profiles, ft_ok, ft_err.clone(), tx.clone())?;
+    app.set_ft_checkout(ft::checkout::check());
 
     if let Some(name) = &cli.tab {
         if let Some(t) = Tab::ALL.iter().find(|t| t.title().eq_ignore_ascii_case(name)) {

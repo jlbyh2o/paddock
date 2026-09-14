@@ -1043,6 +1043,14 @@ export interface EnvironmentSnapshot {
   hub_token_source: string | null;
   endpoint: string;
   hostname: string;
+  // Local FreeToken vendor checkout status.
+  ft_upstream_sha: string | null;
+  ft_origin_sha: string | null;
+  ft_upstream_behind: number | null;
+  ft_origin_ahead: number | null;
+  ft_origin_behind: number | null;
+  ft_dirty: boolean | null;
+  ft_checkout_note: string | null;
 }
 
 // ---------------------------------------------------------------- the snapshot

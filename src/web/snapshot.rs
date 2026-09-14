@@ -1101,9 +1101,18 @@ pub struct EnvironmentSnapshot<'a> {
     hub_token_source: Option<&'static str>,
     endpoint: &'a str,
     hostname: &'a str,
+    // Local FreeToken vendor checkout status.
+    ft_upstream_sha: Option<&'a str>,
+    ft_origin_sha: Option<&'a str>,
+    ft_upstream_behind: Option<usize>,
+    ft_origin_ahead: Option<usize>,
+    ft_origin_behind: Option<usize>,
+    ft_dirty: Option<bool>,
+    ft_checkout_note: Option<String>,
 }
 
 fn environment(app: &App) -> EnvironmentSnapshot<'_> {
+    let note = app.ft_checkout.as_ref().map(|c| checkout_note(c));
     EnvironmentSnapshot {
         ft_found: app.ft.is_some(),
         ft_program: app.ft.as_ref().map(|f| f.program.display().to_string()),
@@ -1115,5 +1124,28 @@ fn environment(app: &App) -> EnvironmentSnapshot<'_> {
         hub_token_source: app.hub_token.as_ref().map(|t| t.source),
         endpoint: app.client.base_url(),
         hostname: &app.host.hostname,
+        ft_upstream_sha: app.ft_checkout.as_ref().map(|c| c.upstream_sha.as_str()),
+        ft_origin_sha: app.ft_checkout.as_ref().map(|c| c.origin_sha.as_str()),
+        ft_upstream_behind: app.ft_checkout.as_ref().map(|c| c.upstream_behind),
+        ft_origin_ahead: app.ft_checkout.as_ref().map(|c| c.origin_ahead),
+        ft_origin_behind: app.ft_checkout.as_ref().map(|c| c.origin_behind),
+        ft_dirty: app.ft_checkout.as_ref().map(|c| c.dirty),
+        ft_checkout_note: note,
+    }
+}
+
+/// A short, human-readable summary for the dashboard.
+fn checkout_note(c: &crate::ft::FtCheckout) -> String {
+    if c.upstream_behind > 0 {
+        format!("{} commits behind upstream", c.upstream_behind)
+    } else if c.origin_ahead > 0 || c.origin_behind > 0 {
+        format!(
+            "{} ahead, {} behind origin",
+            c.origin_ahead, c.origin_behind
+        )
+    } else if c.dirty {
+        "local changes present".into()
+    } else {
+        "up to date".into()
     }
 }

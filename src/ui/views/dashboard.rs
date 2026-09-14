@@ -159,6 +159,56 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
+    // Local FreeToken vendor checkout git status.
+    if let Some(c) = &app.ft_checkout {
+        lines.push(Line::from(Span::styled(
+            format!("Local checkout  {}", c.local_sha),
+            t.label(),
+        )));
+        let upstream = crate::util::truncate(&c.upstream, (inner.width - 18).max(20) as usize);
+        lines.push(Line::from(Span::styled(
+            format!("  {upstream}"),
+            t.muted(),
+        )));
+        if c.upstream_sha.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  (could not read upstream; is git installed?)",
+                t.muted(),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("  upstream  {}", c.upstream_sha),
+                t.muted(),
+            )));
+            if c.upstream_behind > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("  ⚠ {} commit(s) behind upstream", c.upstream_behind),
+                    Style::default().fg(t.warn),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  ✓ up to date with upstream",
+                    Style::default().fg(t.good),
+                )));
+            }
+            if c.origin_behind > 0 || c.origin_ahead > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "  origin  {} ({} ahead, {} behind)",
+                        c.origin_sha, c.origin_ahead, c.origin_behind
+                    ),
+                    t.muted(),
+                )));
+            }
+            if c.dirty {
+                lines.push(Line::from(Span::styled(
+                    "  ⚠ working tree has local changes",
+                    Style::default().fg(t.warn),
+                )));
+            }
+        }
+    }
+
     f.render_widget(Paragraph::new(lines), inner);
 }
 

@@ -42,6 +42,7 @@ pub async fn run(
         Err(e) => (None, Some(e)),
     };
     let mut app = App::new(config, profiles, ft_ok, ft_err.clone(), tx.clone())?;
+    app.set_ft_checkout(crate::ft::checkout::check());
     if let Some(e) = ft_err {
         app.error(e);
     }

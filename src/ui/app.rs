@@ -14,7 +14,8 @@ use tokio::sync::mpsc;
 use crate::config::{Config, HubToken, Profile, Profiles};
 use crate::ft::proc::{JobKind, JobProgress, JobStatus};
 use crate::ft::{
-    api::CacheRebuild, types::*, Client, Engine, EngineEvent, EngineState, Freetoken, Job, JobEvent,
+    api::CacheRebuild, checkout::FtCheckout, types::*, Client, Engine, EngineEvent, EngineState,
+    Freetoken, Job, JobEvent,
 };
 use crate::hub::{Download, DownloadEvent, RepoFile, RepoInfo, RepoSummary};
 use crate::knobs::{Group, ServeConfig};
@@ -467,6 +468,8 @@ pub struct App {
     pub ft: Option<Freetoken>,
     /// Why the CLI could not be found, when it could not be.
     pub ft_error: Option<String>,
+    /// Local FreeToken vendor checkout git status. `None` when the vendor dir is absent.
+    pub ft_checkout: Option<FtCheckout>,
     /// The `hf` CLI that Hub downloads are delegated to. `None` means the Hub tab cannot
     /// download anything, which it says rather than failing at the keypress.
     pub hf_cli: Option<std::path::PathBuf>,
@@ -615,6 +618,7 @@ impl App {
             theme,
             ft,
             ft_error,
+            ft_checkout: None,
             client,
             tab: Tab::Dashboard,
             should_quit: false,
@@ -706,6 +710,11 @@ impl App {
     /// True when the server answered its last poll.
     pub fn server_reachable(&self) -> bool {
         self.telemetry.health.is_some() && self.telemetry.error.is_none()
+    }
+
+    /// Record the local FreeToken vendor checkout git status.
+    pub fn set_ft_checkout(&mut self, checkout: Option<FtCheckout>) {
+        self.ft_checkout = checkout;
     }
 
     pub fn engine_status_text(&self) -> String {

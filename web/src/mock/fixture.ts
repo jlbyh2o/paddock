@@ -1249,6 +1249,13 @@ export const fixture: Snapshot = {
     hub_token_source: "the HF_TOKEN environment variable",
     endpoint: "http://127.0.0.1:1919",
     hostname: "gpu-box",
+    ft_upstream_sha: "a1b2c3d",
+    ft_origin_sha: "e4f5g6h",
+    ft_upstream_behind: 3,
+    ft_origin_ahead: 5,
+    ft_origin_behind: 0,
+    ft_dirty: false,
+    ft_checkout_note: "3 commits behind upstream",
   },
 };
 

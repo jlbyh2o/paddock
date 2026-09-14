@@ -94,6 +94,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
 
   return (
     <div className="panes">
+      {/* Column 1: Engine + Throughput */}
       <Pane
         title="Engine"
         actions={
@@ -185,6 +186,31 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             KV holds {tokens(fit.usable)} of {tokens(fit.ceiling)} — plan a fix on the Serve tab
           </div>
         ) : null}
+        {s.environment.ft_checkout_note ? (
+          <div className="facts" style={{ borderTop: `1px solid var(--border)`, paddingTop: 6, marginTop: 6 }}>
+            <span className="mono" style={{ color: "var(--fg)", fontWeight: 600 }}>
+              Local checkout
+            </span>
+            {s.environment.ft_upstream_sha ? (
+              <>
+                <span className="mono">{s.environment.ft_upstream_sha}</span>
+                {s.environment.ft_upstream_behind !== null && s.environment.ft_upstream_behind > 0 ? (
+                  <span className="warn">{s.environment.ft_upstream_behind} commit(s) behind upstream</span>
+                ) : (
+                  <span className="good">up to date</span>
+                )}
+                {s.environment.ft_origin_sha && (s.environment.ft_origin_ahead ?? 0) > 0 && (
+                  <span className="mono">origin {(s.environment.ft_origin_ahead ?? 0)} ahead, {s.environment.ft_origin_behind ?? 0} behind</span>
+                )}
+                {s.environment.ft_dirty ? (
+                  <span className="warn">⚠ local changes present</span>
+                ) : null}
+              </>
+            ) : (
+              <span className="dim">(git not available)</span>
+            )}
+          </div>
+        ) : null}
         <Field label="Sampling">{text(telemetry.sampling_summary)}</Field>
         {telemetry.error ? (
           <Field label="Poll" tone="bad">
@@ -204,6 +230,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
         <Sparkline values={series.prefill_tps} label="prefill tokens per second" tone="dim" />
       </Pane>
 
+      {/* Column 2: Cache pools + GPU */}
       <Pane title="Cache pools">
         <Meter
           label="KV"
@@ -322,34 +349,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
         ) : null}
       </Pane>
 
-      <Pane title="Activity">
-        <Field label="In flight">
-          {count(stats?.requests.active)}{" "}
-          <span className="dim">{decimal(engine.completed_rate, 2)} completed/s</span>
-        </Field>
-        <Field label="Completed">{count(stats?.requests.completed)}</Field>
-        <Field label="Latency">
-          p95 {ms(stats?.requests.p95_ms)} · TTFT {ms(stats?.requests.ttft_mean_ms)}
-        </Field>
-        <Field label="Prompt tokens">{count(stats?.requests.prompt_tokens_total)}</Field>
-        <Field label="Output tokens">{count(stats?.requests.completion_tokens_total)}</Field>
-        {engine.prefix_reuse ? (
-          <Field label="Prefix reuse">{engine.prefix_reuse.summary}</Field>
-        ) : null}
-        {stats && stats.vram_bytes > 0 ? (
-          <Field label="Engine VRAM">{bytes(stats.vram_bytes)}</Field>
-        ) : null}
-        <Field label="Work">
-          {engine.active_jobs} job{engine.active_jobs === 1 ? "" : "s"} ·{" "}
-          {engine.active_downloads} download{engine.active_downloads === 1 ? "" : "s"}
-        </Field>
-        <Field label="Library">
-          {count(s.models.items.length)} checkpoint{s.models.items.length === 1 ? "" : "s"}
-        </Field>
-        <Sparkline values={series.active} label="concurrent requests" tone="dim" />
-        <div className="dim">concurrent requests</div>
-      </Pane>
-
+      {/* Column 3: Host + Activity */}
       <Pane
         title={`Host — ${hardware.host.hostname}`}
         note={`up ${duration(hardware.host.uptime_s)}`}
@@ -383,6 +383,34 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
         {s.environment.ft_error ? (
           <Bullets items={[{ level: "bad" as Severity, text: s.environment.ft_error }]} />
         ) : null}
+      </Pane>
+
+      <Pane title="Activity">
+        <Field label="In flight">
+          {count(stats?.requests.active)}{" "}
+          <span className="dim">{decimal(engine.completed_rate, 2)} completed/s</span>
+        </Field>
+        <Field label="Completed">{count(stats?.requests.completed)}</Field>
+        <Field label="Latency">
+          p95 {ms(stats?.requests.p95_ms)} · TTFT {ms(stats?.requests.ttft_mean_ms)}
+        </Field>
+        <Field label="Prompt tokens">{count(stats?.requests.prompt_tokens_total)}</Field>
+        <Field label="Output tokens">{count(stats?.requests.completion_tokens_total)}</Field>
+        {engine.prefix_reuse ? (
+          <Field label="Prefix reuse">{engine.prefix_reuse.summary}</Field>
+        ) : null}
+        {stats && stats.vram_bytes > 0 ? (
+          <Field label="Engine VRAM">{bytes(stats.vram_bytes)}</Field>
+        ) : null}
+        <Field label="Work">
+          {engine.active_jobs} job{engine.active_jobs === 1 ? "" : "s"} ·{" "}
+          {engine.active_downloads} download{engine.active_downloads === 1 ? "" : "s"}
+        </Field>
+        <Field label="Library">
+          {count(s.models.items.length)} checkpoint{s.models.items.length === 1 ? "" : "s"}
+        </Field>
+        <Sparkline values={series.active} label="concurrent requests" tone="dim" />
+        <div className="dim">concurrent requests</div>
       </Pane>
     </div>
   );
