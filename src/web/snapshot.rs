@@ -1105,6 +1105,19 @@ fn config(app: &App) -> ConfigSnapshot {
 
 // ---------------------------------------------------------------- environment
 
+/// A model-written summary of what upstream changed, and the conditions it was written
+/// under — which model, which range, and whether it saw the whole patch.
+#[derive(Serialize)]
+pub struct UpstreamSummaryOut<'a> {
+    range: &'a str,
+    commits: usize,
+    model: &'a str,
+    pending: bool,
+    truncated: bool,
+    text: Option<&'a str>,
+    error: Option<&'a str>,
+}
+
 #[derive(Serialize)]
 pub struct EnvironmentSnapshot<'a> {
     ft_found: bool,
@@ -1126,6 +1139,8 @@ pub struct EnvironmentSnapshot<'a> {
     ft_origin_behind: Option<usize>,
     ft_dirty: Option<bool>,
     ft_checkout_note: Option<String>,
+    /// The engine's summary of the upstream commits, once asked for. Null until then.
+    upstream_summary: Option<UpstreamSummaryOut<'a>>,
     /// The commit the working tree is on.
     ft_local_sha: Option<&'a str>,
     /// Which tree was read. The checkout is found at run time, so the pane has to be
@@ -1160,6 +1175,15 @@ fn environment(app: &App) -> EnvironmentSnapshot<'_> {
         ft_checkout_path: app.ft_checkout.as_ref().map(|c| c.path.as_str()),
         ft_kernels_stale: app.ft_checkout.as_ref().and_then(|c| c.kernels_stale),
         ft_checkout_note: note,
+        upstream_summary: app.upstream_summary.as_ref().map(|s| UpstreamSummaryOut {
+            range: &s.range,
+            commits: s.commits,
+            model: &s.model,
+            pending: s.pending,
+            truncated: s.truncated,
+            text: s.text.as_deref(),
+            error: s.error.as_deref(),
+        }),
     }
 }
 

@@ -49,6 +49,9 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
   const rescan = useCallback(() => {
     run(api.rescanModels());
   }, []);
+  const summarize = useCallback(() => {
+    run(api.summarizeUpstream());
+  }, []);
 
   useTabKeys(
     useCallback(
@@ -69,11 +72,14 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
           case "r":
             rescan();
             return true;
+          case "u":
+            summarize();
+            return true;
           default:
             return false;
         }
       },
-      [start, stop, forceStop, smoke, rescan],
+      [start, stop, forceStop, smoke, rescan, summarize],
     ),
   );
 
@@ -91,6 +97,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     .filter((part): part is string => Boolean(part))
     .join(" · ");
 
+  const summary = s.environment.upstream_summary;
   const gpus = hardware.gpus;
   const bench = hardware.bench_profile;
 
@@ -149,6 +156,27 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             <button type="button" className="btn" onClick={rescan}>
               Rescan <span className="dim">(r)</span>
             </button>
+            {/*
+              Only offered when there is something to summarize and something to ask. The
+              button is the whole feature's discoverability, so it says which of the two is
+              missing rather than sitting there gray.
+            */}
+            {(s.environment.ft_upstream_behind ?? 0) > 0 ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={summarize}
+                disabled={!engine.server_reachable || s.environment.upstream_summary?.pending}
+                title={
+                  !engine.server_reachable
+                    ? "no engine is answering; start one to ask it"
+                    : "ask the loaded model what the upstream commits change"
+                }
+              >
+                {s.environment.upstream_summary?.pending ? "Summarizing…" : "What changed?"}{" "}
+                <span className="dim">(u)</span>
+              </button>
+            ) : null}
             {/*
               Under the buttons rather than in the pane header: this sentence is about
               what can be started right now, and in the header it pushed the pane's own
@@ -233,6 +261,37 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             ) : (
               <span className="dim">(no upstream remote, or git is not available)</span>
             )}
+            {summary ? (
+              <div className="summary">
+                <div className="summary-head">
+                  <span className="mono">{summary.range}</span>
+                  <span className="dim">
+                    {summary.commits} commit{summary.commits === 1 ? "" : "s"} · {summary.model}
+                  </span>
+                </div>
+                {summary.pending ? (
+                  <p className="dim">asking the model…</p>
+                ) : summary.error ? (
+                  <p className="bad">{summary.error}</p>
+                ) : (
+                  <>
+                    {summary.truncated ? (
+                      <p className="dim">
+                        the patch was truncated to fit; the diffstat the model saw was complete
+                      </p>
+                    ) : null}
+                    {/*
+                      Written by a language model about a diff, so it is shown as what it is
+                      — an account to check, not a changelog. Paragraphs and list items are
+                      kept as the model wrote them rather than reflowed into one block.
+                    */}
+                    {summary.text?.split("\n").map((line, i) =>
+                      line.trim() === "" ? null : <p key={i}>{line}</p>,
+                    )}
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
         ) : null}
         <Field label="Sampling">{text(telemetry.sampling_summary)}</Field>

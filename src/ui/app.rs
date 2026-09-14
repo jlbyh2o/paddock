@@ -101,6 +101,25 @@ pub struct Telemetry {
     pub at: Option<Instant>,
 }
 
+/// A summary of the upstream commits this checkout is missing, written by the engine.
+///
+/// Kept whatever the outcome, refusals included: having asked and been told why not is a
+/// different state from never having asked, and the pane says so.
+#[derive(Debug, Clone)]
+pub struct UpstreamSummary {
+    /// The commit range summarized, so an answer is never read against the wrong diff.
+    pub range: String,
+    pub commits: usize,
+    /// The model that wrote it. A summary is only as good as what was loaded at the time.
+    pub model: String,
+    /// True while the request is out.
+    pub pending: bool,
+    /// Whether the patch was cut to fit, which the reader should weigh the answer against.
+    pub truncated: bool,
+    pub text: Option<String>,
+    pub error: Option<String>,
+}
+
 /// The chat templates a repo holds, at the revision the listing resolved to.
 #[derive(Debug)]
 pub struct TemplateListing {
@@ -147,6 +166,8 @@ pub enum Message {
     },
     /// FreeToken's model registry, read once at startup.
     Architectures(Result<Vec<String>, String>),
+    /// The engine finished summarizing the upstream commits.
+    UpstreamSummary(Box<Result<String, String>>),
     /// The FreeToken checkout was read again. `None` means there is no checkout to
     /// report on — a wheel install, or a tree git could not answer for.
     Checkout(Option<Box<crate::ft::FtCheckout>>),
@@ -478,6 +499,8 @@ pub struct App {
     pub ft_version: Option<String>,
     /// Local FreeToken vendor checkout git status. `None` when the vendor dir is absent.
     pub ft_checkout: Option<FtCheckout>,
+    /// The engine's account of what upstream changed, once asked for.
+    pub upstream_summary: Option<UpstreamSummary>,
     /// The `hf` CLI that Hub downloads are delegated to. `None` means the Hub tab cannot
     /// download anything, which it says rather than failing at the keypress.
     pub hf_cli: Option<std::path::PathBuf>,
@@ -628,6 +651,7 @@ impl App {
             ft_error,
             ft_version: None,
             ft_checkout: None,
+            upstream_summary: None,
             client,
             tab: Tab::Dashboard,
             should_quit: false,
@@ -1117,6 +1141,15 @@ impl App {
                 // inventing a verdict.
                 Err(e) => tracing::warn!("could not read FreeToken's model registry: {e}"),
             },
+            Message::UpstreamSummary(res) => {
+                if let Some(s) = self.upstream_summary.as_mut() {
+                    s.pending = false;
+                    match *res {
+                        Ok(text) => s.text = Some(text),
+                        Err(e) => s.error = Some(e),
+                    }
+                }
+            }
             Message::Checkout(c) => self.set_ft_checkout(c.map(|c| *c)),
             Message::Compatibility(res) => {
                 self.hub_view.checking_compat = false;

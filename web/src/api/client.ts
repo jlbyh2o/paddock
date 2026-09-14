@@ -229,6 +229,9 @@ export const api = {
   /** ⚠ confirms. */
   engineStop: (req: EngineStopRequest): Promise<ActionReply> => post("/api/engine/stop", req),
   smokeTest: (): Promise<ActionReply> => post("/api/engine/smoke-test", {}),
+  /** Ask the loaded model what the upstream commits change; the answer lands in the snapshot. */
+  summarizeUpstream: (): Promise<StartedReply> =>
+    post("/api/engine/summarize-upstream", {}),
 
   // ---- models (18-21) ----------------------------------------------------
   rescanModels: (): Promise<StartedReply> => post("/api/models/rescan", {}),

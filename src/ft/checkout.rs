@@ -177,6 +177,55 @@ fn newest_object(dir: &Path) -> Option<u64> {
     newest
 }
 
+/// What upstream has that this checkout does not, as text to hand to a model.
+#[derive(Debug, Clone)]
+pub struct UpstreamChanges {
+    /// `9535656..e0886cc`, so a summary can be checked against the range it describes.
+    pub range: String,
+    pub commits: usize,
+    /// Subjects and bodies, oldest first — the authors' own account of each change.
+    pub log: String,
+    /// `git diff --stat`: which files moved and by how much.
+    pub stat: String,
+    /// The patch itself, cut at a budget.
+    pub patch: String,
+    /// Whether the patch was cut. Said out loud in the prompt, because a model shown half
+    /// a diff without being told will describe the half it saw as the whole.
+    pub truncated: bool,
+}
+
+/// Collect the commits between this checkout and `upstream/main`.
+///
+/// Reads the remote-tracking ref as it stands; the periodic check is what keeps that
+/// current, so this never reaches the network and cannot hang on it.
+///
+/// `patch_budget` is in bytes of patch text. The point of the cut is that the log and the
+/// stat — the parts that describe the change rather than spell it out — must always fit,
+/// so they are gathered whole and only the patch is trimmed.
+pub fn upstream_changes(dir: &Path, patch_budget: usize) -> Option<UpstreamChanges> {
+    let local = git_get("rev-parse --short HEAD", dir)?;
+    let upstream = git_get("rev-parse --short upstream/main", dir)?;
+    if local == upstream {
+        return None;
+    }
+    let range = format!("{local}..{upstream}");
+    let log = git_args(&["log", "--reverse", "--no-merges", "--format=%h %s%n%b", &range], dir)?;
+    let commits = git_args(&["rev-list", "--count", "--no-merges", &range], dir)
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    let stat = git_args(&["diff", "--stat", &range], dir).unwrap_or_default();
+    let full = git_args(&["diff", &range], dir).unwrap_or_default();
+    let truncated = full.len() > patch_budget;
+    // Cut on a line boundary: half a hunk header teaches a model less than no hunk.
+    let patch = if truncated {
+        let cut = full[..patch_budget].rfind('\n').unwrap_or(patch_budget);
+        full[..cut].to_string()
+    } else {
+        full
+    };
+    Some(UpstreamChanges { range, commits, log, stat, patch, truncated })
+}
+
 /// Run a git command, discarding its output.
 fn git_run(cmd: &str, workdir: &Path) {
     std::process::Command::new("git")
@@ -186,6 +235,18 @@ fn git_run(cmd: &str, workdir: &Path) {
         .stderr(std::process::Stdio::null())
         .status()
         .ok();
+}
+
+/// Run a git command given as separate arguments, for the ones whose arguments contain
+/// spaces — a `--format` string is one word to git and several to `split_whitespace`.
+fn git_args(args: &[&str], workdir: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(workdir)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
 /// Run a git command and return trimmed stdout, or `None` on failure.

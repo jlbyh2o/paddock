@@ -727,6 +727,78 @@ pub fn search(app: &mut App, query: &str) -> Outcome {
     Ok(Done::started())
 }
 
+/// Ask the running engine what upstream changed.
+///
+/// The one place ft-man uses the model it supervises for something other than proving the
+/// server answers. The material is the commit log, the diffstat and as much of the patch
+/// as the budget allows; the log and the stat always fit, and only the patch is cut,
+/// because they are the parts that describe a change rather than spell it out.
+///
+/// Every refusal here is a different missing precondition, and each says which: there is
+/// no checkout to read, it is already current, or nothing is loaded to ask.
+pub fn summarize_upstream(app: &mut App) -> Outcome {
+    let Some(dir) = crate::ft::checkout::locate(&app.config.freetoken, app.ft.as_ref()) else {
+        return Err(warn_off(app, 503, "no FreeToken checkout to compare against"));
+    };
+    if !app.server_reachable() {
+        return Err(warn_off(app, 409, "no engine is answering; start one to ask it"));
+    }
+    let Some(model) = app.current_model() else {
+        return Err(warn_off(app, 409, "no model is loaded to ask"));
+    };
+    let Some(changes) = crate::ft::checkout::upstream_changes(&dir, PATCH_BUDGET) else {
+        return Err(warn_off(app, 409, "this checkout is already at upstream"));
+    };
+
+    let prompt = format!(
+        "Below are the commits {range} that the local FreeToken checkout is missing.\n\n\
+         COMMIT LOG (oldest first)\n{log}\n\n\
+         DIFFSTAT\n{stat}\n\n\
+         PATCH{cut}\n{patch}\n",
+        range = changes.range,
+        log = changes.log,
+        stat = changes.stat,
+        cut =
+            if changes.truncated { " (truncated — the diffstat above is complete)" } else { "" },
+        patch = changes.patch,
+    );
+    app.upstream_summary = Some(crate::ui::app::UpstreamSummary {
+        range: changes.range,
+        commits: changes.commits,
+        model: model.clone(),
+        pending: true,
+        truncated: changes.truncated,
+        text: None,
+        error: None,
+    });
+
+    let client = app.client.clone();
+    let tx = app.tx.clone();
+    tokio::spawn(async move {
+        let res = client
+            .chat(&model, SUMMARY_SYSTEM, &prompt, 1200, std::time::Duration::from_secs(600))
+            .await
+            .map_err(|e| format!("{e:#}"));
+        let _ = tx.send(Message::UpstreamSummary(Box::new(res)));
+    });
+    Ok(Done::started())
+}
+
+/// Bytes of patch text sent with a summary request. Large enough for an ordinary upstream
+/// week, small enough that prefill is seconds rather than minutes on a loaded engine.
+const PATCH_BUDGET: usize = 64 * 1024;
+
+/// What the engine is asked to be. Deliberately narrow: the reader is an operator deciding
+/// whether to pull, not a reviewer, and the failure mode of a model shown a diff is
+/// confident invention about code it cannot see.
+const SUMMARY_SYSTEM: &str = "You summarize changes to FreeToken, a local LLM inference \
+    engine, for the operator of a machine running it. Answer in at most six bullet points, \
+    plainest first. Say what changed and what it means for someone running the engine — new \
+    or renamed CLI flags, changed defaults, new model support, anything that alters how a \
+    server should be started or what it will accept. If the patch was truncated, say which \
+    parts of your answer rest on the diffstat alone. Do not speculate about code you were \
+    not shown, and do not repeat the commit subjects back as a list.";
+
 /// List a repo's files and judge whether FreeToken could run it.
 pub fn open_repo(app: &mut App, repo_id: &str, revision: Option<&str>) -> Outcome {
     let repo_id = repo_id.to_string();

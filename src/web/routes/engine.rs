@@ -23,3 +23,12 @@ pub async fn stop(State(state): State<Shared>, Body(req): Body<StopRequest>) -> 
 pub async fn smoke_test(State(state): State<Shared>, Body(_): Body<Empty>) -> ApiResult<Reply> {
     reply(state.act(actions::smoke_test))
 }
+
+/// Ask the loaded model what upstream changed. Returns as soon as the request is out; the
+/// answer arrives in the snapshot, because a summary takes longer than a request should.
+pub async fn summarize_upstream(
+    State(state): State<Shared>,
+    Body(_): Body<Empty>,
+) -> ApiResult<Reply> {
+    reply(state.act(actions::summarize_upstream))
+}

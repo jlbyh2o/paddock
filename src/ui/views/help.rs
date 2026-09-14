@@ -29,6 +29,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("S", "force-stop the engine (SIGKILL)"),
             ("t", "run a /generate smoke test"),
             ("r", "rescan the model library"),
+            ("u", "ask the loaded model what the upstream commits change"),
         ],
     ),
     (

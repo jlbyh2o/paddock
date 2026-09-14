@@ -98,6 +98,40 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
+    // What the engine made of the commits this checkout is behind, once asked (u).
+    if let Some(sum) = &app.upstream_summary {
+        lines.push(Line::from(""));
+        let head = format!(
+            "Upstream {} ({} commit{})",
+            sum.range,
+            sum.commits,
+            if sum.commits == 1 { "" } else { "s" }
+        );
+        lines.push(Line::from(Span::styled(head, t.label())));
+        if sum.pending {
+            lines.push(Line::from(Span::styled(format!("  asking {}…", sum.model), t.muted())));
+        } else if let Some(e) = &sum.error {
+            lines.push(Line::from(Span::styled(
+                crate::util::truncate(&format!("  {e}"), inner.width.saturating_sub(1) as usize),
+                Style::default().fg(t.bad),
+            )));
+        } else if let Some(text) = &sum.text {
+            if sum.truncated {
+                lines.push(Line::from(Span::styled(
+                    "  (the patch was truncated to fit)",
+                    t.muted(),
+                )));
+            }
+            // Wrapped to the pane rather than truncated: this is prose, and a summary cut
+            // at the right margin is a summary of nothing.
+            for line in text.lines() {
+                for piece in crate::util::wrap(line, inner.width.saturating_sub(3) as usize) {
+                    lines.push(Line::from(Span::styled(format!("  {piece}"), t.muted())));
+                }
+            }
+        }
+    }
+
     if let Some(err) = &app.poll_error() {
         let age = app
             .telemetry

@@ -322,6 +322,11 @@ fn dashboard_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('t') => {
             let _ = actions::smoke_test(app);
         }
+        // `u` for upstream: ask the loaded model what the commits this checkout is behind
+        // actually change.
+        KeyCode::Char('u') => {
+            let _ = actions::summarize_upstream(app);
+        }
         _ => {}
     }
 }

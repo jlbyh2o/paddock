@@ -135,6 +135,42 @@ pub fn truncate_left(s: &str, max: usize) -> String {
 }
 
 /// Clamp a ratio into `0.0..=1.0`, mapping non-finite values to 0.
+/// Break a line into pieces no wider than `max` columns, on spaces where there is one.
+///
+/// For prose the terminal has to show whole — a model's summary, where the tail of a
+/// sentence is not the part worth dropping. Everything else here truncates instead,
+/// because a field's value has a shape and a wrapped one loses it.
+///
+/// A word longer than `max` (a path, a flag) is emitted on its own line over-long rather
+/// than cut: the reader can at least copy it.
+pub fn wrap(line: &str, max: usize) -> Vec<String> {
+    if max == 0 {
+        return vec![line.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in line.split_whitespace() {
+        let width = current.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+        } else if width + 1 + word.chars().count() <= max {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            out.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    // A blank line is a paragraph break and has to survive as one.
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
 pub fn ratio(num: u64, den: u64) -> f64 {
     if den == 0 {
         return 0.0;
@@ -187,5 +223,26 @@ impl History {
     pub fn tail(&self, n: usize) -> &[u64] {
         let start = self.buf.len().saturating_sub(n);
         &self.buf[start..]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Wrapping is for prose, so the words have to survive and the width has to hold.
+    #[test]
+    fn wrap_breaks_on_spaces_and_keeps_every_word() {
+        let line = "the engine now serves image input on the Qwen families";
+        let pieces = wrap(line, 20);
+        assert!(pieces.iter().all(|p| p.chars().count() <= 20), "{pieces:?}");
+        assert_eq!(pieces.join(" "), line, "no word is lost or duplicated");
+
+        // A word wider than the column goes out whole rather than cut in half.
+        let long = wrap("--allowed-local-media-path", 10);
+        assert_eq!(long, vec!["--allowed-local-media-path"]);
+
+        // A blank line is a paragraph break, not nothing.
+        assert_eq!(wrap("", 20), vec![String::new()]);
     }
 }

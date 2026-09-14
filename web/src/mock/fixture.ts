@@ -1266,6 +1266,24 @@ export const fixture: Snapshot = {
     ft_local_sha: "9f8e7d6",
     ft_checkout_path: "/home/user/FreeToken",
     ft_kernels_stale: false,
+    // A summary already written, because the pane's interesting state is the one with
+    // prose in it rather than the null it starts at.
+    upstream_summary: {
+      range: "9535656..e0886cc",
+      commits: 5,
+      model: "Qwen3.6-35B-A3B",
+      pending: false,
+      truncated: true,
+      text:
+        "- Image input is served on the Qwen families, so a vision-capable checkpoint now " +
+        "builds an encoder tower by default and takes VRAM the KV and expert pools were " +
+        "using. `--text-model-only` gives it back.\n" +
+        "- Nine new `ft serve` flags govern it, including a per-image token budget and an " +
+        "allowlist for the image URLs a client may send.\n" +
+        "- `/v1/stats` now reports `model.input_modalities`, which is how a client can tell " +
+        "whether attachments will be accepted.",
+      error: null,
+    },
   },
 };
 

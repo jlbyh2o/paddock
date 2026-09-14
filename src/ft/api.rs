@@ -106,6 +106,75 @@ impl Client {
 
     /// Raw completion, bypassing the chat template. Used by the Dashboard smoke test to
     /// prove the engine actually generates. Returns the streamed text.
+    /// One chat completion, through the OpenAI-compatible route.
+    ///
+    /// `/generate` is the raw-completion smoke test and takes no chat template; every
+    /// model ft-man serves is instruction-tuned, so anything that wants an answer rather
+    /// than a continuation has to go through the template `/v1/chat/completions` applies.
+    ///
+    /// The timeout is the caller's because this is the one request whose length is the
+    /// model's decision: a long summary of a long diff is the request working, not hanging.
+    pub async fn chat(
+        &self,
+        model: &str,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+        timeout: Duration,
+    ) -> Result<String> {
+        #[derive(Serialize)]
+        struct Message<'a> {
+            role: &'a str,
+            content: &'a str,
+        }
+        #[derive(Serialize)]
+        struct Body<'a> {
+            model: &'a str,
+            messages: Vec<Message<'a>>,
+            max_tokens: u32,
+            temperature: f32,
+            stream: bool,
+        }
+        let body = Body {
+            model,
+            messages: vec![
+                Message { role: "system", content: system },
+                Message { role: "user", content: user },
+            ],
+            max_tokens,
+            // Low, not zero: this is a summary of a diff, where invention is the failure
+            // mode and the wording is not the point.
+            temperature: 0.2,
+            stream: false,
+        };
+        let resp = self
+            .http
+            .post(self.url("/v1/chat/completions"))
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await
+            .context("POST /v1/chat/completions")?;
+        let status = resp.status();
+        let bytes = resp.bytes().await.context("reading /v1/chat/completions")?;
+        if !status.is_success() {
+            anyhow::bail!("/v1/chat/completions returned {status}: {}", snippet(&bytes));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("decoding /v1/chat/completions: {}", snippet(&bytes)))?;
+        let message = &v["choices"][0]["message"];
+        let text = message["content"].as_str().unwrap_or_default().trim();
+        if !text.is_empty() {
+            return Ok(text.to_string());
+        }
+        // A reasoning model that spent its whole budget thinking answers with an empty
+        // content and a full reasoning_content. Saying so beats returning nothing.
+        if message["reasoning_content"].as_str().is_some_and(|r| !r.trim().is_empty()) {
+            anyhow::bail!("the model reasoned to the token limit without writing an answer");
+        }
+        anyhow::bail!("the model returned an empty answer");
+    }
+
     pub async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String> {
         #[derive(Serialize)]
         struct Body<'a> {

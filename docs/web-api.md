@@ -777,6 +777,7 @@ default 30), and every field below is `null` when no such tree was found.
 | `ft_dirty` | boolean \| null | The working tree has uncommitted changes |
 | `ft_kernels_stale` | boolean \| null | The newest built `.so` under `python/freetoken/kernel/` predates the last commit to touch `kernel/csrc/`: pulled, but not rebuilt, so the engine is not running the code on disk. `null` when nothing is built to compare against |
 | `ft_checkout_note` | string \| null | The one-line summary the panes gate on, worst-first: behind upstream, then kernels stale, then diverged from origin, then dirty, then `"up to date"` |
+| `upstream_summary` | object \| null | What the loaded model made of the commits this checkout is behind, once `POST /api/engine/summarize-upstream` has been called; `null` until then. `{range, commits, model, pending, truncated, text, error}` — `pending` while the request is out, then exactly one of `text` or `error`. `model` and `truncated` are carried because a summary is only as good as what was loaded and how much of the patch fitted, and the reader is entitled to weigh it |
 
 ---
 
@@ -1003,6 +1004,7 @@ snapshot's `confirm`", not as "done".**
 | 15 | `POST /api/engine/start` | Dashboard `e`, Serve `g`, Models `s` | `input::start_engine` |
 | 16 | `POST /api/engine/stop` | Dashboard `s` / `S` | `request_stop` |
 | 17 | `POST /api/engine/smoke-test` | Dashboard `t` | `smoke_test` |
+| 17a | `POST /api/engine/summarize-upstream` | Dashboard `u` | `summarize_upstream` |
 | 18 | `POST /api/models/rescan` | Dashboard `r`, Models `r` | `App::request_scan` |
 | 19 | `POST /api/models/use` | Models `Enter` / `s` | `use_selected_model` |
 | 20 | `POST /api/models/convert` | Models `c` | `convert_selected` → `begin_conversion` |
@@ -1117,6 +1119,19 @@ Never confirms.
   outright.
 
 **`POST /api/engine/smoke-test`** — body `{}`. Mirrors `smoke_test`.
+
+**`POST /api/engine/summarize-upstream`** — body `{}`. Asks the loaded model what the
+commits between this checkout and `upstream/main` change, and answers `{"status": "started"}`
+as soon as the request is out: a summary takes longer than a request should, so the answer
+arrives in the snapshot at `environment.upstream_summary` rather than in this reply. Refuses
+with the precondition that is missing — `503` when there is no checkout to read, `409` when
+it is already at upstream, no engine is answering, or no model is loaded.
+
+The material sent is the commit log and the complete diffstat, plus up to 64 KiB of patch;
+the log and the stat always fit and only the patch is cut, because they describe a change
+rather than spell it out. When the patch is cut the prompt says so, and
+`upstream_summary.truncated` says so to the reader too — a summary written from half a diff
+is worth reading differently from one written from all of it.
 
 * `409 "the server is not answering"` when `!app.server_reachable()`.
 * Otherwise `200 {"status":"started"}`; the result arrives as a success or error toast

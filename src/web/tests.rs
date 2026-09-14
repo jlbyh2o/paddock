@@ -1340,6 +1340,22 @@ async fn wire_populated() -> Shared {
     // line the Engine pane draws is seeded rather than read.
     app.set_ft_version(Some("freetoken version 0.1.2".into()));
 
+    // An answer already written, because the pane's interesting state is the one holding
+    // prose rather than the null it starts at.
+    app.upstream_summary = Some(crate::ui::app::UpstreamSummary {
+        range: "9535656..e0886cc".into(),
+        commits: 5,
+        model: "Qwen3.6-35B-A3B".into(),
+        pending: false,
+        truncated: true,
+        text: Some(
+            "- Image input is served on the Qwen families, so a vision-capable checkpoint \
+             now builds an encoder tower by default."
+                .into(),
+        ),
+        error: None,
+    });
+
     // A checkout behind upstream, because that is the state the Engine pane has something
     // to say about. Reading a real one here would make the fixture depend on whichever
     // tree the machine running the tests happens to have.
