@@ -32,3 +32,12 @@ pub async fn summarize_upstream(
 ) -> ApiResult<Reply> {
     reply(state.act(actions::summarize_upstream))
 }
+
+/// Pull the FreeToken checkout and reinstall it. Answers with a pending confirmation
+/// rather than doing it: this rewrites the files the engine loads from.
+pub async fn update_freetoken(
+    State(state): State<Shared>,
+    Body(_): Body<Empty>,
+) -> ApiResult<Reply> {
+    reply(state.act(actions::update_freetoken))
+}

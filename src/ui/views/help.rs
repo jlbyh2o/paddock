@@ -30,6 +30,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("t", "run a /generate smoke test"),
             ("r", "rescan the model library"),
             ("u", "ask the loaded model what the upstream commits change"),
+            ("U", "pull and reinstall FreeToken (engine must be stopped)"),
         ],
     ),
     (

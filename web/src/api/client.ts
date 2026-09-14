@@ -232,6 +232,8 @@ export const api = {
   /** Ask the loaded model what the upstream commits change; the answer lands in the snapshot. */
   summarizeUpstream: (): Promise<StartedReply> =>
     post("/api/engine/summarize-upstream", {}),
+  /** Pull the FreeToken checkout and reinstall it. Answers with a confirmation to accept. */
+  updateFreetoken: (): Promise<ActionReply> => post("/api/freetoken/update", {}),
 
   // ---- models (18-21) ----------------------------------------------------
   rescanModels: (): Promise<StartedReply> => post("/api/models/rescan", {}),

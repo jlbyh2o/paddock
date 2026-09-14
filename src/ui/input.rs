@@ -327,6 +327,10 @@ fn dashboard_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('u') => {
             let _ = actions::summarize_upstream(app);
         }
+        // Shift-u: read about it with `u`, then do it with `U`.
+        KeyCode::Char('U') => {
+            let _ = actions::update_freetoken(app);
+        }
         _ => {}
     }
 }

@@ -627,6 +627,9 @@ pub enum JobKind {
     Convert,
     /// `ft bench bw` — CPU vs PCIe bandwidth calibration.
     Bench,
+    /// Pull the FreeToken checkout and reinstall it. Not an `ft` subcommand: the source
+    /// tree is updated by git and the package manager that owns the venv.
+    Update,
 }
 
 impl JobKind {
@@ -634,6 +637,7 @@ impl JobKind {
         match self {
             JobKind::Convert => "convert",
             JobKind::Bench => "bench",
+            JobKind::Update => "update",
         }
     }
 }
@@ -852,9 +856,69 @@ pub fn spawn_job(
     let mut argv: Vec<String> = ft.prefix.clone();
     argv.extend(subcommand.iter().map(|s| s.to_string()));
     argv.extend(args.iter().cloned());
+    let display = shell_words::join(
+        std::iter::once(ft.display_program().as_str()).chain(argv.iter().map(String::as_str)),
+    );
+    spawn_command(
+        Run {
+            program: ft.program.clone(),
+            args: argv,
+            cwd: None,
+            display,
+            kind,
+            title,
+            log_capacity,
+        },
+        env,
+        id,
+        log_path,
+        events,
+    )
+}
 
-    let mut cmd = Command::new(&ft.program);
+/// A program to run as a tracked job, for work that is not an `ft` subcommand.
+pub struct Run {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// Working directory, when the command means something only inside one.
+    pub cwd: Option<PathBuf>,
+    /// The command as the log header should print it — which for a shell script wrapping
+    /// two steps is what the operator would have typed, not the wrapper.
+    pub display: String,
+    pub kind: JobKind,
+    pub title: String,
+    pub log_capacity: usize,
+}
+
+/// Spawn `run` as a tracked job, streaming its output the way every job streams.
+pub fn spawn_run(
+    run: Run,
+    env: &[(String, String)],
+    events: mpsc::UnboundedSender<JobEvent>,
+) -> Result<Job> {
+    let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+    let log_path = new_log_path(run.kind.label());
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    spawn_command(run, env, id, log_path, events)
+}
+
+fn spawn_command(
+    run: Run,
+    env: &[(String, String)],
+    id: u64,
+    log_path: PathBuf,
+    events: mpsc::UnboundedSender<JobEvent>,
+) -> Result<Job> {
+    let Run { program, args, cwd, display, kind, title, log_capacity } = run;
+    let argv = args;
+
+    let mut cmd = Command::new(&program);
     cmd.args(&argv).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(dir) = &cwd {
+        cmd.current_dir(dir);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -866,15 +930,15 @@ pub fn spawn_job(
         JobKind::Bench => {
             cmd.env("FREETOKEN_BENCH_PROGRESS", "1");
         }
+        // git and the package manager speak no progress protocol; their own output is the
+        // progress, and it is already streamed to the Jobs tab line by line.
+        JobKind::Update => {}
     }
     detach_process_group(&mut cmd);
 
-    let mut child = cmd.spawn().with_context(|| format!("spawning {}", ft.program.display()))?;
+    let mut child = cmd.spawn().with_context(|| format!("spawning {}", program.display()))?;
     let pid = child.id();
 
-    let display = shell_words::join(
-        std::iter::once(ft.display_program().as_str()).chain(argv.iter().map(String::as_str)),
-    );
     let log = LogRing::new(log_capacity);
 
     let file = std::fs::OpenOptions::new()
@@ -979,6 +1043,8 @@ fn parse_progress(kind: JobKind, line: &str) -> Option<JobProgress> {
             let phase = it.next().unwrap_or("").trim().to_string();
             Some(JobProgress { phase, done, total, bytes: false })
         }
+        // No protocol to parse: git and uv report progress as ordinary output.
+        JobKind::Update => None,
     }
 }
 

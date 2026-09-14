@@ -107,6 +107,7 @@ pub fn run_action(app: &mut App, action: ConfirmAction) -> Done {
             app.should_quit = true;
             Done::Ok
         }
+        ConfirmAction::UpdateFreetoken => start_update(app),
         ConfirmAction::StopEngine { force } => {
             app.engine.stop(force);
             app.info(if force { "force-stopping the engine" } else { "stopping the engine" });
@@ -725,6 +726,145 @@ pub fn search(app: &mut App, query: &str) -> Outcome {
         let _ = tx.send(Message::HubSearch(res));
     });
     Ok(Done::started())
+}
+
+/// Update the FreeToken this machine runs: pull the checkout, reinstall it into its venv.
+///
+/// The same two commands an operator would type, with nothing inherited from a shell that
+/// may not be there — a systemd unit's PATH is not a login shell's, and this runs under
+/// both. Every program is resolved to a path first and refused by name if missing, rather
+/// than failing halfway through with `uv: not found` and a half-updated tree.
+///
+/// Asks before doing it. This rewrites the files the engine loads from.
+pub fn update_freetoken(app: &mut App) -> Outcome {
+    let plan = update_plan(app)?;
+    Ok(ask(
+        app,
+        crate::ui::widgets::Confirm::new(
+            "Update FreeToken",
+            vec![
+                format!("{}", plan.dir.display()),
+                String::new(),
+                format!("git pull --ff-only  ({} commit(s) behind upstream)", plan.behind),
+                "uv pip install -e \".[accel]\"".to_string(),
+                String::new(),
+                "the engine must be started again afterwards".into(),
+            ],
+            ConfirmAction::UpdateFreetoken,
+            false,
+        ),
+    ))
+}
+
+/// What an update would run, and every reason it would not.
+struct UpdatePlan {
+    dir: std::path::PathBuf,
+    venv: std::path::PathBuf,
+    git: std::path::PathBuf,
+    uv: std::path::PathBuf,
+    behind: usize,
+}
+
+fn update_plan(app: &mut App) -> Result<UpdatePlan, Refusal> {
+    let Some(dir) = crate::ft::checkout::locate(&app.config.freetoken, app.ft.as_ref()) else {
+        return Err(warn_off(app, 503, "no FreeToken checkout to update"));
+    };
+    // An editable install is the files on disk: pulling under a running engine swaps the
+    // modules it imports lazily and the kernels it has mapped, which is a crash with a
+    // confusing cause rather than an update.
+    if app.engine.is_live() {
+        return Err(warn_off(
+            app,
+            409,
+            "stop the engine first; an update rewrites the files it is running from",
+        ));
+    }
+    let checkout = app.ft_checkout.clone();
+    if checkout.as_ref().is_some_and(|c| c.dirty) {
+        return Err(warn_off(
+            app,
+            409,
+            "the checkout has local changes; commit or discard them first",
+        ));
+    }
+    let behind = checkout.as_ref().map(|c| c.upstream_behind).unwrap_or(0);
+    if behind == 0 {
+        return Err(warn_off(app, 409, "already at upstream; nothing to update"));
+    }
+    // What is true about the world first, what is missing from the setup second: being told
+    // the venv is unconfigured is no use to someone who has nothing to pull anyway.
+    let Some(venv) = app.config.freetoken.venv.clone() else {
+        return Err(warn_off(
+            app,
+            503,
+            "freetoken.venv is not set; ft-man does not know which venv to install into",
+        ));
+    };
+    let Some(git) = which("git") else {
+        return Err(warn_off(app, 503, "git is not on PATH"));
+    };
+    // No pip fallback: a uv-created venv does not ship one, so the absence of uv is the end
+    // of the road and should say so rather than be discovered mid-run.
+    let Some(uv) = which("uv").or_else(|| {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+        [home.join(".local/bin/uv"), home.join(".cargo/bin/uv")].into_iter().find(|p| p.is_file())
+    }) else {
+        return Err(warn_off(app, 503, "uv was not found on PATH or in ~/.local/bin; FreeToken's venv has no pip to fall back on"));
+    };
+    Ok(UpdatePlan { dir, venv, git, uv, behind })
+}
+
+/// The first executable of that name on PATH.
+fn which(program: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).map(|dir| dir.join(program)).find(|p| p.is_file())
+    })
+}
+
+fn start_update(app: &mut App) -> Done {
+    let plan = match update_plan(app) {
+        Ok(p) => p,
+        // The preconditions are re-checked on the way in: a confirmation can sit on screen
+        // while the engine is started in another window.
+        Err(_) => return Done::Ok,
+    };
+    // One shell, because the second command must not run if the first fails, but every
+    // program is passed in by path: nothing here is looked up in an inherited PATH.
+    const SCRIPT: &str =
+        "set -e; \"$1\" pull --ff-only; VIRTUAL_ENV=\"$2\" \"$3\" pip install -e \".[accel]\"";
+    let run = crate::ft::proc::Run {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            SCRIPT.into(),
+            "ft-man-update".into(),
+            plan.git.display().to_string(),
+            plan.venv.display().to_string(),
+            plan.uv.display().to_string(),
+        ],
+        cwd: Some(plan.dir.clone()),
+        display: format!(
+            "git pull --ff-only && uv pip install -e \".[accel]\"  # in {}",
+            plan.dir.display()
+        ),
+        kind: JobKind::Update,
+        title: format!("update FreeToken ({} commits)", plan.behind),
+        log_capacity: app.config.ui.log_capacity,
+    };
+    match crate::ft::proc::spawn_run(run, &app.config.freetoken.env, app.job_tx.clone()) {
+        Ok(job) => {
+            let id = job.id;
+            app.jobs.push(job);
+            app.jobs_view.sel.last(views::jobs::rows(app).len());
+            app.tab = Tab::Jobs;
+            app.info("updating FreeToken");
+            Done::Started { job_id: Some(id), log_path: None }
+        }
+        Err(e) => {
+            app.error(format!("could not start the update: {e:#}"));
+            Done::Ok
+        }
+    }
 }
 
 /// Ask the running engine what upstream changed.

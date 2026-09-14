@@ -682,6 +682,7 @@ At most four toasts are ever present (`App::toast` pops the front past four), an
 {"kind": "revert_template", "model": "/models/x"}
 {"kind": "delete_template", "name": "qwen-sharp"}
 {"kind": "reconvert_model", "source": "/models/x"}
+{"kind": "update_freetoken"}
 {"kind": "install_hf_cli"}
 {"kind": "convert_anyway", "source": "/models/x"}
 {"kind": "quit"}
@@ -1005,6 +1006,7 @@ snapshot's `confirm`", not as "done".**
 | 16 | `POST /api/engine/stop` | Dashboard `s` / `S` | `request_stop` |
 | 17 | `POST /api/engine/smoke-test` | Dashboard `t` | `smoke_test` |
 | 17a | `POST /api/engine/summarize-upstream` | Dashboard `u` | `summarize_upstream` |
+| 17b | `POST /api/freetoken/update` | Dashboard `U` | `update_freetoken` |
 | 18 | `POST /api/models/rescan` | Dashboard `r`, Models `r` | `App::request_scan` |
 | 19 | `POST /api/models/use` | Models `Enter` / `s` | `use_selected_model` |
 | 20 | `POST /api/models/convert` | Models `c` | `convert_selected` → `begin_conversion` |
@@ -1119,6 +1121,23 @@ Never confirms.
   outright.
 
 **`POST /api/engine/smoke-test`** — body `{}`. Mirrors `smoke_test`.
+
+**`POST /api/freetoken/update`** — body `{}`. Pulls the FreeToken checkout and reinstalls
+it into its venv, as a job on the Jobs tab: `git pull --ff-only`, then
+`uv pip install -e ".[accel]"` with `VIRTUAL_ENV` pointed at `freetoken.venv`. Answers with
+a pending confirmation rather than doing it.
+
+Both programs are resolved to absolute paths before the job starts and the request is
+refused by name if either is missing, because this runs under a systemd unit as well as a
+terminal and their `PATH`s differ; a uv-created venv ships no `pip`, so there is no fallback
+to discover halfway through. The two steps share one shell so that a failed pull stops
+before the reinstall.
+
+Refusals, in the order they are checked — what is true about the machine before what is
+missing from the setup: `503` no checkout, `409` the engine is live (an editable install is
+the files on disk, and pulling under a running engine swaps the modules it imports lazily),
+`409` the checkout is dirty, `409` already at upstream, then `503` for an unset
+`freetoken.venv`, a missing `git`, or a missing `uv`.
 
 **`POST /api/engine/summarize-upstream`** — body `{}`. Asks the loaded model what the
 commits between this checkout and `upstream/main` change, and answers `{"status": "started"}`

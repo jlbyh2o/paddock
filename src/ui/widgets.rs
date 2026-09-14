@@ -333,6 +333,8 @@ pub enum ConfirmAction {
     /// Restore a model's own template.
     RevertTemplate(std::path::PathBuf),
     DeleteTemplate(String),
+    /// Pull the FreeToken checkout and reinstall it into its venv.
+    UpdateFreetoken,
     /// Delete a failed conversion's leftovers, then convert `source` again.
     ReconvertModel(std::path::PathBuf),
     /// Run Hugging Face's installer for the `hf` CLI.
@@ -370,6 +372,7 @@ impl Serialize for ConfirmAction {
             }
             ConfirmAction::Quit => m.serialize_entry("kind", "quit")?,
             ConfirmAction::ApplyCacheRebuild => m.serialize_entry("kind", "apply_cache_rebuild")?,
+            ConfirmAction::UpdateFreetoken => m.serialize_entry("kind", "update_freetoken")?,
             ConfirmAction::ApplyTemplate { template, model } => {
                 m.serialize_entry("kind", "apply_template")?;
                 m.serialize_entry("template", template)?;

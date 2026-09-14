@@ -132,7 +132,8 @@ export type ConfirmAction =
   | { kind: "reconvert_model"; source: string }
   | { kind: "install_hf_cli" }
   | { kind: "convert_anyway"; source: string }
-  | { kind: "quit" };
+  | { kind: "quit" }
+  | { kind: "update_freetoken" };
 
 // ---------------------------------------------------------------- engine control plane
 

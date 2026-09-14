@@ -52,6 +52,9 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
   const summarize = useCallback(() => {
     run(api.summarizeUpstream());
   }, []);
+  const update = useCallback(() => {
+    run(api.updateFreetoken());
+  }, []);
 
   useTabKeys(
     useCallback(
@@ -75,11 +78,14 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
           case "u":
             summarize();
             return true;
+          case "U":
+            update();
+            return true;
           default:
             return false;
         }
       },
-      [start, stop, forceStop, smoke, rescan, summarize],
+      [start, stop, forceStop, smoke, rescan, summarize, update],
     ),
   );
 
@@ -175,6 +181,28 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
               >
                 {s.environment.upstream_summary?.pending ? "Summarizing…" : "What changed?"}{" "}
                 <span className="dim">(u)</span>
+              </button>
+            ) : null}
+            {/*
+              Offered only when there is something to pull. Disabled while the engine is
+              live rather than hidden: the reason it cannot run now is the useful part, and
+              a button that vanishes teaches nobody why.
+            */}
+            {(s.environment.ft_upstream_behind ?? 0) > 0 ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={update}
+                disabled={engine.is_live || (s.environment.ft_dirty ?? false)}
+                title={
+                  engine.is_live
+                    ? "stop the engine first; an update rewrites the files it is running from"
+                    : s.environment.ft_dirty
+                      ? "the checkout has local changes; commit or discard them first"
+                      : "pull the checkout and reinstall it into its venv"
+                }
+              >
+                Update FreeToken <span className="dim">(U)</span>
               </button>
             ) : null}
             {/*

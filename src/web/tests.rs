@@ -1690,3 +1690,69 @@ async fn starting_an_engine_wakes_the_backed_off_poll() {
     // And the endpoint itself is untouched: this is a nudge, not a reconfiguration.
     assert_eq!(*watcher.borrow_and_update(), *app.endpoint_tx.borrow());
 }
+
+// ---------------------------------------------------------------- updating FreeToken
+
+/// An update rewrites the files an editable install is running from, so a live engine is
+/// the one state it must never proceed from — and the refusal has to name the fix.
+#[tokio::test]
+async fn updating_freetoken_is_refused_while_the_engine_is_live() {
+    let mut app = fresh().await;
+    app.engine.state = crate::ft::EngineState::Running;
+    let state = WebState::new(app, Auth::new(None).unwrap());
+
+    let (status, body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let msg = body["error"].as_str().unwrap_or_default();
+    assert!(msg.contains("stop the engine"), "{msg}");
+}
+
+/// Nothing to pull is not a failure, but it is not an update either: saying so beats
+/// running two commands that do nothing and reporting success.
+#[tokio::test]
+async fn updating_freetoken_is_refused_when_already_current() {
+    let mut app = fresh().await;
+    app.set_ft_checkout(Some(crate::ft::FtCheckout {
+        path: "/home/user/FreeToken".into(),
+        upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
+        origin: String::new(),
+        local_sha: "e0886cc".into(),
+        upstream_sha: "e0886cc".into(),
+        origin_sha: String::new(),
+        origin_ahead: 0,
+        origin_behind: 0,
+        upstream_behind: 0,
+        dirty: false,
+        kernels_stale: Some(false),
+    }));
+    let state = WebState::new(app, Auth::new(None).unwrap());
+
+    let (status, body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["error"].as_str().unwrap_or_default().contains("already at upstream"));
+}
+
+/// A dirty tree is the operator's work, and `git pull --ff-only` would refuse it anyway —
+/// better to say why here than to surface git's version of the same complaint.
+#[tokio::test]
+async fn updating_freetoken_is_refused_with_local_changes() {
+    let mut app = fresh().await;
+    app.set_ft_checkout(Some(crate::ft::FtCheckout {
+        path: "/home/user/FreeToken".into(),
+        upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
+        origin: String::new(),
+        local_sha: "9535656".into(),
+        upstream_sha: "e0886cc".into(),
+        origin_sha: String::new(),
+        origin_ahead: 0,
+        origin_behind: 0,
+        upstream_behind: 5,
+        dirty: true,
+        kernels_stale: Some(false),
+    }));
+    let state = WebState::new(app, Auth::new(None).unwrap());
+
+    let (status, body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["error"].as_str().unwrap_or_default().contains("local changes"));
+}
