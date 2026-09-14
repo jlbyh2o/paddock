@@ -1235,6 +1235,7 @@ export const fixture: Snapshot = {
     ft_found: true,
     ft_program: "/home/user/FreeToken/.venv/bin/ft",
     ft_display: "ft",
+    ft_version: "freetoken version 0.1.2",
     ft_origin: "the virtualenv named by --venv",
     ft_error: null,
     supported_archs: [

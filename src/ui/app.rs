@@ -468,6 +468,8 @@ pub struct App {
     pub ft: Option<Freetoken>,
     /// Why the CLI could not be found, when it could not be.
     pub ft_error: Option<String>,
+    /// `ft --version` output, resolved once at startup.
+    pub ft_version: Option<String>,
     /// Local FreeToken vendor checkout git status. `None` when the vendor dir is absent.
     pub ft_checkout: Option<FtCheckout>,
     /// The `hf` CLI that Hub downloads are delegated to. `None` means the Hub tab cannot
@@ -618,6 +620,7 @@ impl App {
             theme,
             ft,
             ft_error,
+            ft_version: None,
             ft_checkout: None,
             client,
             tab: Tab::Dashboard,
@@ -715,6 +718,11 @@ impl App {
     /// Record the local FreeToken vendor checkout git status.
     pub fn set_ft_checkout(&mut self, checkout: Option<FtCheckout>) {
         self.ft_checkout = checkout;
+    }
+
+    /// Record the FreeToken CLI version from `ft --version`.
+    pub fn set_ft_version(&mut self, version: Option<String>) {
+        self.ft_version = version;
     }
 
     pub fn engine_status_text(&self) -> String {

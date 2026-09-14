@@ -81,6 +81,7 @@
     "ft_program": null,
     "ft_upstream_behind": null,
     "ft_upstream_sha": null,
+    "ft_version": null,
     "hostname": "",
     "hub_token_present": false,
     "hub_token_source": null,

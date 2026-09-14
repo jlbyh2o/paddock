@@ -1033,6 +1033,8 @@ export interface EnvironmentSnapshot {
   ft_program: string | null;
   /** How the command reads, e.g. `ft` or `/venv/bin/python -m freetoken.cli`. */
   ft_display: string | null;
+  /** `ft --version` output, e.g. `freetoken version 0.1.2`. */
+  ft_version: string | null;
   ft_origin: string | null;
   /** Why the CLI could not be found. Non-null means every FreeToken route returns 503. */
   ft_error: string | null;

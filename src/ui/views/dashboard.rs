@@ -55,6 +55,10 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(t.field("Model", app.current_model().unwrap_or_else(|| "—".into())));
 
+    if let Some(ref ver) = app.ft_version {
+        lines.push(t.field("FreeToken", ver));
+    }
+
     let endpoint = app.client.base_url().to_string();
     lines.push(t.field_colored(
         "Endpoint",

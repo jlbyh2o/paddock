@@ -176,6 +176,7 @@
     "ft_program": null,
     "ft_upstream_behind": 0,
     "ft_upstream_sha": "a1b2c3d",
+    "ft_version": "freetoken version 0.1.2",
     "hostname": "inference-01",
     "hub_token_present": false,
     "hub_token_source": null,

@@ -298,6 +298,9 @@ async fn run(cli: Cli, config: Config, ft: Result<ft::Freetoken, String>) -> Res
         Err(e) => (None, Some(e)),
     };
     let mut app = App::new(config, profiles, ft_ok, ft_err.clone(), tx.clone())?;
+    app.set_ft_version(crate::ft::locate::probe_version(
+        &app.ft.as_ref().expect("app was constructed with ft_ok"),
+    ));
     app.set_ft_checkout(ft::checkout::check());
 
     if let Some(name) = &cli.tab {

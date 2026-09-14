@@ -162,6 +162,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
           <span className={`dot ${engine.status_class}`} aria-hidden="true" /> {engine.status_text}
         </Field>
         <Field label="Model">{text(engine.model ?? null)}</Field>
+        {s.environment.ft_version && <Field label="FreeToken">{s.environment.ft_version}</Field>}
         <Field label="Endpoint" tone={engine.server_reachable ? "good" : "dim"} mono>
           {engine.endpoint}
         </Field>
