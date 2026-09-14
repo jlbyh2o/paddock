@@ -15,6 +15,17 @@ FreeToken's engine resolves almost everything automatically, which is the right 
 also means the knobs that matter are invisible until you need them. ft-man puts that whole
 surface in one place — and tells you when a default has quietly cost you something.
 
+![The ft-man dashboard in a browser](docs/images/web-dashboard.png)
+
+## Two front ends, one program
+
+```bash
+ft-man          # the terminal UI
+ft-man web      # the same thing in a browser, on 0.0.0.0:7979
+```
+
+The same dashboard in a terminal:
+
 ```
  ft-man  1 Dashboard  2 Models  3 Hub  4 Templates  5 Serve  6 Cache  7 Jobs  8 Requests  9 Logs   ● serving · Qwen3.6-35B
 ╭ Engine ───────────────────────────────────╮╭ GPU (NVML) ───────────────────────────────╮
@@ -30,13 +41,6 @@ surface in one place — and tells you when a default has quietly cost you somet
 │  ▂▃▅▆▇█▇▆▅▄▃▄▅▆▇█▇▆▅▃▂▃▄▅▆▇▆▅▄▃▂▃▄▅▆▇█▇▆  ││Completed         1,487                    │
 │Prefill        3,120.5 tok/s               ││Latency           p95 8,340 ms  TTFT 412 ms│
 ╰───────────────────────────────────────────╯╰───────────────────────────────────────────╯
-```
-
-## Two front ends, one program
-
-```bash
-ft-man          # the terminal UI
-ft-man web      # the same thing in a browser, on 0.0.0.0:7979
 ```
 
 Both run the same `App`: the same telemetry poller, engine supervisor, job runner and
