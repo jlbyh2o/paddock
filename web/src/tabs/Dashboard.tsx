@@ -206,13 +206,13 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
               </button>
             ) : null}
             {/*
-              Under the buttons rather than in the pane header: this sentence is about
-              what can be started right now, and in the header it pushed the pane's own
-              title out of its column.
+              `gpu_busy_reason` is deliberately not shown here. It explains why a GPU-heavy
+              job — a conversion, a benchmark — cannot start, and none of the buttons above
+              start one: every reason the Start button is disabled is already on the Start
+              button, in `start_blocked`. Printed here it read as a standing instruction to
+              stop the engine, in the state where the engine running is the whole point. It
+              belongs on the controls it constrains, which is where the Jobs tab puts it.
             */}
-            {engine.gpu_busy_reason ? (
-              <span className="actions-note">{engine.gpu_busy_reason}</span>
-            ) : null}
           </>
         }
       >

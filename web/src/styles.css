@@ -450,12 +450,6 @@ textarea {
   border-top: 1px solid var(--border);
 }
 
-/* A sentence about the buttons above it, on its own row beneath them. */
-.pane-actions .actions-note {
-  flex: 1 0 100%;
-  color: var(--dim);
-}
-
 /*
  * The checkout block at the foot of the Engine pane: a rule and a little air separate
  * "which FreeToken source is on this machine" from the running engine above it.
