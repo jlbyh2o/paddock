@@ -40,10 +40,12 @@ use crate::ui::app::{App, Message, Tab};
 #[command(
     name = "ft-man",
     version,
-    about = "Manage FreeToken from the terminal",
-    long_about = "ft-man is a terminal UI for a FreeToken install: browse and download \
+    about = "Manage FreeToken from a terminal or a browser",
+    long_about = "ft-man is a control panel for a FreeToken install: browse and download \
                   checkpoints, convert them to FTW, configure and supervise `ft serve`, resize \
-                  cache pools on a live engine, and watch throughput, requests and logs."
+                  cache pools on a live engine, and watch throughput, requests and logs.\n\n\
+                  Run it bare for the terminal UI, or `ft-man web` for the same thing in a \
+                  browser."
 )]
 struct Cli {
     /// Server host ft-man polls for telemetry.
