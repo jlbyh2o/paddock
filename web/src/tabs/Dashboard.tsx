@@ -357,20 +357,40 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
         ) : (
           <p className="dim">no NVIDIA GPU detected</p>
         )}
-        {hardware.bench_summary ? (
-          <Field label="Bench">{hardware.bench_summary}</Field>
-        ) : (
+        {bench === null ? (
           <Field label="Bench" tone="dim">
             no bandwidth profile — run one from the Jobs tab (b)
           </Field>
+        ) : (
+          <>
+            {/*
+              One row per verdict rather than one per format. The profile gives every
+              quantization format the same answer on most machines, so `fmt→verdict`
+              repeated five times says one thing five times and hides the only thing worth
+              scanning for: a format that disagrees. Grouped, the usual case is a single
+              row and a disagreement is a second one that cannot be missed.
+            */}
+            <Field label="Bench">
+              {hardware.bench_verdicts.length === 0 ? (
+                <span className="dim">measured, but no per-format verdict</span>
+              ) : (
+                <span className="verdicts">
+                  {hardware.bench_verdicts.map((v) => (
+                    <span key={v.verdict} className="verdict">
+                      <span className="verdict-name">{v.verdict}</span>
+                      <span className="verdict-formats mono">{v.formats.join(", ")}</span>
+                    </span>
+                  ))}
+                </span>
+              )}
+            </Field>
+            <div className="facts">
+              <span>{bench.cpu.threads_used} of {bench.cpu.physical_cores} cores benched</span>
+              <span>CPU {fixed(bench.ceilings.cpu_stream_read_gbs)} GB/s</span>
+              <span>PCIe {fixed(bench.ceilings.pcie_linear_h2d_gbs)} GB/s h2d</span>
+            </div>
+          </>
         )}
-        {bench ? (
-          <div className="facts">
-            <span>{bench.cpu.threads_used} of {bench.cpu.physical_cores} cores benched</span>
-            <span>CPU {fixed(bench.ceilings.cpu_stream_read_gbs)} GB/s</span>
-            <span>PCIe {fixed(bench.ceilings.pcie_linear_h2d_gbs)} GB/s h2d</span>
-          </div>
-        ) : null}
       </Pane>
 
       {/* Column 3: Host + Activity */}

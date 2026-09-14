@@ -422,7 +422,7 @@ Each field is an array of non-negative integers, oldest first, at most 120 entri
 | `reported_gpus` | `GpuCard[]` | `stats.gpus`, verbatim. Rendered only when `gpus` is empty ("no local GPU readable; reporting what the engine says") |
 | `host` | `Host` | `app.host`, verbatim `probe::Host` (`cpu_percent`, `cpu_cores`, `physical_cores`, `memory_total`, `memory_used`, `swap_total`, `swap_used`, `load_avg` as a 3-tuple array, `hostname`, `kernel`, `uptime_s`), plus derived `memory_free` and `memory_ratio` |
 | `bench_profile` | `BenchProfile \| null` | `app.bench_profile`, verbatim `ft::types::BenchProfile` including `dtypes` and `dtype_kernels` as objects keyed by format name |
-| `bench_summary` | string \| null | The Dashboard's one-liner: `"bench: nvfp4→hybrid  mxfp4→offload"`, or `"bandwidth profile present"` when no verdict is recorded. `null` when there is no profile, which the Dashboard renders as "no bandwidth profile — run one from the Jobs tab (b)" |
+| `bench_verdicts` | `{verdict, formats[]}[]` | The profile's per-format answers, **grouped by answer**, largest group first and ties broken by name: `[{"verdict": "offload", "formats": ["bf16", "mxfp4"]}, {"verdict": "hybrid", "formats": ["nvfp4"]}]`. One row per verdict rather than one per format, because on most machines every format gets the same answer and the only thing worth scanning for is a format that disagrees. Empty when `bench_profile` is null — which the Dashboard renders as "no bandwidth profile — run one from the Jobs tab (b)" — and also when a profile was measured without per-format answers, which reads "measured, but no per-format verdict" |
 | `bench_profile_path` | string \| null | `plan::bench_profile_status(uuid)` — the file the profile was read from |
 
 ### 2.9 `models`
@@ -1493,8 +1493,9 @@ Six panes.
    when `uuid == hardware.engine_gpu_uuid`, a VRAM meter (`memory_ratio`, used / total /
    free), a utilization meter, and a facts line (temperature, power / limit, `pcie_link`,
    `short_uuid`). When `gpus` is empty, `hardware.reported_gpus` instead, or "no NVIDIA GPU
-   detected". Below: `hardware.bench_summary`, or the prompt to run a benchmark, plus the
-   benched core count and CPU vs PCIe ceilings from `bench_profile`.
+   detected". Below: one row per `hardware.bench_verdicts` entry — the verdict in its own
+   column, the formats that earned it beside it — or the prompt to run a benchmark, plus
+   the benched core count and CPU vs PCIe ceilings from `bench_profile`.
 5. **Activity** — `stats.requests.active` with `engine.completed_rate` as
    `0.31 completed/s`; `completed`; `p95_ms` and `ttft_mean_ms`; `prompt_tokens_total`;
    `completion_tokens_total`; `engine.prefix_reuse.summary` when present (and only then);

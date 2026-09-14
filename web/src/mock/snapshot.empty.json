@@ -15,7 +15,7 @@
     "state": null
   },
   "config": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-477883/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-512377/config.toml",
     "confirm_destructive": true,
     "convert_preflight": true,
     "disk_free": null,
@@ -35,7 +35,7 @@
     "poll_ms": 1000,
     "server_host": "0.0.0.0",
     "server_port": 1919,
-    "state_dir": "/home/user/.cache/tmp/ft-man-tests-477883/state",
+    "state_dir": "/home/user/.cache/tmp/ft-man-tests-512377/state",
     "template_sources": [
       "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
     ],
@@ -93,7 +93,7 @@
   "hardware": {
     "bench_profile": null,
     "bench_profile_path": null,
-    "bench_summary": null,
+    "bench_verdicts": [],
     "engine_gpu_uuid": null,
     "gpu_source": "NVML",
     "gpus": [],
@@ -154,7 +154,7 @@
     "log_path": null
   },
   "models": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-477883/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-512377/config.toml",
     "items": [],
     "roots": [],
     "scanning": false
@@ -238,6 +238,6 @@
     "stored": []
   },
   "toasts": [],
-  "ts_ms": 1789415544352,
+  "ts_ms": 1789415845651,
   "version": "0.3.0"
 }

@@ -612,7 +612,11 @@ export interface HardwareSnapshot {
   host: Host;
   bench_profile: BenchProfile | null;
   /** "bench: nvfp4→hybrid  mxfp4→offload", or null when there is no profile. */
-  bench_summary: string | null;
+  /**
+   * Per-format bandwidth verdicts, grouped by verdict, largest group first. Empty when
+   * `bench_profile` is null, or when a profile was measured without per-format answers.
+   */
+  bench_verdicts: BenchVerdict[];
   bench_profile_path: string | null;
 }
 
@@ -1033,6 +1037,13 @@ export interface ConfigSnapshot {
   state_dir: string;
   /** Free space at `download_dir`, with the path actually measured. */
   disk_free: DiskFree | null;
+}
+
+/** One bandwidth verdict and every quantization format that earned it. */
+export interface BenchVerdict {
+  /** `offload` or `hybrid`. */
+  verdict: string;
+  formats: string[];
 }
 
 /** What this installation has, and what it is missing. */

@@ -826,20 +826,19 @@ impl App {
         }
     }
 
-    /// One line describing the machine's bandwidth profile, or `None` when none has been
-    /// measured — which the Dashboard turns into the prompt to run a benchmark.
-    pub fn bench_summary(&self) -> Option<String> {
-        let p = self.bench_profile.as_ref()?;
-        let verdicts: Vec<String> = p
-            .dtypes
-            .iter()
-            .filter_map(|(fmt, rec)| rec.as_ref().map(|r| format!("{fmt}→{r}")))
-            .collect();
-        Some(if verdicts.is_empty() {
-            "bandwidth profile present".to_string()
-        } else {
-            format!("bench: {}", verdicts.join("  "))
-        })
+    /// The bandwidth profile's per-format verdicts, grouped by the verdict itself.
+    ///
+    /// The profile answers one question per quantization format — offload this format's
+    /// experts, or keep them hybrid — and on most machines every format gets the same
+    /// answer. Printing `format→verdict` once per format therefore repeats that answer
+    /// five times and buries the only thing worth looking for, which is whether any
+    /// format disagrees with the rest. Grouped, the common case is one line and a
+    /// disagreement is a second one.
+    ///
+    /// Largest group first, ties broken by name, so the machine's general answer leads
+    /// and the exceptions follow it.
+    pub fn bench_verdicts(&self) -> Vec<(String, Vec<String>)> {
+        self.bench_profile.as_ref().map(group_bench_verdicts).unwrap_or_default()
     }
 
     /// The model currently in play: what the server reports, else what is configured.
@@ -1489,6 +1488,24 @@ pub fn rebuild_from_pending(view: &CacheView) -> CacheRebuild {
     }
 }
 
+/// Group a bandwidth profile's per-format verdicts by the verdict itself.
+///
+/// Largest group first, ties broken by name, so the machine's general answer leads and
+/// the exceptions follow it. A format the bench could not decide carries no verdict and
+/// is left out rather than shown blank.
+pub fn group_bench_verdicts(p: &crate::ft::types::BenchProfile) -> Vec<(String, Vec<String>)> {
+    let mut groups: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+    for (fmt, verdict) in &p.dtypes {
+        if let Some(v) = verdict {
+            groups.entry(v.as_str()).or_default().push(fmt.clone());
+        }
+    }
+    let mut out: Vec<(String, Vec<String>)> =
+        groups.into_iter().map(|(v, f)| (v.to_string(), f)).collect();
+    out.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
 /// The profile the Serve view would save right now.
 pub fn profile_from(name: String, serve: &ServeConfig) -> Profile {
     Profile { name, notes: String::new(), serve: serve.clone() }
@@ -1512,6 +1529,39 @@ mod tests {
         assert_eq!(Tab::from_digit(Tab::ALL.len() as u32), Some(Tab::Logs));
         assert_eq!(Tab::from_digit(Tab::ALL.len() as u32 + 1), None);
         assert_eq!(Tab::from_digit(0), None);
+    }
+
+    /// The grouping the GPU pane reads down: one row per answer, the machine's general
+    /// answer first, the format that disagrees second. Ungrouped this was five arrows and
+    /// no way to see that nvfp4 was the odd one out.
+    #[test]
+    fn bench_verdicts_group_by_answer_with_the_majority_first() {
+        use crate::ft::types::BenchProfile;
+
+        let profile = BenchProfile {
+            dtypes: [
+                ("nvfp4", Some("hybrid")),
+                ("bf16", Some("offload")),
+                ("mxfp4", Some("offload")),
+                // A format the bench could not decide is left out rather than shown blank.
+                ("ds_fp4", None),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+            .collect(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            group_bench_verdicts(&profile),
+            vec![
+                ("offload".to_string(), vec!["bf16".to_string(), "mxfp4".to_string()]),
+                ("hybrid".to_string(), vec!["nvfp4".to_string()]),
+            ],
+        );
+
+        // Nothing measured is an empty list, not a row saying nothing.
+        assert!(group_bench_verdicts(&BenchProfile::default()).is_empty());
     }
 
     #[test]

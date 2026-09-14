@@ -78,7 +78,7 @@
     "state": "serving"
   },
   "config": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-477883/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-512377/config.toml",
     "confirm_destructive": true,
     "convert_preflight": true,
     "disk_free": {
@@ -101,7 +101,7 @@
     "poll_ms": 1000,
     "server_host": "0.0.0.0",
     "server_port": 1919,
-    "state_dir": "/home/user/.cache/tmp/ft-man-tests-477883/state",
+    "state_dir": "/home/user/.cache/tmp/ft-man-tests-512377/state",
     "template_sources": [
       "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
     ],
@@ -211,6 +211,9 @@
         }
       },
       "dtypes": {
+        "bf16": "offload",
+        "fp8_block": "offload",
+        "mxfp4": "offload",
         "nvfp4": "hybrid"
       },
       "gpu": {
@@ -224,7 +227,22 @@
       "version": 4
     },
     "bench_profile_path": null,
-    "bench_summary": "bench: nvfp4→hybrid",
+    "bench_verdicts": [
+      {
+        "formats": [
+          "bf16",
+          "fp8_block",
+          "mxfp4"
+        ],
+        "verdict": "offload"
+      },
+      {
+        "formats": [
+          "nvfp4"
+        ],
+        "verdict": "hybrid"
+      }
+    ],
     "engine_gpu_uuid": "GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5",
     "gpu_source": "NVML",
     "gpus": [
@@ -413,7 +431,7 @@
         "ratio": 0.36666666666666664,
         "repo": "nvidia/GLM-5.2-NVFP4",
         "revision": "main",
-        "started_at": "2026-09-14T13:52:24.337110145-06:00",
+        "started_at": "2026-09-14T13:57:25.636260299-06:00",
         "status": {
           "kind": "running"
         },
@@ -444,7 +462,7 @@
         "progress_detail": "27.9 GiB / 63.3 GiB  (experts)",
         "progress_ratio": 0.4411764705882353,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T13:52:24.337071670-06:00",
+        "started_at": "2026-09-14T13:57:25.636224811-06:00",
         "status": {
           "kind": "running"
         },
@@ -472,7 +490,7 @@
         "progress_detail": "",
         "progress_ratio": null,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T13:52:24.337109044-06:00",
+        "started_at": "2026-09-14T13:57:25.636259276-06:00",
         "status": {
           "kind": "failed",
           "reason": "with status 1"
@@ -491,7 +509,7 @@
     "log_path": null
   },
   "models": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-477883/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-512377/config.toml",
     "items": [
       {
         "arch": "Qwen3MoeForCausalLM",
@@ -520,7 +538,7 @@
         "is_partial": false,
         "max_position": 262144,
         "model_type": "qwen3_moe",
-        "modified_ms": 1789415544337,
+        "modified_ms": 1789415845636,
         "name": "Qwen3.6-35B-A3B",
         "num_experts": 128,
         "num_layers": 48,
@@ -1070,6 +1088,6 @@
       "ttl_ms": 8000
     }
   ],
-  "ts_ms": 1789415544349,
+  "ts_ms": 1789415845648,
   "version": "0.3.0"
 }

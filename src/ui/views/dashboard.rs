@@ -506,8 +506,20 @@ fn gpu_pane(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(p) = &app.bench_profile {
         lines.push(Line::from(""));
-        let text = app.bench_summary().unwrap_or_default();
-        lines.push(Line::from(Span::styled(text, t.muted())));
+        let verdicts = app.bench_verdicts();
+        if verdicts.is_empty() {
+            lines.push(Line::from(Span::styled("bandwidth profile present", t.muted())));
+        } else {
+            // The verdict leads and the formats follow it, so the eye reads down a column
+            // of answers rather than across a row of arrows.
+            let width = verdicts.iter().map(|(v, _)| v.len()).max().unwrap_or(0);
+            for (verdict, formats) in &verdicts {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{verdict:<width$}  "), t.label()),
+                    Span::styled(formats.join(", "), t.muted()),
+                ]));
+            }
+        }
         if p.cpu.physical_cores > 0 {
             lines.push(Line::from(Span::styled(
                 format!(

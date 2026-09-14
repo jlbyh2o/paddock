@@ -607,7 +607,12 @@ export const fixture: Snapshot = {
         },
       },
     },
-    bench_summary: "bench: nvfp4→hybrid  mxfp4→offload",
+    // A machine whose formats disagree, because the row that only appears on a
+    // disagreement is the one worth rendering in a fixture.
+    bench_verdicts: [
+      { verdict: "offload", formats: ["bf16", "fp8_block", "mxfp4"] },
+      { verdict: "hybrid", formats: ["nvfp4"] },
+    ],
     bench_profile_path: "/home/user/.local/state/ft-man/bench/GPU-6f2a8c31.json",
   },
 

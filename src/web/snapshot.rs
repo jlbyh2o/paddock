@@ -188,6 +188,14 @@ pub struct TelemetrySnapshot<'a> {
     sampling_summary: Option<String>,
 }
 
+/// One bandwidth verdict and every quantization format that earned it.
+#[derive(Serialize)]
+pub struct BenchVerdictOut {
+    /// `offload` or `hybrid`.
+    verdict: String,
+    formats: Vec<String>,
+}
+
 /// `PoolBytes` plus the total nothing on the wire should have to add up itself.
 #[derive(Serialize)]
 pub struct PoolBytesOut {
@@ -266,7 +274,9 @@ pub struct HardwareSnapshot<'a> {
     reported_gpus: &'a [GpuCard],
     host: HostOut<'a>,
     bench_profile: Option<&'a BenchProfile>,
-    bench_summary: Option<String>,
+    /// Per-format bandwidth verdicts, grouped by verdict, largest group first. Empty when
+    /// there is no profile, or when one was measured without per-format answers.
+    bench_verdicts: Vec<BenchVerdictOut>,
     bench_profile_path: Option<String>,
 }
 
@@ -309,7 +319,11 @@ fn hardware(app: &App) -> HardwareSnapshot<'_> {
             memory_ratio: app.host.memory_ratio(),
         },
         bench_profile: app.bench_profile.as_ref(),
-        bench_summary: app.bench_summary(),
+        bench_verdicts: app
+            .bench_verdicts()
+            .into_iter()
+            .map(|(verdict, formats)| BenchVerdictOut { verdict, formats })
+            .collect(),
         // Resolved when the profile was loaded, not now: finding it reads a directory.
         bench_profile_path: app.bench_profile_path.as_ref().map(|p| p.display().to_string()),
     }

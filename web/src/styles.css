@@ -483,6 +483,35 @@ textarea {
   gap: 4px 12px;
 }
 
+/*
+ * Bandwidth verdicts: one row per verdict, the verdict itself in a fixed-width column so
+ * several of them line up and the formats that earned each one sit in a straight edge
+ * beside it. The old layout put an arrow between every format and its verdict, which read
+ * as one long sentence and made a disagreement between formats invisible.
+ */
+.verdicts {
+  display: grid;
+  gap: 2px 0;
+}
+
+.verdict {
+  display: grid;
+  grid-template-columns: 7ch minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.verdict-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.verdict-formats {
+  color: var(--dim);
+  /* Long format lists wrap under themselves rather than widening the pane. */
+  overflow-wrap: anywhere;
+}
+
 /* ---------------------------------------------------------------- fields */
 
 .field {

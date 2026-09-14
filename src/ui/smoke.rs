@@ -289,7 +289,16 @@ pub(crate) fn populate(app: &mut App) {
             pcie_linear_h2d_gbs: 25.1,
             pcie_linear_d2h_gbs: 24.4,
         },
-        dtypes: [("nvfp4".to_string(), Some("hybrid".to_string()))].into_iter().collect(),
+        // Formats that disagree, because the second row only exists on a disagreement and
+        // a fixture that never produces one cannot show what the pane does with it.
+        dtypes: [
+            ("nvfp4".to_string(), Some("hybrid".to_string())),
+            ("bf16".to_string(), Some("offload".to_string())),
+            ("fp8_block".to_string(), Some("offload".to_string())),
+            ("mxfp4".to_string(), Some("offload".to_string())),
+        ]
+        .into_iter()
+        .collect(),
         dtype_kernels: [(
             "nvfp4".to_string(),
             BenchKernel {
