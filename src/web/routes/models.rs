@@ -41,3 +41,29 @@ pub async fn convert(
 pub async fn delete(State(state): State<Shared>, Body(req): Body<PathRequest>) -> ApiResult<Reply> {
     reply(state.act(|app| actions::delete_model(app, &req.path)))
 }
+
+/// The three sampling keys, beside the checkpoint they are written into.
+///
+/// Flattened rather than nested so the body reads `{path, temperature, top_p}` — and so an
+/// omitted key and an explicit `null` both mean the same thing they mean in the file: leave
+/// it out and let the engine use its own default.
+#[derive(Deserialize)]
+pub struct SamplingRequest {
+    path: PathBuf,
+    #[serde(flatten)]
+    sampling: crate::sampling::Sampling,
+}
+
+pub async fn apply_sampling(
+    State(state): State<Shared>,
+    Body(req): Body<SamplingRequest>,
+) -> ApiResult<Reply> {
+    reply(state.act(|app| actions::request_apply_sampling(app, &req.path, req.sampling.clone())))
+}
+
+pub async fn revert_sampling(
+    State(state): State<Shared>,
+    Body(req): Body<PathRequest>,
+) -> ApiResult<Reply> {
+    reply(state.act(|app| actions::request_revert_sampling(app, &req.path)))
+}

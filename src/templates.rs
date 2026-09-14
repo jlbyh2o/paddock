@@ -365,8 +365,10 @@ pub fn revert(model_dir: &Path) -> Result<()> {
 /// Every directory an override should be written to for one model.
 ///
 /// A checkpoint and the FTW build converted from it are the same model, and `ft
-/// checkpoint` copies the tokenizer files into its output — so a template applied to only
-/// one of them would silently not apply to whichever the engine is actually pointed at.
+/// checkpoint` copies every non-weight file into its output — so an override applied to
+/// only one of them would silently not apply to whichever the engine is actually pointed
+/// at. Shared with [`crate::sampling`], which writes a different file into the same
+/// directories for the same reason.
 pub fn targets(model: &crate::models::Model) -> Vec<PathBuf> {
     let mut out = vec![model.path.clone()];
     if let Some(ftw) = &model.converted_to {
@@ -592,6 +594,8 @@ mod tests {
             converted_to: None,
             modified: None,
             template_status: Default::default(),
+            sampling_status: Default::default(),
+            sampling_effective: None,
             has_inference_config: false,
         };
         let targets = targets(&model);
@@ -654,6 +658,8 @@ mod tests {
             converted_to: None,
             modified: None,
             template_status: Default::default(),
+            sampling_status: Default::default(),
+            sampling_effective: None,
             has_inference_config: false,
         };
         assert_eq!(targets(&model), vec![PathBuf::from("/models/m")]);

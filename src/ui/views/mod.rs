@@ -10,5 +10,6 @@ pub mod logs;
 pub mod models;
 pub mod plan;
 pub mod requests;
+pub mod sampling;
 pub mod serve;
 pub mod templates;

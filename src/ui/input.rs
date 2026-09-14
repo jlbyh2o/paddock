@@ -51,6 +51,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    // The sampling editor owns the keyboard the same way: three fields and a commit, and
+    // nothing behind it should see a keystroke meant for a number.
+    if app.sampling_view.is_open() {
+        sampling_key(app, key);
+        return;
+    }
+
     // A text field has the keyboard until it is dismissed.
     if let Some(handled) = text_entry(app, key) {
         if handled {
@@ -359,9 +366,78 @@ fn models_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('c') => on_selected_model(app, |app, path| {
             let _ = actions::convert_model(app, &path);
         }),
+        KeyCode::Char('g') => on_selected_model(app, |app, path| {
+            // Refused here as well as in the action, so the editor never opens on a
+            // checkpoint whose override the engine would go on to ignore.
+            let format = app.models.iter().find(|m| m.path == path).map(|m| m.format);
+            match format.and_then(crate::sampling::unsupported) {
+                Some(why) => app.warn(why.to_string()),
+                None => app.sampling_view.open(&path),
+            }
+        }),
+        KeyCode::Char('u') => on_selected_model(app, |app, path| {
+            let _ = actions::request_revert_sampling(app, &path);
+        }),
         KeyCode::Char('D') => on_selected_model(app, |app, path| {
             let _ = actions::delete_model(app, &path);
         }),
+        _ => {}
+    }
+}
+
+/// The sampling editor overlay: move between the three fields, edit one, commit or leave.
+fn sampling_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.sampling_view.close();
+            return;
+        }
+        KeyCode::Enter => {
+            let Some(path) = app.sampling_view.model.clone() else { return };
+            match app.sampling_view.parse() {
+                // Parse errors are already on screen under the fields; refusing to commit
+                // is the whole response, and closing would throw away what was typed.
+                Err(problem) => app.error(problem),
+                Ok(want) => {
+                    app.sampling_view.close();
+                    let _ = actions::request_apply_sampling(app, &path, want);
+                }
+            }
+            return;
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            app.sampling_view.field = app.sampling_view.field.next();
+            return;
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            app.sampling_view.field = app.sampling_view.field.prev();
+            return;
+        }
+        _ => {}
+    }
+
+    let field = app.sampling_view.field;
+    let input = app.sampling_view.input(field);
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('w') => input.delete_word(),
+            KeyCode::Char('u') => input.clear(),
+            KeyCode::Char('a') => input.home(),
+            KeyCode::Char('e') => input.end(),
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char(c) => input.insert(c),
+        KeyCode::Backspace => input.backspace(),
+        KeyCode::Delete => input.delete(),
+        KeyCode::Left => input.left(),
+        KeyCode::Right => input.right(),
+        KeyCode::Home => input.home(),
+        KeyCode::End => input.end(),
         _ => {}
     }
 }

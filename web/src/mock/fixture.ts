@@ -655,6 +655,17 @@ export const fixture: Snapshot = {
           },
         },
         template_targets: [FTW_PATH],
+        sampling_status: {
+          kind: "overridden",
+          label: "temperature 0.6  top_p 0.95  top_k 20",
+          applied: {
+            sampling: { temperature: 0.6, top_k: 20, top_p: 0.95 },
+            applied_at: "2026-09-13T18:02:11+01:00",
+            had_original: true,
+          },
+        },
+        sampling_effective: { temperature: 0.6, top_k: 20, top_p: 0.95 },
+        sampling_unsupported: null,
         ftw_output_path: FTW_PATH,
         guidance: [
           { level: "good", text: "Ready to serve: FTW loads without a conversion step." },
@@ -687,6 +698,9 @@ export const fixture: Snapshot = {
         is_partial: false,
         template_status: { kind: "built_in", label: "built-in" },
         template_targets: [HF_PATH, FTW_PATH],
+        sampling_status: { kind: "checkpoint", label: "checkpoint's own" },
+        sampling_effective: { temperature: 0.7, top_k: 20, top_p: 0.8 },
+        sampling_unsupported: null,
         ftw_output_path: FTW_PATH,
         guidance: [
           { level: "good", text: "Already converted — the FTW build beside it loads far faster." },
@@ -718,6 +732,9 @@ export const fixture: Snapshot = {
         is_partial: false,
         template_status: { kind: "foreign", label: "custom (not applied by ft-man)" },
         template_targets: ["/workspace/huggingface/hub/models--meta-llama--Llama-4.2-11B-Instruct/snapshots/4c1e880"],
+        sampling_status: { kind: "checkpoint", label: "checkpoint's own" },
+        sampling_effective: null,
+        sampling_unsupported: null,
         ftw_output_path: "/workspace/ftw/Llama-4.2-11B-Instruct",
         guidance: [
           { level: "warn", text: "BF16 weights need 20.0 GiB of VRAM; this card has 16.0 GiB." },
@@ -749,6 +766,9 @@ export const fixture: Snapshot = {
         is_partial: true,
         template_status: { kind: "built_in", label: "built-in" },
         template_targets: [],
+        sampling_status: { kind: "checkpoint", label: "checkpoint's own" },
+        sampling_effective: null,
+        sampling_unsupported: "this conversion is incomplete and cannot serve",
         ftw_output_path: "/workspace/ftw/Mixtral-8x7B-FTW",
         guidance: [
           { level: "bad", text: "An interrupted conversion left this behind; delete it before retrying." },

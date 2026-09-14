@@ -358,6 +358,13 @@ pub struct ModelEntry<'a> {
     is_partial: bool,
     template_status: crate::templates::Status,
     template_targets: Vec<String>,
+    sampling_status: crate::sampling::Status,
+    /// What the checkpoint will actually hand the engine, override or not — the same
+    /// reading `views::sampling` shows, so the browser does not have to infer it from the
+    /// status alone.
+    sampling_effective: Option<crate::sampling::Sampling>,
+    /// Why this model cannot take an override, when it cannot. GGUF is the case.
+    sampling_unsupported: Option<&'static str>,
     ftw_output_path: String,
     guidance: Vec<Guidance>,
 }
@@ -387,6 +394,9 @@ fn models(app: &App) -> ModelsSnapshot<'_> {
                 convertible: m.convertible(),
                 is_partial: m.is_partial(),
                 template_status: app.template_status(m),
+                sampling_status: m.sampling_status.clone(),
+                sampling_effective: m.sampling_effective.clone(),
+                sampling_unsupported: crate::sampling::unsupported(m.format),
                 template_targets: crate::templates::targets(m)
                     .iter()
                     .map(|p| p.display().to_string())

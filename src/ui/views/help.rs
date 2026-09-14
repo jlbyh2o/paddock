@@ -41,6 +41,8 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("Enter", "load into the Serve configuration"),
             ("c", "convert to FTW"),
             ("s", "serve this model now"),
+            ("g", "set the sampling defaults it serves with"),
+            ("u", "restore the checkpoint's own sampling defaults"),
             ("D", "delete the checkpoint from disk"),
             ("r", "rescan"),
         ],

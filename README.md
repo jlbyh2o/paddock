@@ -152,7 +152,7 @@ before installing — see the comments in the file.
 | Tab | What it is for |
 |---|---|
 | **Dashboard** | Engine state, throughput, cache pools, GPU and host telemetry. The screen you leave open. |
-| **Models** | Your local checkpoint library. Recognizes HF, FTW and GGUF, pairs a checkpoint with its FTW build, and says what to do with each. |
+| **Models** | Your local checkpoint library. Recognizes HF, FTW and GGUF, pairs a checkpoint with its FTW build, says what to do with each, and sets the sampling defaults it serves with. |
 | **Hub** | Search Hugging Face, check a repo against FreeToken *before* downloading it, pick a quantization, download. Lands in the standard Hugging Face cache. |
 | **Templates** | Override a checkpoint's chat template with one fetched from a Hugging Face repo, and put the original back. |
 | **Serve** | Every `ft serve` flag, grouped, with its domain and help text. `a` plans the launch against your hardware. Save configurations as named profiles. |
@@ -439,6 +439,38 @@ Templates that take `chat_template_kwargs` (the Qwen-Sharp ones accept
 `enable_thinking`, `tool_call_format`, `max_tool_arg_chars` and others) read them from
 the request body — FreeToken passes `chat_template_kwargs` straight through from the
 OpenAI and Anthropic APIs.
+
+## Setting the sampling defaults
+
+A request that names no `temperature` (or `top_p`, or `top_k`) still gets one. FreeToken
+resolves the missing values from the checkpoint's `generation_config.json` — that is what
+`--sampling-defaults=model`, its default, means — and falls back to temperature `0.0`,
+top_k `-1`, top_p `1.0` when the checkpoint recommends nothing. The Dashboard's **Model
+sampling** line reports what the running engine actually resolved to.
+
+There is no `ft serve` flag for the values themselves, so to choose them ft-man changes what
+that read finds. Select a checkpoint on the **Models** tab (`2`) and press `g`:
+
+1. Fill in any of `temperature`, `top_p`, `top_k`. An empty field leaves the key out, so
+   the engine uses its own default for that one value — which is not the same as a `0`.
+2. Enter. The confirmation names every directory that will be written (the checkpoint, and
+   its FTW build when there is one) and says so loudly when that is inside a shared Hugging
+   Face cache, where other tools will see the change too.
+3. `u` restores the checkpoint's own.
+
+The values are merged into `generation_config.json`, never written over it: that file also
+carries the stop token ids, and a model that loses those does not stop talking. The
+original is kept beside it as `generation_config.json.ft-man-original`, so `u` puts back
+exactly what shipped.
+
+Two things worth knowing. Greedy decoding ignores `top_k` and `top_p` entirely, so setting
+either without a temperature does nothing — ft-man says so before it writes. And a **GGUF**
+checkpoint is refused outright: it carries its sampling in the file's own metadata, which
+FreeToken reads first, so a `generation_config.json` beside it would be written and then
+never read.
+
+As with a template, the engine reads this once at load time, so **restart the engine** for
+a change to take effect.
 
 ## Development
 

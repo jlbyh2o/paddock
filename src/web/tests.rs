@@ -822,6 +822,76 @@ async fn template_routes_refuse_unknown_identities() {
     assert_eq!(body["status"], "started");
 }
 
+// ---------------------------------------------------------------- sampling
+
+#[tokio::test]
+async fn sampling_routes_refuse_what_the_engine_would_not_honor() {
+    let state = populated().await;
+
+    let (status, body) = send(
+        &state,
+        post("/api/models/sampling/apply", serde_json::json!({"path": "/models/gone"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "that model is no longer in the library");
+
+    // Every key omitted is not "use the defaults", it is a write with nothing in it.
+    let (status, body) = send(
+        &state,
+        post("/api/models/sampling/apply", serde_json::json!({"path": "/models/Qwen3.6-35B-A3B"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("nothing to apply"), "{body}");
+
+    let (status, body) = send(
+        &state,
+        post(
+            "/api/models/sampling/apply",
+            serde_json::json!({"path": "/models/Qwen3.6-35B-A3B", "temperature": 3.0}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("outside 0.0"), "{body}");
+
+    // The checkpoint has no ft-man override, so there is nothing to put back.
+    let (status, body) = send(
+        &state,
+        post("/api/models/sampling/revert", serde_json::json!({"path": "/models/Qwen3.6-35B-A3B"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("not using ft-man sampling defaults"));
+
+    // A valid override asks before it writes, and names what it would do.
+    let (status, body) = send(
+        &state,
+        post(
+            "/api/models/sampling/apply",
+            serde_json::json!({"path": "/models/Qwen3.6-35B-A3B", "temperature": 0.6, "top_p": 0.95}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "confirm_pending");
+
+    let (_, snap) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(snap["confirm"]["title"], "Set sampling defaults");
+    assert_eq!(
+        snap["confirm"]["action"],
+        serde_json::json!({
+            "kind": "apply_sampling",
+            "model": "/models/Qwen3.6-35B-A3B",
+            // The omitted key travels as null, not as a zero: it is the difference between
+            // "leave top_k out of the file" and "write top_k 0", which the engine reads as
+            // two different things.
+            "sampling": {"temperature": 0.6, "top_k": null, "top_p": 0.95},
+        })
+    );
+}
+
 /// A template that really is in the store, read back through the route the preview pane
 /// uses.
 #[tokio::test]

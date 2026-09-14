@@ -94,6 +94,17 @@ pub struct Model {
     // flattened rest, so the shape stays the documented one.
     #[serde(skip)]
     pub template_status: crate::templates::Status,
+    /// The sampling-override situation as of the scan, read here for the same reason as
+    /// `template_status`: both front ends want it per row, and a `stat` per model per
+    /// frame against a network mount stalls every connected browser.
+    // Skipped: the web layer sends it under its own `sampling_status` key.
+    #[serde(skip)]
+    pub sampling_status: crate::sampling::Status,
+    /// What this checkpoint will actually hand the engine, override or not. Read at scan
+    /// time for the same reason as the status beside it: it is a file read, and one per
+    /// model per frame is what stalls a browser on a network mount.
+    #[serde(skip)]
+    pub sampling_effective: Option<crate::sampling::Sampling>,
     /// Whether `inference/config.json` is present — DeepSeek-V4 keeps its real arguments
     /// there, and the Models pane says so when it is missing. Recorded at scan time for
     /// the same reason as `template_status`.
@@ -412,6 +423,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             variant: None,
             modified,
             template_status: crate::templates::status(dir),
+            sampling_status: crate::sampling::status(dir),
+            sampling_effective: crate::sampling::effective(dir),
             has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
@@ -436,6 +449,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             variant: None,
             modified,
             template_status: crate::templates::status(dir),
+            sampling_status: crate::sampling::status(dir),
+            sampling_effective: crate::sampling::effective(dir),
             has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
@@ -465,6 +480,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             variant: None,
             modified,
             template_status: crate::templates::status(dir),
+            sampling_status: crate::sampling::status(dir),
+            sampling_effective: crate::sampling::effective(dir),
             has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
@@ -490,6 +507,8 @@ pub fn inspect(dir: &Path) -> Option<Model> {
             variant: None,
             modified,
             template_status: crate::templates::status(dir),
+            sampling_status: crate::sampling::status(dir),
+            sampling_effective: crate::sampling::effective(dir),
             has_inference_config: dir.join("inference/config.json").is_file(),
         });
     }
@@ -988,6 +1007,8 @@ mod tests {
             converted_to: None,
             modified: None,
             template_status: Default::default(),
+            sampling_status: Default::default(),
+            sampling_effective: None,
             has_inference_config: false,
         });
         assert_eq!(m.served_name(), "unsloth/Model-GGUF:UD-IQ3_XXS");

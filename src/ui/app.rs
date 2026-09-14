@@ -294,6 +294,132 @@ impl Default for ServeView {
     }
 }
 
+/// The sampling-override editor, opened over the Models tab.
+///
+/// Three fields rather than a knob group: these are not `ft serve` flags and never reach
+/// an argv — they are written into the checkpoint's `generation_config.json`, which is the
+/// only place FreeToken reads them from. See [`crate::sampling`].
+#[derive(Default)]
+pub struct SamplingView {
+    /// The model being edited. `None` when the editor is closed.
+    pub model: Option<std::path::PathBuf>,
+    pub field: SamplingField,
+    pub temperature: TextInput,
+    pub top_p: TextInput,
+    pub top_k: TextInput,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SamplingField {
+    #[default]
+    Temperature,
+    TopP,
+    TopK,
+}
+
+impl SamplingField {
+    pub const ALL: [SamplingField; 3] =
+        [SamplingField::Temperature, SamplingField::TopP, SamplingField::TopK];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SamplingField::Temperature => "temperature",
+            SamplingField::TopP => "top_p",
+            SamplingField::TopK => "top_k",
+        }
+    }
+
+    /// What FreeToken falls back to when the key is absent, shown as the placeholder.
+    pub fn framework_default(self) -> &'static str {
+        match self {
+            SamplingField::Temperature => "0.0 (greedy)",
+            SamplingField::TopP => "1.0 (off)",
+            SamplingField::TopK => "-1 (off)",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            SamplingField::Temperature => SamplingField::TopP,
+            SamplingField::TopP => SamplingField::TopK,
+            SamplingField::TopK => SamplingField::Temperature,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        self.next().next()
+    }
+}
+
+impl SamplingView {
+    pub fn is_open(&self) -> bool {
+        self.model.is_some()
+    }
+
+    pub fn input(&mut self, field: SamplingField) -> &mut TextInput {
+        match field {
+            SamplingField::Temperature => &mut self.temperature,
+            SamplingField::TopP => &mut self.top_p,
+            SamplingField::TopK => &mut self.top_k,
+        }
+    }
+
+    pub fn value(&self, field: SamplingField) -> &str {
+        match field {
+            SamplingField::Temperature => &self.temperature.value,
+            SamplingField::TopP => &self.top_p.value,
+            SamplingField::TopK => &self.top_k.value,
+        }
+    }
+
+    /// Seed the three fields from whatever the checkpoint will currently serve, so the
+    /// editor opens on the values in force rather than on blanks.
+    pub fn open(&mut self, model: &std::path::Path) {
+        let current = crate::sampling::effective(model).unwrap_or_default();
+        let show = |v: Option<f64>| v.map(|n| n.to_string()).unwrap_or_default();
+        self.temperature.set(show(current.temperature));
+        self.top_p.set(show(current.top_p));
+        self.top_k.set(current.top_k.map(|n| n.to_string()).unwrap_or_default());
+        self.field = SamplingField::default();
+        self.model = Some(model.to_path_buf());
+    }
+
+    pub fn close(&mut self) {
+        self.model = None;
+    }
+
+    /// Parse the three fields. An empty field is `None` — "leave the key out" — and a
+    /// field that does not parse is the error, named so the reader knows which one.
+    pub fn parse(&self) -> Result<crate::sampling::Sampling, String> {
+        let mut out = crate::sampling::Sampling::default();
+        for field in SamplingField::ALL {
+            let raw = self.value(field).trim();
+            if raw.is_empty() {
+                continue;
+            }
+            match field {
+                SamplingField::Temperature => {
+                    out.temperature = Some(parse_num(raw, field)?);
+                }
+                SamplingField::TopP => {
+                    out.top_p = Some(parse_num(raw, field)?);
+                }
+                SamplingField::TopK => {
+                    out.top_k = Some(
+                        raw.parse::<i64>()
+                            .map_err(|_| format!("top_k must be a whole number, not '{raw}'"))?,
+                    );
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn parse_num(raw: &str, field: SamplingField) -> Result<f64, String> {
+    raw.parse::<f64>().map_err(|_| format!("{} must be a number, not '{raw}'", field.label()))
+}
+
 /// The four resizable pools, in the order the Cache view lists them.
 ///
 /// `Deserialize` as well as `Serialize`: the web API names a pool by exactly these
@@ -550,6 +676,7 @@ pub struct App {
     pub hub_view: HubView,
     pub templates_view: TemplatesView,
     pub serve_view: ServeView,
+    pub sampling_view: SamplingView,
     pub cache_view: CacheView,
     pub jobs_view: JobsView,
     pub requests_view: RequestsView,
@@ -684,6 +811,7 @@ impl App {
             hub_view: HubView { revision: "main".into(), ..Default::default() },
             templates_view: TemplatesView::default(),
             serve_view: ServeView::default(),
+            sampling_view: SamplingView::default(),
             cache_view: CacheView::default(),
             jobs_view: JobsView::default(),
             requests_view: RequestsView::default(),
@@ -965,6 +1093,26 @@ impl App {
             let status = crate::templates::status(&p);
             if let Some(m) = self.models.iter_mut().find(|m| m.path == p) {
                 m.template_status = status;
+            }
+        }
+    }
+
+    /// Re-read the on-disk sampling status for one checkpoint and its FTW build.
+    ///
+    /// The template counterpart's reasoning applies unchanged: the apply and revert
+    /// actions have just written those directories and are already doing filesystem work,
+    /// and nothing else moves this.
+    pub fn refresh_sampling_status(&mut self, path: &std::path::Path) {
+        let mut paths = vec![path.to_path_buf()];
+        if let Some(m) = self.models.iter().find(|m| m.path == path) {
+            paths.extend(m.converted_to.clone());
+        }
+        for p in paths {
+            let status = crate::sampling::status(&p);
+            let effective = crate::sampling::effective(&p);
+            if let Some(m) = self.models.iter_mut().find(|m| m.path == p) {
+                m.sampling_status = status;
+                m.sampling_effective = effective;
             }
         }
     }

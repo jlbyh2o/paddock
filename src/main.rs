@@ -17,6 +17,7 @@ mod plan;
 mod probe;
 mod reuse;
 mod runtime;
+mod sampling;
 mod templates;
 mod ui;
 mod util;

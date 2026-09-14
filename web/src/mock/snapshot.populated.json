@@ -78,7 +78,7 @@
     "state": "serving"
   },
   "config": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-868243/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-1209906/config.toml",
     "confirm_destructive": true,
     "convert_preflight": true,
     "disk_free": {
@@ -101,7 +101,7 @@
     "poll_ms": 1000,
     "server_host": "0.0.0.0",
     "server_port": 1919,
-    "state_dir": "/home/user/.cache/tmp/ft-man-tests-868243/state",
+    "state_dir": "/home/user/.cache/tmp/ft-man-tests-1209906/state",
     "template_sources": [
       "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
     ],
@@ -434,13 +434,13 @@
         "file_count": 12,
         "files_done": 3,
         "finished_at": null,
-        "id": 47,
+        "id": 1,
         "is_running": true,
         "rate_bps": 0.0,
         "ratio": 0.36666666666666664,
         "repo": "nvidia/GLM-5.2-NVFP4",
         "revision": "main",
-        "started_at": "2026-09-14T14:53:07.611458978-06:00",
+        "started_at": "2026-09-14T15:47:54.230523112-06:00",
         "status": {
           "kind": "running"
         },
@@ -455,7 +455,7 @@
         "elapsed_s": 0,
         "failure_reason": null,
         "finished_at": null,
-        "id": 98,
+        "id": 1,
         "is_running": true,
         "kind": "convert",
         "kind_label": "convert",
@@ -471,7 +471,7 @@
         "progress_detail": "27.9 GiB / 63.3 GiB  (experts)",
         "progress_ratio": 0.4411764705882353,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T14:53:07.611420546-06:00",
+        "started_at": "2026-09-14T15:47:54.230476750-06:00",
         "status": {
           "kind": "running"
         },
@@ -483,7 +483,7 @@
         "elapsed_s": 0,
         "failure_reason": "loading weights",
         "finished_at": null,
-        "id": 99,
+        "id": 2,
         "is_running": false,
         "kind": "bench",
         "kind_label": "bench",
@@ -499,7 +499,7 @@
         "progress_detail": "",
         "progress_ratio": null,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T14:53:07.611457890-06:00",
+        "started_at": "2026-09-14T15:47:54.230521881-06:00",
         "status": {
           "kind": "failed",
           "reason": "with status 1"
@@ -518,7 +518,7 @@
     "log_path": null
   },
   "models": {
-    "config_path": "/home/user/.cache/tmp/ft-man-tests-868243/config.toml",
+    "config_path": "/home/user/.cache/tmp/ft-man-tests-1209906/config.toml",
     "items": [
       {
         "arch": "Qwen3MoeForCausalLM",
@@ -547,13 +547,23 @@
         "is_partial": false,
         "max_position": 262144,
         "model_type": "qwen3_moe",
-        "modified_ms": 1789419187611,
+        "modified_ms": 1789422474230,
         "name": "Qwen3.6-35B-A3B",
         "num_experts": 128,
         "num_layers": 48,
         "path": "/models/Qwen3.6-35B-A3B",
         "quant": "nvfp4",
         "repo": null,
+        "sampling_effective": {
+          "temperature": 0.7,
+          "top_k": 20,
+          "top_p": 0.8
+        },
+        "sampling_status": {
+          "kind": "checkpoint",
+          "label": "checkpoint's own"
+        },
+        "sampling_unsupported": null,
         "served_name": "Qwen3.6-35B-A3B",
         "size_bytes": 70000000000,
         "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx",
@@ -601,6 +611,25 @@
         "path": "/models/Qwen3.6-35B-A3B-ftw",
         "quant": "nvfp4",
         "repo": null,
+        "sampling_effective": {
+          "temperature": 0.6,
+          "top_k": 20,
+          "top_p": 0.95
+        },
+        "sampling_status": {
+          "applied": {
+            "applied_at": "2026-09-13T18:02:11+01:00",
+            "had_original": true,
+            "sampling": {
+              "temperature": 0.6,
+              "top_k": 20,
+              "top_p": 0.95
+            }
+          },
+          "kind": "overridden",
+          "label": "temperature 0.6  top_p 0.95  top_k 20"
+        },
+        "sampling_unsupported": null,
         "served_name": "Qwen3.6-35B-A3B-ftw",
         "size_bytes": 69000000000,
         "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx",
@@ -901,7 +930,7 @@
     }
   },
   "telemetry": {
-    "age_ms": 26,
+    "age_ms": 4,
     "cache_status": {
       "geometry": {
         "cache_budget_bytes": 24000000000,
@@ -1083,20 +1112,20 @@
   },
   "toasts": [
     {
-      "age_ms": 26,
-      "id": 80,
+      "age_ms": 4,
+      "id": 1,
       "kind": "info",
       "text": "engine started",
       "ttl_ms": 4000
     },
     {
-      "age_ms": 26,
-      "id": 81,
+      "age_ms": 4,
+      "id": 2,
       "kind": "warn",
       "text": "the hf CLI is not installed",
       "ttl_ms": 8000
     }
   ],
-  "ts_ms": 1789419187637,
+  "ts_ms": 1789422474234,
   "version": "0.3.0"
 }

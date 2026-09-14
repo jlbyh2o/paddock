@@ -204,6 +204,12 @@ pub(crate) fn populate(app: &mut App) {
             converted_to: Some("/models/Qwen3.6-35B-A3B-ftw".into()),
             modified: Some(std::time::SystemTime::now()),
             template_status: Default::default(),
+            sampling_status: Default::default(),
+            sampling_effective: Some(crate::sampling::Sampling {
+                temperature: Some(0.7),
+                top_k: Some(20),
+                top_p: Some(0.8),
+            }),
             has_inference_config: false,
         },
         crate::models::Model {
@@ -224,6 +230,22 @@ pub(crate) fn populate(app: &mut App) {
             converted_to: None,
             modified: None,
             template_status: Default::default(),
+            sampling_status: crate::sampling::Status::Overridden(Box::new(
+                crate::sampling::AppliedSampling {
+                    sampling: crate::sampling::Sampling {
+                        temperature: Some(0.6),
+                        top_k: Some(20),
+                        top_p: Some(0.95),
+                    },
+                    applied_at: "2026-09-13T18:02:11+01:00".into(),
+                    had_original: true,
+                },
+            )),
+            sampling_effective: Some(crate::sampling::Sampling {
+                temperature: Some(0.6),
+                top_k: Some(20),
+                top_p: Some(0.95),
+            }),
             has_inference_config: false,
         },
     ];
@@ -602,6 +624,24 @@ async fn overlays_and_secondary_panes_render() {
     a.serve_view.plan = Some(crate::ui::views::plan::build(&a).expect("a plan should build"));
     draw_all(&mut a);
     a.serve_view.plan = None;
+
+    // The sampling editor, on each of its three fields and in both of the states the pane
+    // is there to distinguish: values that will apply, and values that will not parse.
+    let model_path = a.models[0].path.clone();
+    a.sampling_view.open(&model_path);
+    a.sampling_view.temperature.set("0.6");
+    a.sampling_view.top_p.set("0.95");
+    for field in crate::ui::app::SamplingField::ALL {
+        a.sampling_view.field = field;
+        draw_all(&mut a);
+    }
+    a.sampling_view.top_k.set("not a number");
+    draw_all(&mut a);
+    // A filter that cannot fire is a warning, not an error, and renders differently.
+    a.sampling_view.top_k.set("20");
+    a.sampling_view.temperature.set("0");
+    draw_all(&mut a);
+    a.sampling_view.close();
 
     // Every knob group, including the ones with the longest help text.
     for group in crate::knobs::Group::ALL {

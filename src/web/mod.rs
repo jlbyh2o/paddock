@@ -122,6 +122,8 @@ pub fn router(state: Shared) -> Router {
         .route("/api/models/use", post(routes::models::use_model))
         .route("/api/models/convert", post(routes::models::convert))
         .route("/api/models/delete", post(routes::models::delete))
+        .route("/api/models/sampling/apply", post(routes::models::apply_sampling))
+        .route("/api/models/sampling/revert", post(routes::models::revert_sampling))
         .route("/api/hub/search", post(routes::hub::search))
         .route("/api/hub/open", post(routes::hub::open))
         .route("/api/hub/variant", post(routes::hub::variant))

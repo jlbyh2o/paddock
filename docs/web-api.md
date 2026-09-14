@@ -462,6 +462,9 @@ Each field is an array of non-negative integers, oldest first, at most 120 entri
 | `is_partial` | boolean | `Model::is_partial()` |
 | `template_status` | `TemplateStatus` (tagged) | **`templates::status(&model.path)`** as recorded on the `Model` by the scan, read back through `app.template_status(model)`, with `label` from `Status::label()`. Re-read only when it can change — after a template apply or revert, both of which are already writing those directories |
 | `template_targets` | string[] | `templates::targets(model)` — the directories an apply would write into (the checkpoint, plus its FTW build when one exists) |
+| `sampling_status` | `SamplingStatus` (tagged) | **`sampling::status(&model.path)`** as recorded on the `Model` by the scan, with `label` from `Status::label()`. Re-read after a sampling apply or revert, for the same reason `template_status` is |
+| `sampling_effective` | `Sampling` \| null | **`sampling::effective(&model.path)`** as recorded by the scan — the three keys read back out of the checkpoint's `generation_config.json`, override or not, which is what the engine will apply to a request that sets none of its own. `null` when the checkpoint recommends nothing. A `do_sample: false` checkpoint reads back as `{temperature: 0, …}`, because that is what FreeToken makes of it |
+| `sampling_unsupported` | string \| null | `sampling::unsupported(model.format)` — why an override here would not be honored, when it would not. GGUF is the case that matters: `load_generation_sampling` reads the file's own `general.sampling.*` metadata before it looks for a `generation_config.json`, so one written beside it is never read |
 | `ftw_output_path` | string | `models::ftw_output_path(...)` — where a conversion would write, whether or not it exists yet |
 | `guidance` | `{level, text}[]` | The detail pane's bullet list, computed server-side because every rule reads host RAM, GPU VRAM and the filesystem. `level` is `"good" \| "warn" \| "bad" \| "dim"`, matching the color the TUI uses |
 
@@ -681,6 +684,8 @@ At most four toasts are ever present (`App::toast` pops the front past four), an
 {"kind": "apply_template", "template": "qwen-sharp", "model": "/models/x"}
 {"kind": "revert_template", "model": "/models/x"}
 {"kind": "delete_template", "name": "qwen-sharp"}
+{"kind": "apply_sampling", "model": "/models/x", "sampling": {"temperature": 0.6, "top_k": null, "top_p": 0.95}}
+{"kind": "revert_sampling", "model": "/models/x"}
 {"kind": "reconvert_model", "source": "/models/x"}
 {"kind": "update_freetoken"}
 {"kind": "install_hf_cli"}
@@ -1011,6 +1016,8 @@ snapshot's `confirm`", not as "done".**
 | 19 | `POST /api/models/use` | Models `Enter` / `s` | `use_selected_model` |
 | 20 | `POST /api/models/convert` | Models `c` | `convert_selected` → `begin_conversion` |
 | 21 | `POST /api/models/delete` | Models `D` | `delete_selected_model` |
+| 21a | `POST /api/models/sampling/apply` | Models `g` | `request_apply_sampling` → `write_sampling` |
+| 21b | `POST /api/models/sampling/revert` | Models `u` | `request_revert_sampling` → `revert_sampling` |
 | 22 | `POST /api/hub/search` | Hub `/` + `Enter` | `start_search` |
 | 23 | `POST /api/hub/open` | Hub `Enter` | `load_repo_files` + `check_compatibility` |
 | 24 | `POST /api/hub/variant` | Hub `Enter` / `Space` in Variants | `choose_variant` |
@@ -1210,6 +1217,51 @@ the destructive `Delete checkpoint` modal, naming the path and the space it free
 in a later snapshot. Accepting it returns `{"status":"started"}` too: `remove_dir_all` is
 tens of thousands of `unlink`s and goes to the blocking pool as well, with the outcome
 arriving as a toast and a rescan.
+
+**`POST /api/models/sampling/apply`** — body `{"path": "...", "temperature": 0.6, "top_p": 0.95, "top_k": 20}`. ⚠ confirms.
+
+The three sampling keys are flattened into the body beside the path. Each is optional, and
+an omitted key and an explicit `null` mean the same thing they mean in the file: leave it
+out, so the engine falls back to its own default for that one value (temperature `0.0`,
+top_k `-1`, top_p `1.0`). That is why they are nullable rather than defaulted — `0` is a
+temperature, not an absence.
+
+| Case | Result |
+|---|---|
+| Not found | `404` |
+| The model is GGUF, or the wreckage of a failed conversion (`sampling::unsupported`) | `409`. Refused rather than warned about: the file would be written and then never read, which looks exactly like a working override until someone checks the engine |
+| Every key omitted or null | `400`, "nothing to apply" |
+| A value outside its domain (`Sampling::validate`) | `400`, naming the key and the range |
+| Otherwise | `200 {"status":"confirm_pending"}` |
+
+FreeToken has no flag for these values — `--sampling-defaults` only chooses between the
+checkpoint's recommendations and the framework's — so the only way to set them is to change
+what `load_generation_sampling` finds. The confirmation names every directory that will be
+written (`templates::targets`: the checkpoint, plus its FTW build), warns when one is inside
+a shared hub cache, and repeats `Sampling::warnings` — chiefly that top_k and top_p do
+nothing while the temperature is 0 or unset, since greedy decoding never consults them.
+
+Accepting merges the keys into `generation_config.json` rather than replacing the file: it
+also carries `eos_token_id` and friends, and a replacement that dropped the stop ids would
+leave the model generating past the end of its turn. The checkpoint's original is moved to
+`generation_config.json.ft-man-original` and a `.ft-man-sampling.json` marker records what
+was applied, so `sampling::status` still reports the truth after a restart. A non-greedy
+override also writes `do_sample: true`, because a checkpoint shipping `do_sample: false`
+makes the loader short-circuit to greedy and ignore every value beside it.
+
+The engine reads this once, at load time, so a live engine gets a "restart for this to take
+effect" warning.
+
+**`POST /api/models/sampling/revert`** — body `{"path": "..."}`. ⚠ confirms.
+
+| Case | Result |
+|---|---|
+| Not found | `404` |
+| No ft-man override in place | `409` |
+| Otherwise | `200 {"status":"confirm_pending"}` |
+
+Restores the backed-up original, or removes the file outright when the checkpoint never had
+one — a leftover would keep feeding the engine ft-man's numbers.
 
 ### 4.6 Hub
 
@@ -1555,6 +1607,17 @@ Six panes.
   `num_experts` when `is_moe`, `max_position`, `ftw_fingerprint`,
   `template_status.label`, and `converted_to`. Then the `guidance` bullets in order,
   colored by `level`.
+* **Sampling** — below the bullets: `sampling_effective` summarized the way
+  `Sampling::summary` prints it (or "recommends nothing"), marked as an ft-man override when
+  `sampling_status.kind` is `overridden`; then three number inputs seeded from
+  `sampling_effective` and placeheld with the framework default each key falls back to when
+  absent. A blank field means "leave the key out", which is why the inputs hold strings
+  until they are submitted — a `0` would say something else. Parse and range errors render
+  before the round trip, and `Sampling::warnings` renders as a warning, but the server
+  checks all of it again and is the only thing that can refuse. `Set sampling` posts
+  `/api/models/sampling/apply`; `Restore checkpoint's` posts the revert and is disabled
+  unless an override is in place. When `sampling_unsupported` is set, the whole form is
+  replaced by that sentence — a GGUF checkpoint cannot take one.
 
 ### 5.4 Hub
 

@@ -851,6 +851,17 @@ input.error {
   min-width: 0;
 }
 
+/* The three sampling fields sit in the Models detail pane, so they inherit .field's
+   label column and only need room to breathe around the group. */
+.sampling-fields {
+  margin: 6px 0;
+}
+
+.sampling-fields input {
+  width: 100%;
+  min-width: 0;
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;

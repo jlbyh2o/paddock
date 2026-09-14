@@ -15,6 +15,7 @@ import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Bullets, Empty, Field, Pane } from "../ui/primitives.tsx";
 import { SearchField, useFilterField } from "../ui/SearchField.tsx";
+import { SamplingEditor } from "./SamplingEditor.tsx";
 import { DASH, bytes, count, text, timestampMs, tokens } from "../format.ts";
 
 /** The TUI's rule, against a needle that was trimmed and lowercased by the caller. */
@@ -207,6 +208,7 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
               {model.served_name}
             </Field>
             <Bullets items={model.guidance} />
+            <SamplingEditor model={model} />
           </>
         )}
       </Pane>

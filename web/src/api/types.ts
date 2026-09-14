@@ -102,6 +102,35 @@ export type TemplateStatus =
   | { kind: "foreign"; label: string }
   | { kind: "overridden"; label: string; applied: AppliedTemplate };
 
+/**
+ * The sampling defaults a request that sets nothing resolves to. Mirrors
+ * `sampling::Sampling`. `null` means the key is absent from the checkpoint's
+ * generation_config.json, so the engine uses its own default: temperature 0.0 (greedy),
+ * top_k -1 (off), top_p 1.0 (off).
+ */
+export interface Sampling {
+  temperature: number | null;
+  top_k: number | null;
+  top_p: number | null;
+}
+
+/** What ft-man recorded when it applied sampling defaults. Mirrors `sampling::AppliedSampling`. */
+export interface AppliedSampling {
+  sampling: Sampling;
+  /** ISO-8601. */
+  applied_at: string;
+  /** Whether the checkpoint had its own generation_config.json before this. */
+  had_original: boolean;
+}
+
+/**
+ * A checkpoint's sampling situation. Mirrors `sampling::Status`, with `label` from
+ * `Status::label()` so the UI never rebuilds the phrasing.
+ */
+export type SamplingStatus =
+  | { kind: "checkpoint"; label: string }
+  | { kind: "overridden"; label: string; applied: AppliedSampling };
+
 /** A knob's type and domain. Mirrors `knobs::Kind`. */
 export type KnobKind =
   | { kind: "text" }
@@ -129,6 +158,8 @@ export type ConfirmAction =
   | { kind: "apply_template"; template: string; model: string }
   | { kind: "revert_template"; model: string }
   | { kind: "delete_template"; name: string }
+  | { kind: "apply_sampling"; model: string; sampling: Sampling }
+  | { kind: "revert_sampling"; model: string }
   | { kind: "reconvert_model"; source: string }
   | { kind: "install_hf_cli" }
   | { kind: "convert_anyway"; source: string }
@@ -667,6 +698,15 @@ export interface ModelEntry {
   template_status: TemplateStatus;
   /** Directories an apply would write into: the checkpoint, plus its FTW build. */
   template_targets: string[];
+  /** `sampling::status(path)`. */
+  sampling_status: SamplingStatus;
+  /**
+   * What the checkpoint will actually hand the engine, override or not — read from its
+   * generation_config.json at scan time. `null` when it recommends nothing.
+   */
+  sampling_effective: Sampling | null;
+  /** Why this model cannot take a sampling override, when it cannot. GGUF is the case. */
+  sampling_unsupported: string | null;
   /** Where a conversion would write, whether or not it exists yet. */
   ftw_output_path: string;
   guidance: ModelGuidance[];
@@ -1318,6 +1358,23 @@ export interface ModelConvertRequest {
 
 /** `POST /api/models/delete`. Confirms, destructively. */
 export interface ModelDeleteRequest {
+  path: string;
+}
+
+/**
+ * `POST /api/models/sampling/apply` — merge sampling defaults into the checkpoint's
+ * generation_config.json. Confirms. An omitted or `null` key is left out of the file, so
+ * the engine falls back to its own default for that one value.
+ */
+export interface ModelSamplingRequest {
+  path: string;
+  temperature?: number | null;
+  top_k?: number | null;
+  top_p?: number | null;
+}
+
+/** `POST /api/models/sampling/revert` — restore the checkpoint's own. Confirms. */
+export interface ModelSamplingRevertRequest {
   path: string;
 }
 

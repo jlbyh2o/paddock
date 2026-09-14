@@ -333,6 +333,13 @@ pub enum ConfirmAction {
     /// Restore a model's own template.
     RevertTemplate(std::path::PathBuf),
     DeleteTemplate(String),
+    /// Merge sampling defaults into a model's `generation_config.json`.
+    ApplySampling {
+        model: std::path::PathBuf,
+        sampling: crate::sampling::Sampling,
+    },
+    /// Restore a model's own sampling defaults.
+    RevertSampling(std::path::PathBuf),
     /// Pull the FreeToken checkout and reinstall it into its venv.
     UpdateFreetoken,
     /// Delete a failed conversion's leftovers, then convert `source` again.
@@ -385,6 +392,15 @@ impl Serialize for ConfirmAction {
             ConfirmAction::DeleteTemplate(name) => {
                 m.serialize_entry("kind", "delete_template")?;
                 m.serialize_entry("name", name)?;
+            }
+            ConfirmAction::ApplySampling { model, sampling } => {
+                m.serialize_entry("kind", "apply_sampling")?;
+                m.serialize_entry("model", model)?;
+                m.serialize_entry("sampling", sampling)?;
+            }
+            ConfirmAction::RevertSampling(model) => {
+                m.serialize_entry("kind", "revert_sampling")?;
+                m.serialize_entry("model", model)?;
             }
             ConfirmAction::ReconvertModel(source) => {
                 m.serialize_entry("kind", "reconvert_model")?;

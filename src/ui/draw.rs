@@ -30,6 +30,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.serve_view.plan.is_some() {
         views::plan::render(f, app, area);
     }
+    if app.sampling_view.is_open() {
+        views::sampling::render(f, app, area);
+    }
     if app.show_help {
         views::help::render(f, app, area);
     }
@@ -118,6 +121,9 @@ fn hints(app: &App) -> &'static [(&'static str, &'static str)] {
     if app.serve_view.plan.is_some() {
         return &[("A", "apply the plan"), ("Esc", "close")];
     }
+    if app.sampling_view.is_open() {
+        return &[("Tab", "field"), ("Enter", "apply"), ("Esc", "cancel")];
+    }
     match app.tab {
         Tab::Dashboard => {
             &[("e", "start"), ("s", "stop"), ("t", "smoke test"), ("r", "rescan"), ("?", "keys")]
@@ -126,6 +132,7 @@ fn hints(app: &App) -> &'static [(&'static str, &'static str)] {
             ("Enter", "use"),
             ("s", "serve"),
             ("c", "convert"),
+            ("g", "sampling"),
             ("/", "filter"),
             ("D", "delete"),
             ("?", "keys"),

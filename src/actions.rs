@@ -166,6 +166,14 @@ pub fn run_action(app: &mut App, action: ConfirmAction) -> Done {
             revert_template(app, &model);
             Done::Ok
         }
+        ConfirmAction::ApplySampling { model, sampling } => {
+            write_sampling(app, &model, &sampling);
+            Done::Ok
+        }
+        ConfirmAction::RevertSampling(model) => {
+            revert_sampling(app, &model);
+            Done::Ok
+        }
         ConfirmAction::ConvertAnyway(source) => start_conversion(app, &source),
         ConfirmAction::ReconvertModel(source) => {
             let out = ftw_out(app, &source);
@@ -1439,6 +1447,186 @@ fn revert_template(app: &mut App, model_path: &Path) {
         return;
     }
     app.success(format!("restored the built-in template in {reverted} director(ies)"));
+    if app.engine.is_live() {
+        app.warn("restart the engine for the change to take effect");
+    }
+}
+
+// ---------------------------------------------------------------- sampling
+
+/// Ask before merging sampling defaults into a checkpoint's `generation_config.json`.
+pub fn request_apply_sampling(
+    app: &mut App,
+    model_path: &Path,
+    sampling: crate::sampling::Sampling,
+) -> Outcome {
+    let Some(model) = app.models.iter().find(|m| m.path == model_path) else {
+        return Err(not_found_model(app, model_path));
+    };
+    let model_name = model.name.clone();
+    let path = model.path.clone();
+    let format = model.format;
+    let status = model.sampling_status.clone();
+    let targets = crate::templates::targets(model);
+
+    // GGUF is refused rather than warned about: the file would be written and then never
+    // read, which looks exactly like a working override until someone checks the engine.
+    if let Some(why) = crate::sampling::unsupported(format) {
+        return Err(warn_off(app, 409, format!("{model_name}: {why}")));
+    }
+    if let Some(problem) = sampling.validate() {
+        return Err(warn_off(app, 400, problem));
+    }
+    if targets.is_empty() {
+        return Err(error_off(
+            app,
+            409,
+            format!("{model_name} has no directory to write a generation config into"),
+        ));
+    }
+
+    let mut body = vec![
+        format!("Serve {model_name} with {}?", sampling.summary()),
+        String::new(),
+        "FreeToken reads its sampling defaults from the checkpoint, so this merges them \
+         into generation_config.json in:"
+            .into(),
+    ];
+    for t in &targets {
+        body.push(format!("    {}", t.display()));
+    }
+    body.push(String::new());
+    body.push(match &status {
+        crate::sampling::Status::Checkpoint => {
+            "Everything else in that file — the stop token ids especially — is kept, and \
+             the original is backed up so u can restore it."
+                .into()
+        }
+        crate::sampling::Status::Overridden(a) => format!(
+            "This replaces the override '{}'. The checkpoint's original stays backed up.",
+            a.sampling.summary()
+        ),
+    });
+    for warning in sampling.warnings() {
+        body.push(String::new());
+        body.push(warning);
+    }
+    // A cache directory is shared with every other tool reading it, so the reader needs to
+    // know that this reaches further than the model in front of them.
+    if targets.iter().any(|t| crate::templates::is_hub_cache_path(t)) {
+        body.push(String::new());
+        body.push(
+            "That is inside the Hugging Face cache, which other tools on this machine read \
+             too — they will see these defaults as well. A later `hf download` of the repo \
+             may replace them. The checkpoint's own config is backed up either way, and u \
+             restores it."
+                .into(),
+        );
+    }
+    if app.engine.is_live() {
+        body.push(String::new());
+        body.push(
+            "The engine read its sampling defaults at load time, so restart it for this to \
+             take effect."
+                .into(),
+        );
+    }
+
+    Ok(ask(
+        app,
+        Confirm::new(
+            "Set sampling defaults",
+            body,
+            ConfirmAction::ApplySampling { model: path, sampling },
+            false,
+        ),
+    ))
+}
+
+fn write_sampling(app: &mut App, model_path: &Path, sampling: &crate::sampling::Sampling) {
+    let Some(model) = app.models.iter().find(|m| m.path == model_path).cloned() else {
+        app.error("that model is no longer in the library");
+        return;
+    };
+    let mut written = 0usize;
+    for dir in crate::templates::targets(&model) {
+        match crate::sampling::apply(&dir, sampling) {
+            Ok(()) => written += 1,
+            Err(e) => {
+                app.error(format!("could not apply to {}: {e:#}", dir.display()));
+                return;
+            }
+        }
+    }
+    // Writing nothing is a failure, not a quiet success.
+    if written == 0 {
+        app.error(format!(
+            "nothing to write sampling defaults to — {} has no writable directory",
+            model.name
+        ));
+        return;
+    }
+    app.refresh_sampling_status(&model.path);
+    app.success(format!("set {} for {}", sampling.summary(), model.name));
+    if app.engine.is_live() {
+        app.warn("restart the engine for the new sampling defaults to take effect");
+    }
+}
+
+pub fn request_revert_sampling(app: &mut App, model_path: &Path) -> Outcome {
+    let Some(model) = app.models.iter().find(|m| m.path == model_path) else {
+        return Err(not_found_model(app, model_path));
+    };
+    let name = model.name.clone();
+    let path = model.path.clone();
+    let targets = crate::templates::targets(model);
+    if !model.sampling_status.is_overridden() {
+        return Err(warn_off(app, 409, format!("{name} is not using ft-man sampling defaults")));
+    }
+    let mut body = vec![
+        format!("Restore {name}'s own sampling defaults?"),
+        String::new(),
+        "This reverses the override in:".into(),
+    ];
+    for t in &targets {
+        body.push(format!("    {}", t.display()));
+    }
+    Ok(ask(
+        app,
+        Confirm::new(
+            "Restore checkpoint sampling",
+            body,
+            ConfirmAction::RevertSampling(path),
+            false,
+        ),
+    ))
+}
+
+fn revert_sampling(app: &mut App, model_path: &Path) {
+    let Some(model) = app.models.iter().find(|m| m.path == model_path).cloned() else {
+        app.error("that model is no longer in the library");
+        return;
+    };
+    let mut reverted = 0usize;
+    for dir in crate::templates::targets(&model) {
+        // The FTW build may never have had one applied; that is not an error.
+        if !crate::sampling::status(&dir).is_overridden() {
+            continue;
+        }
+        match crate::sampling::revert(&dir) {
+            Ok(()) => reverted += 1,
+            Err(e) => {
+                app.error(format!("could not revert {}: {e:#}", dir.display()));
+                return;
+            }
+        }
+    }
+    app.refresh_sampling_status(&model.path);
+    if reverted == 0 {
+        app.error("found no override to restore");
+        return;
+    }
+    app.success(format!("restored the checkpoint's sampling in {reverted} director(ies)"));
     if app.engine.is_live() {
         app.warn("restart the engine for the change to take effect");
     }

@@ -41,6 +41,8 @@ import type {
   LogPage,
   ModelConvertRequest,
   ModelDeleteRequest,
+  ModelSamplingRequest,
+  ModelSamplingRevertRequest,
   ModelUseRequest,
   OkReply,
   ProfileDeleteRequest,
@@ -243,6 +245,12 @@ export const api = {
     post("/api/models/convert", req),
   /** ⚠ confirms, destructively. */
   deleteModel: (req: ModelDeleteRequest): Promise<ActionReply> => post("/api/models/delete", req),
+  /** ⚠ confirms. Writes the checkpoint's generation_config.json. */
+  applySampling: (req: ModelSamplingRequest): Promise<ActionReply> =>
+    post("/api/models/sampling/apply", req),
+  /** ⚠ confirms. */
+  revertSampling: (req: ModelSamplingRevertRequest): Promise<ActionReply> =>
+    post("/api/models/sampling/revert", req),
 
   // ---- hub (22-29) -------------------------------------------------------
   hubSearch: (req: HubSearchRequest): Promise<StartedReply> => post("/api/hub/search", req),
