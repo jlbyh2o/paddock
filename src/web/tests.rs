@@ -1693,11 +1693,27 @@ async fn starting_an_engine_wakes_the_backed_off_poll() {
 
 // ---------------------------------------------------------------- updating FreeToken
 
+/// A directory that answers `checkout::locate` without one existing on the machine.
+///
+/// These tests used to lean on `vendor-freetoken/` beside the crate, which is gitignored:
+/// present on a development machine and absent on a fresh clone, so they asserted a 409 at
+/// home and got the 503 for "no checkout" in CI. The checkout the test needs is now the
+/// test's own.
+fn fake_checkout(app: &mut App, name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("ft-man-update-{name}-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(dir.join(".git")).expect("the .git marker");
+    std::fs::create_dir_all(dir.join("python/freetoken")).expect("the package marker");
+    app.config.freetoken.checkout = Some(dir.clone());
+    dir
+}
+
 /// An update rewrites the files an editable install is running from, so a live engine is
 /// the one state it must never proceed from — and the refusal has to name the fix.
 #[tokio::test]
 async fn updating_freetoken_is_refused_while_the_engine_is_live() {
     let mut app = fresh().await;
+    let dir = fake_checkout(&mut app, "live");
     app.engine.state = crate::ft::EngineState::Running;
     let state = WebState::new(app, Auth::new(None).unwrap());
 
@@ -1705,6 +1721,7 @@ async fn updating_freetoken_is_refused_while_the_engine_is_live() {
     assert_eq!(status, StatusCode::CONFLICT);
     let msg = body["error"].as_str().unwrap_or_default();
     assert!(msg.contains("stop the engine"), "{msg}");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// Nothing to pull is not a failure, but it is not an update either: saying so beats
@@ -1712,6 +1729,7 @@ async fn updating_freetoken_is_refused_while_the_engine_is_live() {
 #[tokio::test]
 async fn updating_freetoken_is_refused_when_already_current() {
     let mut app = fresh().await;
+    let dir = fake_checkout(&mut app, "current");
     app.set_ft_checkout(Some(crate::ft::FtCheckout {
         path: "/home/user/FreeToken".into(),
         upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
@@ -1730,6 +1748,7 @@ async fn updating_freetoken_is_refused_when_already_current() {
     let (status, body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(body["error"].as_str().unwrap_or_default().contains("already at upstream"));
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A dirty tree is the operator's work, and `git pull --ff-only` would refuse it anyway —
@@ -1737,6 +1756,7 @@ async fn updating_freetoken_is_refused_when_already_current() {
 #[tokio::test]
 async fn updating_freetoken_is_refused_with_local_changes() {
     let mut app = fresh().await;
+    let dir = fake_checkout(&mut app, "dirty");
     app.set_ft_checkout(Some(crate::ft::FtCheckout {
         path: "/home/user/FreeToken".into(),
         upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
@@ -1755,4 +1775,5 @@ async fn updating_freetoken_is_refused_with_local_changes() {
     let (status, body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(body["error"].as_str().unwrap_or_default().contains("local changes"));
+    std::fs::remove_dir_all(&dir).ok();
 }
