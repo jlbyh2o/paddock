@@ -80,6 +80,7 @@ fn draw_all(app: &mut App) {
 /// Fill every pane with the kind of data a live system produces.
 pub(crate) fn populate(app: &mut App) {
     app.telemetry = Telemetry {
+        unreachable: false,
         health: Some(Health {
             status: "ok".into(),
             model: Some("Qwen3.6-35B-A3B".into()),

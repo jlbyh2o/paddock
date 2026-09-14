@@ -18,6 +18,17 @@ pub struct Client {
     base: String,
 }
 
+/// True when the request never reached a server at all — nothing is listening on the
+/// port, or the host refused the connection.
+///
+/// Worth separating from every other failure because the two mean opposite things about
+/// whether anything is wrong: ft-man polls an endpoint it does not require anyone to be
+/// serving, so a refused connection is the expected state whenever the engine is stopped,
+/// while a 500 or a decode failure is a fault whatever the engine is doing.
+pub fn is_unreachable(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<reqwest::Error>().is_some_and(reqwest::Error::is_connect)
+}
+
 impl Client {
     pub fn new(base_url: impl Into<String>, timeout: Duration) -> Result<Self> {
         let http = reqwest::Client::builder()

@@ -8,7 +8,7 @@ pub mod preflight;
 pub mod proc;
 pub mod types;
 
-pub use api::Client;
+pub use api::{is_unreachable, Client};
 pub use checkout::FtCheckout;
 pub use locate::Freetoken;
 pub use preflight::Outcome as Preflight;

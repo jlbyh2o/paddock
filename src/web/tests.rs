@@ -1613,3 +1613,64 @@ async fn an_idle_tick_publishes_nothing() {
     state.write(|app| app.info("something happened"));
     assert!(*state.changed.borrow() > before);
 }
+
+// ---------------------------------------------------------------- the poll
+
+/// Nothing is listening because nothing was started. That is the answer the port is
+/// supposed to give, and the status field already says the engine is stopped, so the
+/// snapshot carries no error for the Dashboard to color red.
+#[tokio::test]
+async fn a_refused_connection_with_no_engine_is_not_an_error() {
+    let mut app = fresh().await;
+    app.telemetry = crate::ui::app::Telemetry { unreachable: true, ..Default::default() };
+    assert!(matches!(app.engine.state, crate::ft::EngineState::Stopped));
+
+    assert_eq!(app.poll_error(), None, "a stopped engine's closed port is not a fault");
+    assert!(!app.server_reachable());
+
+    let state = WebState::new(app, Auth::new(None).unwrap());
+    let (status, body) = send(&state, get("/api/snapshot")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["telemetry"]["error"].is_null(), "{}", body["telemetry"]);
+}
+
+/// The same refusal with an engine ft-man believes is running is worth saying out loud:
+/// the two disagree, and only one of them can be right.
+#[tokio::test]
+async fn a_refused_connection_with_a_live_engine_is_reported() {
+    let mut app = fresh().await;
+    app.telemetry = crate::ui::app::Telemetry { unreachable: true, ..Default::default() };
+    app.engine.state = crate::ft::EngineState::Running;
+
+    let message = app.poll_error().expect("a live engine that will not answer is a fault");
+    assert!(message.contains("nothing answers"), "{message}");
+    assert!(message.contains(app.client.base_url()), "it names the endpoint: {message}");
+}
+
+/// A fault the server itself produced is reported whatever the engine is doing: it is not
+/// the absence of an answer, it is a bad one.
+#[tokio::test]
+async fn a_server_side_failure_is_always_reported() {
+    let mut app = fresh().await;
+    app.telemetry = crate::ui::app::Telemetry {
+        error: Some("/health returned 500".into()),
+        ..Default::default()
+    };
+    assert_eq!(app.poll_error().as_deref(), Some("/health returned 500"));
+}
+
+/// The poll backs off while nothing is listening, so the moments that make an answer
+/// likely have to say so. Starting an engine is the loudest of them: without this the
+/// loading bar stays blank for as long as the backoff the closed port had earned.
+#[tokio::test]
+async fn starting_an_engine_wakes_the_backed_off_poll() {
+    let app = fresh().await;
+    let mut watcher = app.endpoint_tx.subscribe();
+    assert!(!watcher.has_changed().unwrap(), "nothing pending before the wake");
+
+    app.wake_poll();
+
+    assert!(watcher.has_changed().unwrap(), "the poller is told to try again now");
+    // And the endpoint itself is untouched: this is a nudge, not a reconfiguration.
+    assert_eq!(*watcher.borrow_and_update(), *app.endpoint_tx.borrow());
+}

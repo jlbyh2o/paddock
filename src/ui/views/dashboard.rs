@@ -98,7 +98,7 @@ fn engine_pane(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    if let Some(err) = &app.telemetry.error {
+    if let Some(err) = &app.poll_error() {
         let age = app
             .telemetry
             .at

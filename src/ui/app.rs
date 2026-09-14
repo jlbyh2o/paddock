@@ -94,7 +94,10 @@ pub struct Telemetry {
     pub health: Option<Health>,
     pub stats: Option<Stats>,
     pub cache: Option<CacheStatus>,
+    /// A fault: the server answered with something wrong, or could not be understood.
     pub error: Option<String>,
+    /// Nothing answered the connection. Not a fault on its own — see [`App::poll_error`].
+    pub unreachable: bool,
     pub at: Option<Instant>,
 }
 
@@ -715,7 +718,30 @@ impl App {
 
     /// True when the server answered its last poll.
     pub fn server_reachable(&self) -> bool {
-        self.telemetry.health.is_some() && self.telemetry.error.is_none()
+        self.telemetry.health.is_some() && self.poll_error().is_none()
+    }
+
+    /// What the poll has to say, if anything.
+    ///
+    /// A refused connection is only news when something is supposed to be answering. The
+    /// endpoint is a place ft-man looks, not a service it requires: with the engine
+    /// stopped, "connection refused" is the correct and expected outcome, and reporting it
+    /// as an error both alarms the reader and buries the one line that matters — the
+    /// status field directly above, which already says the engine is not running.
+    ///
+    /// It becomes worth saying when ft-man believes an engine is live and the port still
+    /// will not answer, because then the two disagree and the reader should know.
+    pub fn poll_error(&self) -> Option<String> {
+        if let Some(e) = &self.telemetry.error {
+            return Some(e.clone());
+        }
+        if self.telemetry.unreachable && self.engine.is_live() {
+            return Some(format!(
+                "the engine is running but nothing answers on {}",
+                self.client.base_url()
+            ));
+        }
+        None
     }
 
     /// Record the local FreeToken vendor checkout git status.
@@ -1380,6 +1406,19 @@ impl App {
         });
     }
 
+    /// Poll the engine now rather than at the end of a backoff.
+    ///
+    /// The telemetry poll slows down while nothing is listening, which is right when
+    /// nothing is going to appear on its own and wrong the moment an engine does. Both
+    /// moments that change the answer — starting one, adopting one — say so here, so the
+    /// loading bar and the first numbers arrive with the keypress rather than up to a
+    /// backoff later. Re-sending the endpoint it already holds is the signal: the poller
+    /// wakes on that channel, and a wake it did not ask for means try again now.
+    pub fn wake_poll(&self) {
+        let endpoint = self.endpoint_tx.borrow().clone();
+        let _ = self.endpoint_tx.send(endpoint);
+    }
+
     /// Keep the polled endpoint in step with the serve configuration. Called each tick;
     /// a no-op unless the host or port knob actually changed.
     pub fn sync_endpoint(&mut self) -> bool {
@@ -1407,7 +1446,13 @@ impl App {
     /// heartbeat that proves the stream is alive never gets a turn.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.sync_endpoint();
+        let was_live = self.engine.is_live();
         changed |= self.engine.poll();
+        // `poll` adopts a foreign engine out of the state file, so this is where a stopped
+        // ft-man learns an engine exists. The backed-off poll has to hear about it too.
+        if !was_live && self.engine.is_live() {
+            self.wake_poll();
+        }
         changed |= self.expire_toasts();
         for d in &mut self.downloads {
             // A finished download's rate is frozen; sampling it again only re-reads a

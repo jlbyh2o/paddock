@@ -170,7 +170,9 @@ pub struct TelemetrySnapshot<'a> {
     health: Option<&'a Health>,
     stats: Option<&'a Stats>,
     cache_status: Option<&'a CacheStatus>,
-    error: Option<&'a str>,
+    /// A poll failure worth reporting. Null while the engine is stopped and the port is
+    /// simply not answering, which is the expected state rather than a fault.
+    error: Option<String>,
     age_ms: Option<u128>,
     health_load_ratio: Option<f64>,
     pool_bytes: Option<PoolBytesOut>,
@@ -209,7 +211,7 @@ fn telemetry(app: &App) -> TelemetrySnapshot<'_> {
         health: t.health.as_ref(),
         stats: t.stats.as_ref(),
         cache_status: t.cache.as_ref(),
-        error: t.error.as_deref(),
+        error: app.poll_error(),
         age_ms: t.at.map(|at| at.elapsed().as_millis()),
         health_load_ratio: t.health.as_ref().and_then(Health::load_ratio),
         pool_bytes: geo.map(|g| pool_bytes(g.pool_bytes())),

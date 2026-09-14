@@ -297,6 +297,7 @@ pub fn start_engine(app: &mut App) -> Outcome {
     match app.engine.start(&ft, args, &app.config.freetoken.env, model.clone(), port) {
         Ok(path) => {
             app.telemetry = Telemetry::default();
+            app.wake_poll();
             app.series = crate::ui::app::Series::default();
             app.requests_view.clear();
             app.requests_view.cursor = 0;

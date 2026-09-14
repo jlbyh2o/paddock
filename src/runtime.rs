@@ -61,23 +61,52 @@ pub fn spawn_telemetry(app: &App, tx: mpsc::UnboundedSender<Message>) {
     let timeout = Duration::from_millis(app.config.server.timeout_ms);
     let period = Duration::from_millis(app.config.server.poll_ms.max(200));
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(period);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut cursor = 0u64;
+        // Doublings of the poll period applied while nothing is listening. A closed local
+        // port refuses instantly, but an endpoint on another machine that is simply down
+        // costs a full `timeout_ms` per attempt, and asking every second buys nothing: the
+        // engine is not going to appear because we knocked. Adoption does not depend on
+        // this loop — `Supervisor::refresh_foreign` reads the state file on the UI tick —
+        // so backing off delays noticing a foreign engine started by hand, and by at most
+        // the capped period.
+        let mut misses: u32 = 0;
+        const MAX_DOUBLINGS: u32 = 3;
+        let mut current = endpoint.borrow_and_update().clone();
         loop {
-            ticker.tick().await;
+            // Wake early when the endpoint changes: a new port deserves an immediate try
+            // rather than serving out a backoff the old one earned.
+            let wait = period * 2u32.pow(misses.min(MAX_DOUBLINGS));
+            let mut woken = false;
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                changed = endpoint.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    woken = true;
+                }
+            }
+            // A wake is `App::wake_poll`: something changed that makes an answer likely,
+            // so the backoff earned while nothing was listening no longer describes the
+            // situation.
+            if woken {
+                misses = 0;
+            }
             // Follow a port change in the serve configuration rather than polling an
             // address nothing is listening on.
-            if endpoint.has_changed().unwrap_or(false) {
-                let url = endpoint.borrow_and_update().clone();
+            let url = endpoint.borrow_and_update().clone();
+            if url != current {
                 if let Ok(next) = ft::Client::new(&url, timeout) {
                     client = next;
                     cursor = 0;
+                    misses = 0;
                 }
+                current = url;
             }
             let mut t = Telemetry { at: Some(std::time::Instant::now()), ..Default::default() };
             match client.health().await {
                 Ok(health) => {
+                    misses = 0;
                     let ready = health.is_ready();
                     t.health = Some(health);
                     if ready {
@@ -95,10 +124,17 @@ pub fn spawn_telemetry(app: &App, tx: mpsc::UnboundedSender<Message>) {
                     }
                 }
                 Err(e) => {
-                    // A connection refused while nothing is running is the normal state,
-                    // not an error worth a toast — the Dashboard shows it as "not
-                    // running" and that is enough.
-                    t.error = Some(format!("{e:#}"));
+                    // A refused connection is reported as a fact about the port, not as a
+                    // fault: with the engine stopped it is the expected answer, and
+                    // `App::poll_error` decides whether anyone should hear about it.
+                    // Anything else is a real failure and keeps its message.
+                    if ft::is_unreachable(&e) {
+                        t.unreachable = true;
+                        misses = misses.saturating_add(1);
+                    } else {
+                        t.error = Some(format!("{e:#}"));
+                        misses = 0;
+                    }
                     cursor = 0;
                 }
             }
