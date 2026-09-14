@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export type ThemeChoice = "system" | "light" | "dark";
 
-const STORAGE_KEY = "ft-man.theme";
+const STORAGE_KEY = "paddock.theme";
 
 function read(): ThemeChoice {
   try {

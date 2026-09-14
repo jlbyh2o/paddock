@@ -20,7 +20,7 @@ jobs:
     # and 24.04 would stamp a 2.39 floor on it -- excluding Debian 12, Ubuntu 22.04 and
     # RHEL 9, all perfectly plausible hosts for a GPU box. 22.04 builds to a 2.34 floor.
     #
-    # Static musl would be the usual portability answer and is wrong here: ft-man dlopens
+    # Static musl would be the usual portability answer and is wrong here: paddock dlopens
     # libnvidia-ml, and a fully static musl binary cannot dlopen, so a musl build would
     # silently lose every piece of GPU telemetry.
     runs-on: ubuntu-22.04
@@ -67,8 +67,8 @@ jobs:
 
       - name: Check it runs and demands no more glibc than promised
         run: |
-          ./target/release/ft-man --version
-          floor="$(objdump -T target/release/ft-man | grep -oE 'GLIBC_[0-9.]+' \
+          ./target/release/paddock --version
+          floor="$(objdump -T target/release/paddock | grep -oE 'GLIBC_[0-9.]+' \
                    | sort -uV | tail -1 | sed 's/GLIBC_//')"
           echo "highest glibc symbol required: $floor"
           # 2.34, not 2.35: RHEL 9 ships 2.34, and the README lists it as supported. Pinning
@@ -83,9 +83,9 @@ jobs:
       - name: Package
         run: |
           ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          name="ft-man-${ver}-x86_64-unknown-linux-gnu"
+          name="paddock-${ver}-x86_64-unknown-linux-gnu"
           mkdir -p "dist/$name"
-          cp target/release/ft-man README.md LICENSE "dist/$name/"
+          cp target/release/paddock README.md LICENSE "dist/$name/"
           tar -C dist -czf "dist/${name}.tar.gz" "$name"
           (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
           ls -lh dist

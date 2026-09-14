@@ -1,7 +1,7 @@
-# ft-man
+# paddock
 
-[![CI](https://github.com/jlbyh2o/ft-man-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/jlbyh2o/ft-man-tui/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/jlbyh2o/ft-man-tui)](https://github.com/jlbyh2o/ft-man-tui/releases)
+[![CI](https://github.com/jlbyh2o/paddock/actions/workflows/ci.yml/badge.svg)](https://github.com/jlbyh2o/paddock/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jlbyh2o/paddock)](https://github.com/jlbyh2o/paddock/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 A control panel for [FreeToken](https://github.com/FlashML-org/FreeToken) — **in your
@@ -12,22 +12,22 @@ configure every `ft serve` knob, launch and supervise the engine, retune its cac
 without a restart, and watch throughput, requests and logs.
 
 FreeToken's engine resolves almost everything automatically, which is the right default and
-also means the knobs that matter are invisible until you need them. ft-man puts that whole
+also means the knobs that matter are invisible until you need them. paddock puts that whole
 surface in one place — and tells you when a default has quietly cost you something.
 
-![The ft-man dashboard in a browser](docs/images/web-dashboard.png)
+![The paddock dashboard in a browser](docs/images/web-dashboard.png)
 
 ## Two front ends, one program
 
 ```bash
-ft-man          # the terminal UI
-ft-man web      # the same thing in a browser, on 0.0.0.0:7979
+paddock          # the terminal UI
+paddock web      # the same thing in a browser, on 0.0.0.0:7979
 ```
 
 The same dashboard in a terminal:
 
 ```
- ft-man  1 Dashboard  2 Models  3 Hub  4 Templates  5 Serve  6 Cache  7 Jobs  8 Requests  9 Logs   ● serving · Qwen3.6-35B
+ paddock  1 Dashboard  2 Models  3 Hub  4 Templates  5 Serve  6 Cache  7 Jobs  8 Requests  9 Logs   ● serving · Qwen3.6-35B
 ╭ Engine ───────────────────────────────────╮╭ GPU (NVML) ───────────────────────────────╮
 │Status            ● serving                ││0 NVIDIA GeForce RTX 5090   ← engine       │
 │Model             Qwen3.6-35B-A3B          ││  VRAM    ▕██████████████████▉··▏  87%     │
@@ -73,19 +73,19 @@ In the TUI, press `?` for the full key map.
 - A current FreeToken install — see [its install guide](https://github.com/FlashML-org/FreeToken/blob/main/docs/install.md).
   Its virtualenv also supplies the `hf` CLI that Hub downloads are delegated to.
 
-ft-man drives FreeToken's own CLI and HTTP API; it does not link against or vendor any of
+paddock drives FreeToken's own CLI and HTTP API; it does not link against or vendor any of
 it. It tracks the CLI as it stands rather than supporting several versions at once, so pair
 it with a FreeToken you keep current.
 
 ## Install
 
 A prebuilt Linux x86_64 binary is attached to each
-[release](https://github.com/jlbyh2o/ft-man-tui/releases). It needs glibc 2.34 or newer —
+[release](https://github.com/jlbyh2o/paddock/releases). It needs glibc 2.34 or newer —
 RHEL 9, Ubuntu 22.04, Debian 12 and anything later — and no toolchain:
 
 ```bash
-tar xzf ft-man-<version>-x86_64-unknown-linux-gnu.tar.gz
-install -Dm755 ft-man-*/ft-man ~/.local/bin/ft-man
+tar xzf paddock-<version>-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 paddock-*/paddock ~/.local/bin/paddock
 ```
 
 Or build it. The browser UI is embedded into the binary by `build.rs`, which never runs
@@ -93,10 +93,10 @@ Or build it. The browser UI is embedded into the binary by `build.rs`, which nev
 Node 24):
 
 ```bash
-git clone https://github.com/jlbyh2o/ft-man-tui && cd ft-man-tui
+git clone https://github.com/jlbyh2o/paddock && cd paddock
 cd web && npm ci && npm run build && cd ..
 cargo build --release
-install -Dm755 target/release/ft-man ~/.local/bin/ft-man
+install -Dm755 target/release/paddock ~/.local/bin/paddock
 ```
 
 `scripts/build-release.sh` does both steps inside `rust:1.98.0-slim-bookworm`, which is how
@@ -106,14 +106,14 @@ have.
 ## Quick start
 
 ```bash
-ft-man --doctor      # what it found: the ft binary, your GPUs, your checkpoints
-ft-man               # the UI
+paddock --doctor      # what it found: the ft binary, your GPUs, your checkpoints
+paddock               # the UI
 ```
 
 FreeToken normally lives in a virtualenv, so `ft` is usually not on your PATH. `--doctor`
 says whether it was found. If it was not, point at it once with
-`ft-man --venv ~/FreeToken/.venv`, then `ft-man --init-config` to write that into
-`~/.config/ft-man/config.toml`.
+`paddock --venv ~/FreeToken/.venv`, then `paddock --init-config` to write that into
+`~/.config/paddock/config.toml`.
 
 From there, a first run is six steps:
 
@@ -132,13 +132,13 @@ From there, a first run is six steps:
 ## The web interface
 
 ```bash
-ft-man web                            # serve on [web] listen, default 0.0.0.0:7979
-ft-man web --listen 127.0.0.1:8000
-ft-man web --token secret             # every /api request must carry it
+paddock web                            # serve on [web] listen, default 0.0.0.0:7979
+paddock web --listen 127.0.0.1:8000
+paddock web --token secret             # every /api request must carry it
 ```
 
 > [!WARNING]
-> `ft serve` has no authentication of any kind, and `ft-man web` follows the same default:
+> `ft serve` has no authentication of any kind, and `paddock web` follows the same default:
 > with no `[web] token` set, anything that can reach the port can start or stop the engine,
 > delete checkpoints, and read everything the UI shows. That is fine on a machine only you
 > can reach. The moment the box is reachable from an untrusted network, either bind
@@ -148,9 +148,9 @@ To run it as a service, install the provided unit — edit `User=` (and `HF_HOME
 cache lives somewhere unusual) first:
 
 ```bash
-sudo install -m644 contrib/ft-man-web.service /etc/systemd/system/
+sudo install -m644 contrib/paddock-web.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now ft-man-web
+sudo systemctl enable --now paddock-web
 ```
 
 What the two front ends do *not* share is jobs: a conversion, benchmark or download started
@@ -159,10 +159,10 @@ library once it finishes.
 
 ## Highlights
 
-A few things ft-man does that are not obvious. The reasoning behind each, and a dozen more,
+A few things paddock does that are not obvious. The reasoning behind each, and a dozen more,
 is in [docs/design-notes.md](docs/design-notes.md).
 
-- **It owns the engine, and it lets go.** A serve survives quitting ft-man, and a later run
+- **It owns the engine, and it lets go.** A serve survives quitting paddock, and a later run
   re-attaches to it. Only a stop you asked for stops it.
 - **It notices when you are serving a fraction of your context.** A 256k model can be
   answering with 8k because the KV pool got what the expert cache left it, and nothing in
@@ -177,7 +177,7 @@ is in [docs/design-notes.md](docs/design-notes.md).
   tab asks `UD-IQ3_XXS` or `Q8_0` and selects the right shards, tokenizer and projector.
 - **The library is the Hugging Face cache**, not a directory of its own — so anything
   pulled by `hf`, `from_pretrained` or another engine is already in the list, and what
-  ft-man derives stays out of that tree.
+  paddock derives stays out of that tree.
 - **Progress is real, not a spinner.** Conversions and benchmarks are parsed from
   FreeToken's machine-readable output, and downloads are measured in bytes off the cache.
 - **A doomed conversion fails in seconds, not minutes**, by resolving the checkpoint
@@ -185,8 +185,8 @@ is in [docs/design-notes.md](docs/design-notes.md).
 
 ## Configuration
 
-`~/.config/ft-man/config.toml`, written on first run. `FT_MAN_CONFIG_DIR` and
-`FT_MAN_STATE_DIR` relocate it, which is how you run more than one independent setup on a
+`~/.config/paddock/config.toml`, written on first run. `PADDOCK_CONFIG_DIR` and
+`PADDOCK_STATE_DIR` relocate it, which is how you run more than one independent setup on a
 machine.
 
 ```toml
@@ -211,11 +211,11 @@ theme = "auto"                # auto | dark | light | mono
 confirm_destructive = true
 
 [web]
-listen = "0.0.0.0:7979"       # also the default `ft-man web --listen`
+listen = "0.0.0.0:7979"       # also the default `paddock web --listen`
 # token = "secret"            # unset means no auth
 ```
 
-That is an excerpt. `ft-man --init-config` writes the file out with every key at the
+That is an excerpt. `paddock --init-config` writes the file out with every key at the
 default in force; the optional ones — `venv`, `[hub] token`, `[web] token` — are absent
 until you add them. Profiles live beside it in `profiles.toml` and record only the knobs
 you set, so "leave the MoE backend on auto" survives a FreeToken upgrade that changes what
@@ -224,17 +224,17 @@ auto means.
 ### Command line
 
 ```
-ft-man [--host HOST] [--port PORT] [--venv DIR] [--ft-binary PATH]
+paddock [--host HOST] [--port PORT] [--venv DIR] [--ft-binary PATH]
        [--models DIR]... [--theme NAME] [--tab TAB] [--doctor] [--init-config]
        [web [--listen ADDR] [--token TOKEN]]
 ```
 
-Every global flag applies to `ft-man web` too. CLI flags override the config file for that
+Every global flag applies to `paddock web` too. CLI flags override the config file for that
 run and are not written back.
 
 ## Documentation
 
-- [docs/design-notes.md](docs/design-notes.md) — why ft-man behaves the way it does:
+- [docs/design-notes.md](docs/design-notes.md) — why paddock behaves the way it does:
   cache planning, prefix-cache estimation, the GDN state pool, naming, and the rest.
 - [docs/guides.md](docs/guides.md) — overriding a chat template, and setting the sampling
   defaults a checkpoint serves with.

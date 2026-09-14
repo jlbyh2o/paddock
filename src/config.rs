@@ -1,7 +1,7 @@
-//! Persisted configuration, saved serve profiles, and the XDG paths ft-man uses.
+//! Persisted configuration, saved serve profiles, and the XDG paths paddock uses.
 //!
 //! Everything lives under the standard XDG roots so the tool leaves no surprises on a
-//! server: config in `~/.config/ft-man`, mutable state and logs in `~/.local/state/ft-man`.
+//! server: config in `~/.config/paddock`, mutable state and logs in `~/.local/state/paddock`.
 
 use std::path::{Path, PathBuf};
 
@@ -10,25 +10,85 @@ use serde::{Deserialize, Serialize};
 
 use crate::knobs::ServeConfig;
 
-/// Config root. `FT_MAN_CONFIG_DIR` overrides it, which is how one machine runs several
-/// independent ft-man setups (say, one per GPU) without them sharing profiles.
+/// What this program was called before it was `paddock`, and so the directory name and
+/// environment variables an existing install still has on disk. See [`migrate_legacy_dirs`].
+pub const LEGACY_NAME: &str = "ft-man";
+
+/// Config root. `PADDOCK_CONFIG_DIR` overrides it, which is how one machine runs several
+/// independent paddock setups (say, one per GPU) without them sharing profiles.
+///
+/// `FT_MAN_CONFIG_DIR` is still honored when the new name is unset: that variable is the
+/// kind of thing that ends up in a systemd unit or a shell profile, and an upgrade that
+/// silently ignored it would quietly start a second, empty configuration.
 pub fn config_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("FT_MAN_CONFIG_DIR") {
-        return PathBuf::from(dir);
+    if let Some(dir) = env_dir("PADDOCK_CONFIG_DIR", "FT_MAN_CONFIG_DIR") {
+        return dir;
     }
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("ft-man")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("paddock")
 }
 
 /// State root, holding the serve state file and every captured log.
-/// `FT_MAN_STATE_DIR` overrides it, for the same reason.
+/// `PADDOCK_STATE_DIR` overrides it, for the same reason.
 pub fn state_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("FT_MAN_STATE_DIR") {
-        return PathBuf::from(dir);
+    if let Some(dir) = env_dir("PADDOCK_STATE_DIR", "FT_MAN_STATE_DIR") {
+        return dir;
     }
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("ft-man")
+    state_root().join("paddock")
+}
+
+fn state_root() -> PathBuf {
+    dirs::state_dir().or_else(dirs::data_local_dir).unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn env_dir(name: &str, legacy: &str) -> Option<PathBuf> {
+    std::env::var_os(name).or_else(|| std::env::var_os(legacy)).map(PathBuf::from)
+}
+
+/// Move a pre-rename install into place, once.
+///
+/// Called at startup, before anything reads either directory. The state directory is the
+/// one that matters: it holds `serve.json`, which is how a restarted paddock re-adopts an
+/// engine that is still running, plus `costs.json` — measurements that can only be taken
+/// from a live engine and would otherwise have to be earned again. The config directory
+/// holds the saved profiles.
+///
+/// Renaming rather than copying, so there is exactly one of each afterwards and no
+/// question about which is authoritative. Skipped entirely when the new directory already
+/// exists: that means either this already ran, or the user has both, and in neither case
+/// should the old one win. A failure here is not fatal — paddock starts with fresh
+/// defaults, which is what it would have done anyway.
+pub fn migrate_legacy_dirs() {
+    // Only for the default locations. An explicit PADDOCK_*_DIR is a deliberate choice
+    // about where state lives, and moving something into it would be a surprise.
+    if std::env::var_os("PADDOCK_CONFIG_DIR").is_none()
+        && std::env::var_os("FT_MAN_CONFIG_DIR").is_none()
+    {
+        if let Some(base) = dirs::config_dir() {
+            migrate_one(&base.join(LEGACY_NAME), &base.join("paddock"));
+        }
+    }
+    if std::env::var_os("PADDOCK_STATE_DIR").is_none()
+        && std::env::var_os("FT_MAN_STATE_DIR").is_none()
+    {
+        migrate_one(&state_root().join(LEGACY_NAME), &state_root().join("paddock"));
+    }
+}
+
+fn migrate_one(from: &Path, to: &Path) {
+    if to.exists() || !from.is_dir() {
+        return;
+    }
+    if let Some(parent) = to.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::rename(from, to) {
+        Ok(()) => {
+            tracing::info!(from = %from.display(), to = %to.display(), "migrated the pre-rename directory")
+        }
+        Err(e) => {
+            tracing::warn!(from = %from.display(), error = %e, "could not migrate the pre-rename directory; starting fresh")
+        }
+    }
 }
 
 pub fn log_dir() -> PathBuf {
@@ -93,10 +153,10 @@ impl Default for FreetokenCfg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerCfg {
-    /// Bind address ft-man defaults `ft serve --host` to. Also what ft-man polls for
+    /// Bind address paddock defaults `ft serve --host` to. Also what paddock polls for
     /// engine telemetry, by way of [`poll_host`] — a wildcard bind is not a destination.
     pub host: String,
-    /// Port ft-man polls. Also the default `ft serve --port`.
+    /// Port paddock polls. Also the default `ft serve --port`.
     pub port: u16,
     /// Poll period for /health, /v1/stats and /v1/cache/status, in milliseconds.
     pub poll_ms: u64,
@@ -142,7 +202,7 @@ pub struct LibraryCfg {
     /// Set this when the cache is not where the environment says it is — which is most of
     /// the time on a server. `HF_HOME` is exported by a shell profile, so it reaches an
     /// interactive login and nothing else: not a session opened before the profile was
-    /// written, not a systemd unit, not a terminal an editor spawned. ft-man would then
+    /// written, not a systemd unit, not a terminal an editor spawned. paddock would then
     /// silently read an empty cache in the home directory and report a library of nothing,
     /// and price a download against the wrong filesystem's free space.
     pub hub_cache: Option<PathBuf>,
@@ -171,7 +231,7 @@ impl LibraryCfg {
         let mut roots: Vec<PathBuf> =
             self.roots.iter().map(|r| crate::models::expand_tilde(r)).collect();
         // The FTW directory too. It defaults to `download_dir`, which is usually already a
-        // root — but when it is configured somewhere else, every build ft-man itself wrote
+        // root — but when it is configured somewhere else, every build paddock itself wrote
         // was invisible to the library that offered to write it, and the Models tab showed
         // a checkpoint with no conversion beside tens of gigabytes of one.
         for implied in [self.hub_cache(), self.ftw_dir()] {
@@ -205,7 +265,7 @@ impl LibraryCfg {
 /// `HF_TOKEN_PATH`, then `$HF_HOME/token`, then the default `HF_HOME`. Hardcoding
 /// `~/.cache/huggingface/token` is wrong the moment `HF_HOME` moves — which it does on any
 /// machine pointing its cache at shared storage — and the failure is silent in the worst
-/// way: the token is plainly on disk, ft-man reports none, and gated downloads 401 for no
+/// way: the token is plainly on disk, paddock reports none, and gated downloads 401 for no
 /// visible reason.
 pub fn hf_token_path() -> PathBuf {
     if let Some(path) = std::env::var_os("HF_TOKEN_PATH") {
@@ -220,7 +280,7 @@ pub fn hf_token_path() -> PathBuf {
 /// The hub cache as the *environment* describes it.
 ///
 /// Resolution matches `huggingface_hub`'s own — `HF_HUB_CACHE`, then `$HF_HOME/hub`, then
-/// the documented default — so ft-man agrees with the rest of the ecosystem when those are
+/// the documented default — so paddock agrees with the rest of the ecosystem when those are
 /// set. Prefer [`LibraryCfg::hub_cache`], which lets configuration override all of it:
 /// getting this wrong is otherwise invisible, and the library simply looks empty on a
 /// machine holding hundreds of gigabytes.
@@ -274,7 +334,7 @@ impl Default for HubCfg {
 #[derive(Debug, Clone, Serialize)]
 pub struct HubToken {
     // Never serialized. Provenance is what the UI needs; the token itself is a secret
-    // that has no business on a wire ft-man does not control.
+    // that has no business on a wire paddock does not control.
     #[serde(skip)]
     pub value: String,
     /// Human-readable provenance, e.g. `the HF_TOKEN environment variable`.
@@ -341,7 +401,7 @@ impl Default for TemplatesCfg {
     }
 }
 
-/// The browser interface `ft-man web` serves.
+/// The browser interface `paddock web` serves.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebCfg {
@@ -415,7 +475,7 @@ pub struct Profile {
 pub struct Profiles {
     #[serde(rename = "profile")]
     pub items: Vec<Profile>,
-    /// Name of the profile selected when ft-man last exited.
+    /// Name of the profile selected when paddock last exited.
     pub last_used: Option<String>,
 }
 
@@ -455,18 +515,18 @@ impl Profiles {
 }
 
 /// Point the config and state roots at a scratch directory, once per test process, so
-/// tests never touch the developer's real ft-man configuration. Idempotent and shared by
+/// tests never touch the developer's real paddock configuration. Idempotent and shared by
 /// every test module, since the roots are process-global.
 #[cfg(test)]
 pub fn isolate_paths_for_tests() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let dir = std::env::temp_dir().join(format!("ft-man-tests-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("paddock-tests-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("state")).unwrap();
-        std::env::set_var("FT_MAN_CONFIG_DIR", &dir);
-        std::env::set_var("FT_MAN_STATE_DIR", dir.join("state"));
+        std::env::set_var("PADDOCK_CONFIG_DIR", &dir);
+        std::env::set_var("PADDOCK_STATE_DIR", dir.join("state"));
     });
 }
 
@@ -499,6 +559,65 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rename's migration step, which decides whether an existing install survives.
+    ///
+    /// Exercised through `migrate_one` rather than `migrate_legacy_dirs`, because the test
+    /// harness sets PADDOCK_*_DIR process-wide and the public entry point correctly
+    /// declines to move anything when those are set.
+    mod legacy_migration {
+        use super::*;
+
+        fn scratch(tag: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!(
+                "paddock-migrate-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        #[test]
+        fn a_pre_rename_install_is_moved_into_place() {
+            let root = scratch("move");
+            let (from, to) = (root.join("ft-man"), root.join("paddock"));
+            std::fs::create_dir_all(&from).unwrap();
+            // serve.json is the file that matters: losing it orphans a running engine.
+            std::fs::write(from.join("serve.json"), "{}").unwrap();
+            std::fs::write(from.join("costs.json"), "{}").unwrap();
+
+            migrate_one(&from, &to);
+
+            assert!(to.join("serve.json").is_file(), "serve.json did not survive the migration");
+            assert!(to.join("costs.json").is_file());
+            assert!(!from.exists(), "the old directory should be gone, not copied");
+        }
+
+        #[test]
+        fn an_existing_new_directory_always_wins() {
+            let root = scratch("both");
+            let (from, to) = (root.join("ft-man"), root.join("paddock"));
+            std::fs::create_dir_all(&from).unwrap();
+            std::fs::create_dir_all(&to).unwrap();
+            std::fs::write(from.join("config.toml"), "old").unwrap();
+            std::fs::write(to.join("config.toml"), "current").unwrap();
+
+            migrate_one(&from, &to);
+
+            // Overwriting here would silently roll a live configuration back.
+            assert_eq!(std::fs::read_to_string(to.join("config.toml")).unwrap(), "current");
+            assert!(from.is_dir(), "the old directory should be left alone, not consumed");
+        }
+
+        #[test]
+        fn nothing_to_migrate_is_not_an_error() {
+            let root = scratch("absent");
+            migrate_one(&root.join("ft-man"), &root.join("paddock"));
+            assert!(!root.join("paddock").exists());
+        }
+    }
 
     /// Serialize every test that reads or writes `HF_*`.
     ///
@@ -553,8 +672,8 @@ mod tests {
 
         // The on-disk token follows HF_HOME. Pointing a machine's cache at shared storage
         // is exactly when this used to break: `hf auth login` writes $HF_HOME/token, and
-        // ft-man read ~/.cache/huggingface/token and reported no token at all.
-        let dir = std::env::temp_dir().join(format!("ft-man-hfhome-{}", std::process::id()));
+        // paddock read ~/.cache/huggingface/token and reported no token at all.
+        let dir = std::env::temp_dir().join(format!("paddock-hfhome-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("token"), "hf_from_disk\n").unwrap();
         cfg.token = None;
@@ -594,7 +713,7 @@ mod tests {
 
     /// The failure this exists to prevent: `HF_HOME` is exported by a shell profile, so a
     /// session opened before that profile was written — or a systemd unit, or a terminal an
-    /// editor spawned — sees none of it. ft-man then read an empty cache under $HOME and
+    /// editor spawned — sees none of it. paddock then read an empty cache under $HOME and
     /// reported a library of nothing on a machine holding 100 GB of weights.
     #[test]
     fn a_configured_cache_beats_the_environment() {
@@ -616,7 +735,7 @@ mod tests {
         // And it is scanned, whether or not it was also listed as a root.
         assert!(lib.effective_roots().contains(&PathBuf::from("/workspace/huggingface/hub")));
 
-        // So is the FTW directory, or a build ft-man wrote is one the library cannot see.
+        // So is the FTW directory, or a build paddock wrote is one the library cannot see.
         lib.ftw_dir = Some(PathBuf::from("/fast/ftw"));
         assert!(lib.effective_roots().contains(&PathBuf::from("/fast/ftw")));
         lib.roots = vec![PathBuf::from("/fast/ftw")];

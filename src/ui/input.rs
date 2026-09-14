@@ -272,12 +272,12 @@ fn global_key(app: &mut App, key: KeyEvent) -> bool {
                 actions::ask(
                     app,
                     Confirm::new(
-                        "Quit ft-man",
+                        "Quit paddock",
                         vec![
-                            "The engine ft-man started is still running.".into(),
+                            "The engine paddock started is still running.".into(),
                             String::new(),
                             "Quitting leaves it running and detached; it keeps serving, and a \
-                             later ft-man run will re-attach to it."
+                             later paddock run will re-attach to it."
                                 .into(),
                         ],
                         ConfirmAction::Quit,

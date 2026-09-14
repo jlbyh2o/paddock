@@ -76,7 +76,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     }
     if let Some(crate::sampling::Status::Overridden(a)) = model.map(|m| &m.sampling_status) {
         lines.push(
-            t.field("ft-man override", format!("{} · {}", a.sampling.summary(), a.applied_at)),
+            t.field("paddock override", format!("{} · {}", a.sampling.summary(), a.applied_at)),
         );
     }
 

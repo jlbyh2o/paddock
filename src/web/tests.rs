@@ -100,7 +100,8 @@ fn with_bearer(mut req: Request<Body>, token: &str) -> Request<Body> {
 }
 
 fn with_cookie(mut req: Request<Body>, token: &str) -> Request<Body> {
-    req.headers_mut().insert(header::COOKIE, format!("a=b; ft_man_token={token}").parse().unwrap());
+    req.headers_mut()
+        .insert(header::COOKIE, format!("a=b; paddock_token={token}").parse().unwrap());
     req
 }
 
@@ -293,14 +294,14 @@ async fn the_event_stream_is_a_json_401_before_it_is_a_stream() {
 }
 
 /// A cookie jar holds more than ours, and a pair with no `=` in it must not end the
-/// search before `ft_man_token` is reached.
+/// search before `paddock_token` is reached.
 #[tokio::test]
 async fn an_odd_cookie_beside_ours_does_not_hide_it() {
     let state = guarded().await;
     let mut req = get("/api/snapshot");
     req.headers_mut().insert(
         header::COOKIE,
-        format!("consent; theme=dark; ft_man_token={TOKEN}").parse().unwrap(),
+        format!("consent; theme=dark; paddock_token={TOKEN}").parse().unwrap(),
     );
     let (status, _) = send(&state, req).await;
     assert_eq!(status, StatusCode::OK);
@@ -331,7 +332,7 @@ async fn logging_in_sets_a_session_cookie_and_a_wrong_token_does_not() {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
-    assert!(cookie.contains("ft_man_token="), "{cookie}");
+    assert!(cookie.contains("paddock_token="), "{cookie}");
     assert!(cookie.contains("HttpOnly"), "{cookie}");
     assert!(!cookie.contains("Max-Age"), "a session cookie has no Max-Age: {cookie}");
 
@@ -794,7 +795,7 @@ async fn template_routes_refuse_unknown_identities() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(body["error"].as_str().unwrap().contains("not using an ft-man template override"));
+    assert!(body["error"].as_str().unwrap().contains("not using an paddock template override"));
 
     let (status, _) =
         send(&state, post("/api/templates/delete", serde_json::json!({"name": "nope"}))).await;
@@ -856,14 +857,14 @@ async fn sampling_routes_refuse_what_the_engine_would_not_honor() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body["error"].as_str().unwrap().contains("outside 0.0"), "{body}");
 
-    // The checkpoint has no ft-man override, so there is nothing to put back.
+    // The checkpoint has no paddock override, so there is nothing to put back.
     let (status, body) = send(
         &state,
         post("/api/models/sampling/revert", serde_json::json!({"path": "/models/Qwen3.6-35B-A3B"})),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body["error"].as_str().unwrap().contains("not using ft-man sampling defaults"));
+    assert!(body["error"].as_str().unwrap().contains("not using paddock sampling defaults"));
 
     // A valid override asks before it writes, and names what it would do.
     let (status, body) = send(
@@ -1288,11 +1289,11 @@ async fn the_event_stream_opens_with_a_snapshot() {
 
 /// The frontend's wire tests read real documents rather than a hand-written imitation of
 /// one, so the two halves of the contract are compared mechanically. This test asserts
-/// the documents parse; with `FT_MAN_DUMP_SNAPSHOTS=1` it also rewrites the fixtures
+/// the documents parse; with `PADDOCK_DUMP_SNAPSHOTS=1` it also rewrites the fixtures
 /// under `web/src/mock/`, which is how they are regenerated after a shape change.
 #[tokio::test]
 async fn the_wire_fixtures_the_frontend_reads_are_this_serialization() {
-    let dump = std::env::var("FT_MAN_DUMP_SNAPSHOTS").is_ok_and(|v| v == "1");
+    let dump = std::env::var("PADDOCK_DUMP_SNAPSHOTS").is_ok_and(|v| v == "1");
     let mock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/mock");
 
     let cases: [(&str, Shared); 2] = [
@@ -1635,7 +1636,7 @@ async fn engine_log_lines_carry_the_severity_the_terminal_colors_them_with() {
     let state = unguarded().await;
     state.write(|app| {
         for line in [
-            "[ft-man] $ ft serve --model x",
+            "[paddock] $ ft serve --model x",
             "INFO: loading weights",
             "WARNING: falling back to torch",
             "ERROR:freetoken.engine:boom",
@@ -1720,7 +1721,7 @@ async fn a_refused_connection_with_no_engine_is_not_an_error() {
     assert!(body["telemetry"]["error"].is_null(), "{}", body["telemetry"]);
 }
 
-/// The same refusal with an engine ft-man believes is running is worth saying out loud:
+/// The same refusal with an engine paddock believes is running is worth saying out loud:
 /// the two disagree, and only one of them can be right.
 #[tokio::test]
 async fn a_refused_connection_with_a_live_engine_is_reported() {
@@ -1770,7 +1771,7 @@ async fn starting_an_engine_wakes_the_backed_off_poll() {
 /// home and got the 503 for "no checkout" in CI. The checkout the test needs is now the
 /// test's own.
 fn fake_checkout(app: &mut App, name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ft-man-update-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("paddock-update-{name}-{}", std::process::id()));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(dir.join(".git")).expect("the .git marker");
     std::fs::create_dir_all(dir.join("python/freetoken")).expect("the package marker");

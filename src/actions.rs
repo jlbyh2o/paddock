@@ -244,12 +244,12 @@ fn start_refusal(app: &App) -> Option<StartRefusal> {
     if app.engine.is_live() {
         return warn("an engine is already running; stop it first".into());
     }
-    // Another ft-man on this machine — a terminal beside the daemon, or a second daemon —
+    // Another paddock on this machine — a terminal beside the daemon, or a second daemon —
     // may have started one since the last tick. The state file is the handoff; starting a
     // second engine on the same GPU and port is how both end up broken.
     if let Some(state) = app.engine.foreign() {
         return warn(format!(
-            "an engine started elsewhere is already running (pid {}, port {}); ft-man has              attached to it",
+            "an engine started elsewhere is already running (pid {}, port {}); paddock has              attached to it",
             state.pid, state.port
         ));
     }
@@ -338,7 +338,7 @@ pub fn request_stop(app: &mut App, force: bool) -> Outcome {
                      cleanly. Use it only when a normal stop has already failed."
                         .into()
                 } else if adopted {
-                    "This engine was started by an earlier ft-man run and re-attached to. \
+                    "This engine was started by an earlier paddock run and re-attached to. \
                      In-flight requests are aborted and the weights are unloaded."
                         .to_string()
                 } else {
@@ -394,7 +394,7 @@ pub fn use_model(app: &mut App, path: &Path, and_serve: bool) -> Outcome {
     let name = model.name.clone();
     // Explicit, never inferred. See `Model::served_name`.
     let served = model.served_name();
-    // Only when ft-man is the one who put it there. A name typed by hand, or loaded from a
+    // Only when paddock is the one who put it there. A name typed by hand, or loaded from a
     // profile, is a decision about the API this engine publishes — clients send it in
     // request bodies — and picking a different model must not silently rewrite it. The
     // giveaway is that the current value is the previous model's derived name.
@@ -510,7 +510,7 @@ pub fn delete_model(app: &mut App, path: &Path) -> Outcome {
             app,
             409,
             format!(
-                "{name} is in the Hugging Face cache, which ft-man only reads — remove it \
+                "{name} is in the Hugging Face cache, which paddock only reads — remove it \
                  with `hf cache delete {repo}`, which also frees the blobs the snapshot \
                  only links to"
             ),
@@ -805,7 +805,7 @@ fn update_plan(app: &mut App) -> Result<UpdatePlan, Refusal> {
         return Err(warn_off(
             app,
             503,
-            "freetoken.venv is not set; ft-man does not know which venv to install into",
+            "freetoken.venv is not set; paddock does not know which venv to install into",
         ));
     };
     let Some(git) = which("git") else {
@@ -845,7 +845,7 @@ fn start_update(app: &mut App) -> Done {
         args: vec![
             "-c".into(),
             SCRIPT.into(),
-            "ft-man-update".into(),
+            "paddock-update".into(),
             plan.git.display().to_string(),
             plan.venv.display().to_string(),
             plan.uv.display().to_string(),
@@ -877,7 +877,7 @@ fn start_update(app: &mut App) -> Done {
 
 /// Ask the running engine what upstream changed.
 ///
-/// The one place ft-man uses the model it supervises for something other than proving the
+/// The one place paddock uses the model it supervises for something other than proving the
 /// server answers. The material is the commit log, the diffstat and as much of the patch
 /// as the budget allows; the log and the stat always fit, and only the patch is cut,
 /// because they are the parts that describe a change rather than spell it out.
@@ -1173,7 +1173,7 @@ pub fn offer_hf_install(app: &mut App) -> Outcome {
         Confirm::new(
             "Install the Hugging Face CLI",
             vec![
-                "ft-man delegates Hub downloads to `hf`, and it is not installed.".into(),
+                "paddock delegates Hub downloads to `hf`, and it is not installed.".into(),
                 String::new(),
                 "This runs Hugging Face's own installer, the method their CLI guide lists \
                  as recommended:"
@@ -1306,7 +1306,7 @@ pub fn apply_template(app: &mut App, template: &str, model_path: &Path) -> Outco
             "The checkpoint's own template is preserved and can be restored with u.".into()
         }
         crate::templates::Status::Foreign => {
-            "There is already a chat_template.jinja here that ft-man did not write; it              will be backed up, not lost."
+            "There is already a chat_template.jinja here that paddock did not write; it              will be backed up, not lost."
                 .to_string()
         }
         crate::templates::Status::Overridden(a) => {
@@ -1405,7 +1405,11 @@ pub fn request_revert_template(app: &mut App, model_path: &Path) -> Outcome {
     let path = model.path.clone();
     let targets = crate::templates::targets(model);
     if !model.template_status.is_overridden() {
-        return Err(warn_off(app, 409, format!("{name} is not using an ft-man template override")));
+        return Err(warn_off(
+            app,
+            409,
+            format!("{name} is not using an paddock template override"),
+        ));
     }
     let mut body = vec![
         format!("Restore {name}'s own chat template?"),
@@ -1581,7 +1585,7 @@ pub fn request_revert_sampling(app: &mut App, model_path: &Path) -> Outcome {
     let path = model.path.clone();
     let targets = crate::templates::targets(model);
     if !model.sampling_status.is_overridden() {
-        return Err(warn_off(app, 409, format!("{name} is not using ft-man sampling defaults")));
+        return Err(warn_off(app, 409, format!("{name} is not using paddock sampling defaults")));
     }
     let mut body = vec![
         format!("Restore {name}'s own sampling defaults?"),

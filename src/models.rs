@@ -12,9 +12,9 @@
 //! machine shared with other engines — the Hugging Face **hub cache**,
 //! `models--org--name/snapshots/<sha>/`. The cache is where `from_pretrained`, `hf
 //! download` and every library built on `huggingface_hub` already put weights, so reading
-//! it is what lets ft-man see a model Ollama or Unsloth downloaded, and vice versa.
+//! it is what lets paddock see a model Ollama or Unsloth downloaded, and vice versa.
 //!
-//! The cache is read, never written. Anything ft-man derives — an FTW build, a chat
+//! The cache is read, never written. Anything paddock derives — an FTW build, a chat
 //! template override — goes elsewhere, because that tree belongs to `huggingface_hub`:
 //! a directory it did not write is invisible to `hf cache scan` and at risk from `hf cache
 //! delete`, and an FTW build has no repo id or revision for the cache to file it under.
@@ -348,13 +348,13 @@ fn link_conversions(models: &mut [Model], ftw_dir: &Path) {
     }
 }
 
-/// Where earlier versions of ft-man wrote an FTW build: beside the source, `<name>-ftw`.
+/// Where earlier versions of paddock wrote an FTW build: beside the source, `<name>-ftw`.
 fn legacy_ftw_path(source: &Path) -> Option<PathBuf> {
     let name = source.file_name()?.to_string_lossy().into_owned();
     Some(source.parent()?.join(format!("{name}-ftw")))
 }
 
-/// Where ft-man puts the FTW build of a checkpoint: under `library.ftw_dir`, with a
+/// Where paddock puts the FTW build of a checkpoint: under `library.ftw_dir`, with a
 /// `-ftw` suffix.
 ///
 /// Deliberately not beside the source. A hub-cache checkpoint's sibling would be inside
@@ -708,7 +708,7 @@ mod tests {
     }
 
     fn tmpdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ft-man-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("paddock-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -986,7 +986,7 @@ mod tests {
     }
 
     /// FreeToken defaults the served name to `basename(model_path)`, which for these paths
-    /// is a commit sha or a bare quantization label. ft-man must never let it.
+    /// is a commit sha or a bare quantization label. paddock must never let it.
     #[test]
     fn a_served_name_identifies_the_model_not_the_directory() {
         let mut m = inspect(Path::new("/nonexistent")).unwrap_or_else(|| Model {

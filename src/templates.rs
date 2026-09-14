@@ -12,7 +12,7 @@
 //!
 //! * whatever `chat_template.jinja` was there first is moved aside, never overwritten;
 //! * a marker file records what was applied, from where, and whether there was an
-//!   original, so [`status`] can report the truth even after ft-man restarts;
+//!   original, so [`status`] can report the truth even after paddock restarts;
 //! * [`revert`] puts it back exactly — restoring the original, or removing the file
 //!   entirely when the model never had one.
 
@@ -24,9 +24,45 @@ use serde::{Deserialize, Serialize};
 /// The file transformers reads. Writing this shadows `tokenizer_config.json`.
 pub const TEMPLATE_FILE: &str = "chat_template.jinja";
 /// Where the checkpoint's own template is parked while an override is in place.
-pub const BACKUP_FILE: &str = "chat_template.jinja.ft-man-original";
-/// Records what ft-man applied, so an override survives a restart visibly.
-pub const MARKER_FILE: &str = ".ft-man-template.json";
+pub const BACKUP_FILE: &str = "chat_template.jinja.paddock-original";
+/// Records what paddock applied, so an override survives a restart visibly.
+pub const MARKER_FILE: &str = ".paddock-template.json";
+
+/// What these two were called before the rename, and so what an override applied by an
+/// older version still has on disk beside the checkpoint.
+///
+/// Read as a fallback rather than migrated on sight, because a library scan must not write
+/// to a checkpoint directory — several are inside a shared Hugging Face cache, and one is
+/// commonly read-only. The stakes are concrete: the backup is the *only* copy of the
+/// checkpoint's original template, so a [`status`] that missed the old marker would report
+/// "built-in" while a custom template was actually in force, and [`revert`] would refuse to
+/// put the original back. [`apply`] renames them forward when it next writes.
+pub const LEGACY_BACKUP_FILE: &str = "chat_template.jinja.ft-man-original";
+pub const LEGACY_MARKER_FILE: &str = ".ft-man-template.json";
+
+/// The marker actually on disk, preferring the current name.
+fn marker_path(model_dir: &Path) -> Option<PathBuf> {
+    let current = model_dir.join(MARKER_FILE);
+    if current.is_file() {
+        return Some(current);
+    }
+    let legacy = model_dir.join(LEGACY_MARKER_FILE);
+    legacy.is_file().then_some(legacy)
+}
+
+/// The backup actually on disk, preferring the current name. When neither exists this is
+/// where a new one goes, which is why it returns a path rather than an option.
+fn backup_path(model_dir: &Path) -> PathBuf {
+    let current = model_dir.join(BACKUP_FILE);
+    if current.is_file() {
+        return current;
+    }
+    let legacy = model_dir.join(LEGACY_BACKUP_FILE);
+    if legacy.is_file() {
+        return legacy;
+    }
+    current
+}
 
 // ---------------------------------------------------------------- the store
 
@@ -206,7 +242,7 @@ pub fn validate(jinja: &str) -> Option<String> {
 
 // ---------------------------------------------------------------- per model
 
-/// What ft-man recorded when it applied a template to a checkpoint.
+/// What paddock recorded when it applied a template to a checkpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppliedTemplate {
     pub name: String,
@@ -226,9 +262,9 @@ pub enum Status {
     /// The checkpoint's own template, however it ships it.
     #[default]
     BuiltIn,
-    /// ft-man applied an override.
+    /// paddock applied an override.
     Overridden(Box<AppliedTemplate>),
-    /// A `chat_template.jinja` exists that ft-man did not write — someone edited the
+    /// A `chat_template.jinja` exists that paddock did not write — someone edited the
     /// checkpoint by hand. Reported rather than silently overwritten.
     Foreign,
 }
@@ -260,7 +296,7 @@ impl Status {
     pub fn label(&self) -> String {
         match self {
             Status::BuiltIn => "built-in".into(),
-            Status::Foreign => "custom (not applied by ft-man)".into(),
+            Status::Foreign => "custom (not applied by paddock)".into(),
             Status::Overridden(a) => match &a.version {
                 Some(v) => format!("{} ({v})", a.name),
                 None => a.name.clone(),
@@ -271,8 +307,8 @@ impl Status {
 
 /// What template a checkpoint directory will actually serve.
 pub fn status(model_dir: &Path) -> Status {
-    let marker = model_dir.join(MARKER_FILE);
-    if let Ok(raw) = std::fs::read_to_string(&marker) {
+    if let Some(marker) = marker_path(model_dir) {
+        let raw = std::fs::read_to_string(&marker).unwrap_or_default();
         if let Ok(applied) = serde_json::from_str::<AppliedTemplate>(&raw) {
             // Trust the marker only while the file it describes is still there; someone
             // may have deleted it by hand.
@@ -289,7 +325,7 @@ pub fn status(model_dir: &Path) -> Status {
 
 /// Apply a template to a checkpoint directory.
 ///
-/// Re-applying over an existing ft-man override does not re-back-up: the first backup is
+/// Re-applying over an existing paddock override does not re-back-up: the first backup is
 /// the checkpoint's genuine original, and clobbering it with a previous override would
 /// make [`revert`] restore the wrong thing.
 pub fn apply(model_dir: &Path, template: &StoredTemplate, jinja: &str) -> Result<()> {
@@ -299,7 +335,10 @@ pub fn apply(model_dir: &Path, template: &StoredTemplate, jinja: &str) -> Result
     }
 
     let target = model_dir.join(TEMPLATE_FILE);
-    let backup = model_dir.join(BACKUP_FILE);
+    // An override applied before the rename left its backup under the old name. Reusing it
+    // is the whole point: it holds the checkpoint's genuine original, and backing up again
+    // here would preserve the *previous override* as if it were the original.
+    let backup = backup_path(model_dir);
     let previous = status(model_dir);
 
     let had_original = match &previous {
@@ -319,6 +358,13 @@ pub fn apply(model_dir: &Path, template: &StoredTemplate, jinja: &str) -> Result
     crate::config::write_atomic(&target, jinja)
         .with_context(|| format!("writing {}", target.display()))?;
 
+    // Now that this directory is being written anyway, bring the old names forward so the
+    // checkpoint ends up with one marker and one backup, both current.
+    if backup != model_dir.join(BACKUP_FILE) && backup.is_file() {
+        let _ = std::fs::rename(&backup, model_dir.join(BACKUP_FILE));
+    }
+    let _ = std::fs::remove_file(model_dir.join(LEGACY_MARKER_FILE));
+
     let applied = AppliedTemplate {
         name: template.name.clone(),
         source: template.meta.source.clone(),
@@ -337,10 +383,10 @@ pub fn apply(model_dir: &Path, template: &StoredTemplate, jinja: &str) -> Result
 /// Undo an override, restoring the checkpoint exactly as it was.
 pub fn revert(model_dir: &Path) -> Result<()> {
     let Status::Overridden(applied) = status(model_dir) else {
-        anyhow::bail!("no ft-man template override is in place here");
+        anyhow::bail!("no paddock template override is in place here");
     };
     let target = model_dir.join(TEMPLATE_FILE);
-    let backup = model_dir.join(BACKUP_FILE);
+    let backup = backup_path(model_dir);
 
     if applied.had_original {
         anyhow::ensure!(
@@ -359,6 +405,7 @@ pub fn revert(model_dir: &Path) -> Result<()> {
         }
     }
     let _ = std::fs::remove_file(model_dir.join(MARKER_FILE));
+    let _ = std::fs::remove_file(model_dir.join(LEGACY_MARKER_FILE));
     Ok(())
 }
 
@@ -398,12 +445,12 @@ pub fn is_hub_cache_path(dir: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod legacy_names {
     use super::*;
 
     fn tmpdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "ft-man-tpl-{tag}-{}-{:?}",
+            "paddock-legacy-tpl-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -412,7 +459,78 @@ mod tests {
         dir
     }
 
-    fn stored(name: &str) -> StoredTemplate {
+    const ORIGINAL: &str = "{{ 'the checkpoint own template' }}";
+
+    /// A template override written before the rename, in the shape three checkpoints on
+    /// the deployed box are sitting in right now.
+    fn as_ft_man_left_it(dir: &Path) {
+        std::fs::write(dir.join(TEMPLATE_FILE), "{% if true %}{{ 'override' }}{% endif %}")
+            .unwrap();
+        std::fs::write(dir.join(LEGACY_BACKUP_FILE), ORIGINAL).unwrap();
+        std::fs::write(
+            dir.join(LEGACY_MARKER_FILE),
+            r#"{"name":"qwen-sharp","version":"v3","applied_at":"2026-09-07T11:04:00+01:00","had_original":true}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_pre_rename_override_is_still_reported_as_one() {
+        let dir = tmpdir("seen");
+        as_ft_man_left_it(&dir);
+        // Falling through to Foreign would tell the reader nobody knows what is in force,
+        // when paddock wrote it and knows exactly.
+        match status(&dir) {
+            Status::Overridden(a) => assert_eq!(a.name, "qwen-sharp"),
+            other => panic!("expected an override, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_pre_rename_override_still_restores_the_real_original() {
+        let dir = tmpdir("revert");
+        as_ft_man_left_it(&dir);
+
+        revert(&dir).unwrap();
+
+        assert_eq!(std::fs::read_to_string(dir.join(TEMPLATE_FILE)).unwrap(), ORIGINAL);
+        assert!(!dir.join(LEGACY_MARKER_FILE).exists());
+        assert!(!dir.join(LEGACY_BACKUP_FILE).exists());
+    }
+
+    #[test]
+    fn applying_over_a_pre_rename_override_keeps_the_original_and_renames_forward() {
+        let dir = tmpdir("forward");
+        as_ft_man_left_it(&dir);
+
+        apply(&dir, &super::tests::stored("other"), "{% if true %}{{ 'new' }}{% endif %}").unwrap();
+
+        // The backup is still the checkpoint's own, not the override it replaced.
+        assert_eq!(std::fs::read_to_string(dir.join(BACKUP_FILE)).unwrap(), ORIGINAL);
+        assert!(!dir.join(LEGACY_BACKUP_FILE).exists());
+        assert!(!dir.join(LEGACY_MARKER_FILE).exists());
+
+        revert(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(TEMPLATE_FILE)).unwrap(), ORIGINAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "paddock-tpl-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    pub(super) fn stored(name: &str) -> StoredTemplate {
         StoredTemplate {
             name: name.into(),
             path: PathBuf::from("/dev/null"),

@@ -1,7 +1,7 @@
 //! The optional bearer token.
 //!
 //! Off by default, exactly as `ft serve` is. When a token is configured every `/api`
-//! request must carry it, as `Authorization: Bearer` or as the `ft_man_token` cookie —
+//! request must carry it, as `Authorization: Bearer` or as the `paddock_token` cookie —
 //! `EventSource` cannot send a header, so the cookie is the path a browser actually
 //! takes and the header exists for `curl` and for tests.
 
@@ -13,7 +13,7 @@ use subtle::ConstantTimeEq;
 
 use super::state::{ApiError, Shared};
 
-pub const COOKIE: &str = "ft_man_token";
+pub const COOKIE: &str = "paddock_token";
 
 #[derive(Clone, Debug, Default)]
 pub struct Auth {
@@ -137,23 +137,23 @@ mod tests {
     fn either_credential_authorizes_and_neither_shadows_the_other() {
         let auth = Auth::new(Some("s3cret".into())).unwrap();
         assert!(auth.authorized(&headers(&[("authorization", "Bearer s3cret")])));
-        assert!(auth.authorized(&headers(&[("cookie", "a=b; ft_man_token=s3cret")])));
+        assert!(auth.authorized(&headers(&[("cookie", "a=b; paddock_token=s3cret")])));
 
         // A wrong header must not hide a right cookie. This is the case a proxy that adds
         // its own Authorization used to break.
         assert!(auth.authorized(&headers(&[
             ("authorization", "Bearer wrong"),
-            ("cookie", "ft_man_token=s3cret"),
+            ("cookie", "paddock_token=s3cret"),
         ])));
         assert!(auth.authorized(&headers(&[
-            ("cookie", "ft_man_token=wrong"),
+            ("cookie", "paddock_token=wrong"),
             ("authorization", "Bearer s3cret"),
         ])));
 
         // A non-Bearer scheme is not a token at all, so it is ignored rather than refused.
         assert!(auth.authorized(&headers(&[
             ("authorization", "Basic s3cret"),
-            ("cookie", "ft_man_token=s3cret"),
+            ("cookie", "paddock_token=s3cret"),
         ])));
         assert!(!auth.authorized(&headers(&[("authorization", "Basic s3cret")])));
         assert!(!auth.authorized(&HeaderMap::new()));

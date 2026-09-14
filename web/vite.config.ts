@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 /**
- * The dev server proxies `/api` to a locally running `ft-man web`.
+ * The dev server proxies `/api` to a locally running `paddock web`.
  *
  * `GET /api/events` is a Server-Sent Events stream, so two things matter:
  *  - `ws: false`, because it is plain HTTP and must not be upgraded;
@@ -11,8 +11,8 @@ import react from "@vitejs/plugin-react";
  *    flowing through the proxy the moment the daemon writes it, which is what
  *    `EventSource` needs to fire `onmessage` in development.
  *
- * `__FT_MAN_MOCK__` is a compile-time constant rather than a runtime env lookup so
- * that a production build folds `if (__FT_MAN_MOCK__)` to `false` and drops the mock
+ * `__PADDOCK_MOCK__` is a compile-time constant rather than a runtime env lookup so
+ * that a production build folds `if (__PADDOCK_MOCK__)` to `false` and drops the mock
  * daemon, the fixture and every host path in it. `mode` is `"test"` under vitest,
  * `"production"` for `npm run build`, so the render tests keep their fixture and the
  * shipped bundle carries no `assets/server-*.js`.
@@ -30,7 +30,7 @@ export default defineConfig(({ mode }) => {
   const mock = process.env["VITE_MOCK"] === "1" || mode === "test";
   return {
     plugins: [react()],
-    define: { __FT_MAN_MOCK__: JSON.stringify(mock) },
+    define: { __PADDOCK_MOCK__: JSON.stringify(mock) },
     build: {
       outDir: "dist",
       emptyOutDir: true,

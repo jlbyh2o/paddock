@@ -1,7 +1,7 @@
 //! Estimating how much of each prompt the engine served from its prefix cache.
 //!
 //! FreeToken reports this exactly — but only in the `usage.prompt_tokens_details`
-//! block of a completion response, which ft-man never sees: it polls the control plane
+//! block of a completion response, which paddock never sees: it polls the control plane
 //! and does not proxy model traffic. Neither `/v1/stats` nor the request ring carries a
 //! cached-token count, so the number has to be inferred from what the ring does report.
 //!

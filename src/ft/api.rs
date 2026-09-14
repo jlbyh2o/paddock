@@ -22,7 +22,7 @@ pub struct Client {
 /// port, or the host refused the connection.
 ///
 /// Worth separating from every other failure because the two mean opposite things about
-/// whether anything is wrong: ft-man polls an endpoint it does not require anyone to be
+/// whether anything is wrong: paddock polls an endpoint it does not require anyone to be
 /// serving, so a refused connection is the expected state whenever the engine is stopped,
 /// while a 500 or a decode failure is a fault whatever the engine is doing.
 pub fn is_unreachable(e: &anyhow::Error) -> bool {
@@ -34,7 +34,7 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .connect_timeout(Duration::from_millis(1500))
-            .user_agent(concat!("ft-man/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("paddock/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("building the HTTP client")?;
         Ok(Self { http, base: base_url.into().trim_end_matches('/').to_string() })
@@ -109,7 +109,7 @@ impl Client {
     /// One chat completion, through the OpenAI-compatible route.
     ///
     /// `/generate` is the raw-completion smoke test and takes no chat template; every
-    /// model ft-man serves is instruction-tuned, so anything that wants an answer rather
+    /// model paddock serves is instruction-tuned, so anything that wants an answer rather
     /// than a continuation has to go through the template `/v1/chat/completions` applies.
     ///
     /// The timeout is the caller's because this is the one request whose length is the

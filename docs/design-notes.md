@@ -1,6 +1,6 @@
 # Design notes
 
-Why ft-man behaves the way it does. Most of this is about FreeToken's defaults and the
+Why paddock behaves the way it does. Most of this is about FreeToken's defaults and the
 places where the right thing to do is not the obvious one — the reasoning is here rather
 than in the README so that the README can stay a page about getting started.
 
@@ -10,15 +10,15 @@ If you are looking for the HTTP API the browser UI speaks, that is
 ### It owns the engine, and it lets go
 
 `ft serve` is started in its own session, its
-output is teed to a file under `~/.local/state/ft-man/logs`, and `{pid, starttime, args}`
-is recorded so a later `ft-man` re-attaches to a serve that is still running. Quitting
-`ft-man` deliberately leaves the engine up — a loaded 200 GiB model should not die because
+output is teed to a file under `~/.local/state/paddock/logs`, and `{pid, starttime, args}`
+is recorded so a later `paddock` re-attaches to a serve that is still running. Quitting
+`paddock` deliberately leaves the engine up — a loaded 200 GiB model should not die because
 a TUI closed. Only a stop you asked for stops it.
 
 ### Progress is real, not a spinner
 
 `ft checkpoint` and `ft bench bw` both emit a
-machine-readable line protocol when asked (`FTCONVERT`, `FTBENCH`); `ft-man` sets those
+machine-readable line protocol when asked (`FTCONVERT`, `FTBENCH`); `paddock` sets those
 env vars and parses them, so a two-hour conversion shows actual bytes against actual
 totals.
 
@@ -40,26 +40,26 @@ Dashboard puts both numbers on one line and says which is real.
 
 ### And it can plan the fix
 
-Press `a` on the Serve tab. ft-man prices the cache split
+Press `a` on the Serve tab. paddock prices the cache split
 from what the engine measured — `cache_budget_bytes` and the per-unit KV and expert costs
 from `/v1/cache/status` — and works out the `--kv-reserve-tokens` that buys back the
 context, what it costs in expert slots, and whether the card can reach the ceiling at all.
 It also makes the two calls `auto` will not: `--moe-strategy fused` when every expert
 demonstrably fits in VRAM alongside full-context KV (the engine refuses to guess, because
-a wrong guess is an OOM at weight load; ft-man has NVML and the geometry, so it is
+a wrong guess is an OOM at weight load; paddock has NVML and the geometry, so it is
 arithmetic), and hybrid-vs-offload from the `ft bench bw` profile. Every line says why,
 with the numbers it used. `A` applies it to the configuration you were already editing;
 nothing is changed until you press it.
 
-Costs are only knowable from a running engine, so ft-man writes down what each serve
-measured (`~/.local/state/ft-man/costs.json`) and plans the next launch of that model
+Costs are only knowable from a running engine, so paddock writes down what each serve
+measured (`~/.local/state/paddock/costs.json`) and plans the next launch of that model
 exactly. Before a model has ever been served, the plan says the split is unpriced rather
 than inventing one.
 
 ### It estimates prefix-cache reuse, and says that it is an estimate
 
 FreeToken reports
-the exact figure only in a completion's `usage.prompt_tokens_details` block, which ft-man
+the exact figure only in a completion's `usage.prompt_tokens_details` block, which paddock
 never sees — it polls the control plane rather than proxying model traffic, and neither
 `/v1/stats` nor the request ring carries a cached-token count. So the Dashboard infers it:
 time to first token is dominated by prefill, prefill only covers the uncached part of a
@@ -87,7 +87,7 @@ because then the trade buys nothing.
 
 The offload backends pin *every* expert in host RAM,
 resident or not, so the host-side footprint is the whole model's experts rather than the
-cache. ft-man reports when those banks dominate RAM, and a benched `hybrid` verdict yields
+cache. paddock reports when those banks dominate RAM, and a benched `hybrid` verdict yields
 to a host with no headroom — hybrid's CPU executor needs working room on top of the banks,
 and a faster backend that cannot allocate is not faster.
 
@@ -104,7 +104,7 @@ key on the Jobs tab.
 Pressing Enter on a Hub
 result fetches only `config.json` — one small request — and reports a verdict. The
 architecture check is definitive: FreeToken's own registry is queried at startup, so it is
-never a stale list baked into ft-man. On top of that it catches the multimodal
+never a stale list baked into paddock. On top of that it catches the multimodal
 quantization split described below, and weighs the download against this machine's VRAM,
 host RAM and free disk. A clean result is not a promise the model will serve; it means
 none of the known walls are in the way.
@@ -112,7 +112,7 @@ none of the known walls are in the way.
 ### A doomed conversion fails in seconds, not minutes
 
 Before running `ft checkpoint`,
-ft-man resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
+paddock resolves the checkpoint through FreeToken's own `EngineConfig` and compares what it
 concluded against what the checkpoint declares. The case that motivated it: FreeToken's
 expert-quantization detector for the Qwen3.5-MoE family reads `quant_algo`/`quant_method`
 and never `format`, so an llm-compressor (`compressed-tensors`) NVFP4 export resolves to
@@ -144,15 +144,15 @@ reported an 82 GB model as the 862 MiB projector lying beside it.
 `ft serve` defaults
 `--served-model-name` to `os.path.basename(model_path)`, which for a cache snapshot is a
 40-character commit sha and for a quantization directory is a bare `UD-IQ3_XXS` — neither
-of which says which model it is. Worse, that name is the key ft-man remembers measured
+of which says which model it is. Worse, that name is the key paddock remembers measured
 cache costs under, so two quantizations sharing one name would price the second against the
-first. ft-man therefore always passes the name explicitly, as `repo:variant`:
+first. paddock therefore always passes the name explicitly, as `repo:variant`:
 `unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ3_XXS`. FTW builds are named the same way, so
 converting two quantizations of one repo cannot write both to one directory.
 
 ### The library is the Hugging Face cache, not a directory of its own
 
-ft-man reads
+paddock reads
 `models--org--name/snapshots/<sha>/` out of `$HF_HOME/hub` (following `HF_HUB_CACHE` and
 `HF_HOME` exactly as `huggingface_hub` does), so a checkpoint pulled by `hf download`,
 `from_pretrained`, Unsloth or any other engine on the machine is already in the list —
@@ -164,10 +164,10 @@ produces a cache every other tool quietly disagrees with.
 
 Progress stays in bytes anyway. `hf` reports only a file count (`Fetching 12 files:  25%`),
 which on a repo of two 40 GiB shards is a bar that sits at zero for an hour and then jumps
-to done — so ft-man measures the cache instead: files resolved through the snapshot, plus
+to done — so paddock measures the cache instead: files resolved through the snapshot, plus
 the `.incomplete` blob of whatever is in flight.
 
-### What ft-man derives, it keeps out of the cache
+### What paddock derives, it keeps out of the cache
 
 FTW builds go to `library.ftw_dir`, and
 a template override is never written into a snapshot. That tree belongs to
@@ -185,7 +185,7 @@ FreeToken has no
 `--chat-template` flag — it loads the template through
 `AutoTokenizer.from_pretrained(model_path)` — so overriding one means writing
 `chat_template.jinja` into the checkpoint directory, where it takes precedence over the
-`chat_template` key in `tokenizer_config.json`. ft-man never overwrites: the checkpoint's
+`chat_template` key in `tokenizer_config.json`. paddock never overwrites: the checkpoint's
 own template is moved aside, a marker records what was applied and from where, and `u`
 restores the original exactly (removing the file outright when the checkpoint never had
 one). A checkpoint and its FTW build are written together, because each carries its own
@@ -194,7 +194,7 @@ serve.
 
 ### It polls where the engine will actually be
 
-If a profile pins port 1920, `ft-man`
+If a profile pins port 1920, `paddock`
 polls 1920. A bind address of `0.0.0.0` is polled over loopback, because a wildcard is not
 a destination.
 

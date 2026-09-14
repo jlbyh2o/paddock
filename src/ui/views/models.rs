@@ -198,7 +198,7 @@ fn detail(f: &mut Frame, app: &App, area: Rect) {
         crate::templates::Status::BuiltIn => lines.push(t.field("Chat template", "built-in")),
         crate::templates::Status::Foreign => lines.push(t.field_colored(
             "Chat template",
-            "custom file, not applied by ft-man",
+            "custom file, not applied by paddock",
             t.warn,
         )),
         crate::templates::Status::Overridden(_) => lines.push(t.field_colored(

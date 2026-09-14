@@ -1,4 +1,4 @@
-//! The plan overlay: what ft-man would change about this serve configuration, and why.
+//! The plan overlay: what paddock would change about this serve configuration, and why.
 //!
 //! Every row is a knob and a reason, because a recommendation nobody can check is worth
 //! less than no recommendation at all — the reasons quote the numbers they were derived

@@ -242,7 +242,7 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
         match &status {
             Status::BuiltIn => t.field("Currently", "built-in template"),
             Status::Foreign => {
-                t.field_colored("Currently", "a chat_template.jinja ft-man did not write", t.warn)
+                t.field_colored("Currently", "a chat_template.jinja paddock did not write", t.warn)
             }
             Status::Overridden(_) => t.field_colored("Currently", status.label(), t.accent),
         },

@@ -1,6 +1,6 @@
 # The web API
 
-The HTTP contract between `ft-man web` and the single-page application in `web/`. It is
+The HTTP contract between `paddock web` and the single-page application in `web/`. It is
 the complete surface: every screen the TUI draws and every action a key triggers has a
 representation here. [web-ui.md](web-ui.md) records the architecture decisions this
 document implements; `web/src/api/types.ts` is the TypeScript rendering of the documents
@@ -97,14 +97,14 @@ own rules already keep another origin from reading a response it is not allowed 
 Optional, off by default, exactly as `[web] token` / `--token` describe in web-ui.md.
 
 * When a token is configured, every `/api` request must carry it as
-  `Authorization: Bearer <token>` **or** as the `ft_man_token` cookie.
+  `Authorization: Bearer <token>` **or** as the `paddock_token` cookie.
 * Both are checked, and either one matching authorizes the request. A stale or unrelated
   `Authorization` header — a proxy's, a browser extension's — must not shadow a cookie the
   browser holds, and a non-`Bearer` scheme is ignored rather than treated as a wrong token.
 * When no token is configured there is no authentication at all and every request is
   authorized.
 * The token must be a value a cookie can carry: no whitespace, control characters, `;`,
-  `=`, `,`, `"` or `\`. `ft-man web --token` **refuses to start** on one that is not, and
+  `=`, `,`, `"` or `\`. `paddock web --token` **refuses to start** on one that is not, and
   says why. The header path would work with any of those, so the failure would otherwise be
   invisible to `curl` and to tests and total for every browser — `EventSource` has no other
   way to authenticate.
@@ -119,7 +119,7 @@ Optional, off by default, exactly as `[web] token` / `--token` describe in web-u
 **`POST /api/login`** — body `{"token": "..."}`.
 
 * On a match: `200 {"authorized": true}` plus
-  `Set-Cookie: ft_man_token=<token>; Path=/; HttpOnly; SameSite=Strict` (and `Secure` when
+  `Set-Cookie: paddock_token=<token>; Path=/; HttpOnly; SameSite=Strict` (and `Secure` when
   the request arrived over TLS). The cookie has no `Max-Age`; it is a session cookie.
 * On a mismatch: `401 {"error": "that token is not correct"}`. The comparison is constant
   time.
@@ -289,7 +289,7 @@ Rust enums that carry data are **internally tagged objects** with a `kind` discr
 
 // templates::Status
 {"kind": "built_in", "label": "built-in"}
-{"kind": "foreign",  "label": "custom (not applied by ft-man)"}
+{"kind": "foreign",  "label": "custom (not applied by paddock)"}
 {"kind": "overridden", "label": "qwen-sharp (v3)", "applied": AppliedTemplate}
 
 // knobs::Kind
@@ -836,7 +836,7 @@ across both eviction and `clear`.
 | `err` | boolean | `LogLine::err`, true for stderr |
 | `severity` | `"error" \| "warn" \| "meta" \| "normal"` | **`views::logs::classify(text, err)`** — the same function that picks the terminal's color for the same line. Render it; do not re-derive it |
 
-`classify` in order: a line starting `[ft-man]` is `meta` (ft-man's own, and it wins over
+`classify` in order: a line starting `[paddock]` is `meta` (paddock's own, and it wins over
 its content — the exit line names a status, not an error); `is_error_text` — `ERROR`,
 `CRITICAL`, `Traceback`, `Exception` — is `error`; `WARNING` or `WARN` is `warn`; anything
 else is `normal`. **`err` decides nothing**: FreeToken logs its whole life to stderr, so
@@ -881,7 +881,7 @@ must be reconciled with what the TUI's output pane shows:
   "eof": true,
   "truncated": false,
   "lines": [
-    {"text": "[ft-man] $ ft checkpoint --model ...", "severity": "meta"},
+    {"text": "[paddock] $ ft checkpoint --model ...", "severity": "meta"},
     {"text": "converting layer 3", "severity": "normal"}
   ]
 }
@@ -928,7 +928,7 @@ The engine's request ring as `App` holds it (`app.requests_view.entries`).
 
 Query: `after` (number, default 0), `limit` (number, default 200, max 512).
 
-The server-side `seq` is **not** the engine's `/v1/requests` cursor. It is ft-man's own
+The server-side `seq` is **not** the engine's `/v1/requests` cursor. It is paddock's own
 count of records appended to `requests_view.entries` since the process started: each entry
 pushed in `Message::Requests` gets the next sequence. This makes it resumable across an
 engine restart, which resets the engine cursor to 0, and across the front-eviction the ring
@@ -1054,7 +1054,7 @@ snapshot's `confirm`", not as "done".**
 ### 4.2 `GET /api/knobs`
 
 The static `ft serve` knob schema, served once and cached by the client for the lifetime of
-the connection (it cannot change without restarting the daemon). `ETag` is the ft-man
+the connection (it cannot change without restarting the daemon). `ETag` is the paddock
 version.
 
 ```jsonc
@@ -1175,7 +1175,7 @@ already running. `200 {"status":"started"}`.
   delete it with D"` (the web UI should say "delete it" rather than name the key).
 * Otherwise sets `serve.model` to the FTW build when one exists (`Model::converted_to`),
   else the checkpoint path. Emits the same info toast when the FTW build was preferred.
-* `serve.served_model_name` is set to `Model::served_name()` **only when ft-man is the one
+* `serve.served_model_name` is set to `Model::served_name()` **only when paddock is the one
   that put the current value there** — that is, when the knob is unset, or when its value
   equals some library model's `served_name()`. A name typed by hand or loaded from a profile
   is the API this engine publishes, and clients send it in request bodies; picking a
@@ -1207,7 +1207,7 @@ those knobs are set.
 | Case | Result |
 |---|---|
 | Not found | `404` |
-| The path is inside a Hugging Face hub cache (`templates::is_hub_cache_path`) | `409`, naming `hf cache delete <repo>`. The cache belongs to `huggingface_hub`: a snapshot directory is symlinks into `blobs/`, so `remove_dir_all` frees the links, leaves the blobs, and breaks `refs/`. ft-man reads that tree and does not write it |
+| The path is inside a Hugging Face hub cache (`templates::is_hub_cache_path`) | `409`, naming `hf cache delete <repo>`. The cache belongs to `huggingface_hub`: a snapshot directory is symlinks into `blobs/`, so `remove_dir_all` frees the links, leaves the blobs, and breaks `refs/`. paddock reads that tree and does not write it |
 | Otherwise | `200 {"status":"started"}` |
 
 Not `confirm_pending`: the confirmation's body quotes `models::dir_size`, which is a
@@ -1244,7 +1244,7 @@ nothing while the temperature is 0 or unset, since greedy decoding never consult
 Accepting merges the keys into `generation_config.json` rather than replacing the file: it
 also carries `eos_token_id` and friends, and a replacement that dropped the stop ids would
 leave the model generating past the end of its turn. The checkpoint's original is moved to
-`generation_config.json.ft-man-original` and a `.ft-man-sampling.json` marker records what
+`generation_config.json.paddock-original` and a `.paddock-sampling.json` marker records what
 was applied, so `sampling::status` still reports the truth after a restart. A non-greedy
 override also writes `do_sample: true`, because a checkpoint shipping `do_sample: false`
 makes the loader short-circuit to greedy and ignore every value beside it.
@@ -1257,11 +1257,11 @@ effect" warning.
 | Case | Result |
 |---|---|
 | Not found | `404` |
-| No ft-man override in place | `409` |
+| No paddock override in place | `409` |
 | Otherwise | `200 {"status":"confirm_pending"}` |
 
 Restores the backed-up original, or removes the file outright when the checkpoint never had
-one — a leftover would keep feeding the engine ft-man's numbers.
+one — a leftover would keep feeding the engine paddock's numbers.
 
 ### 4.6 Hub
 
@@ -1323,7 +1323,7 @@ Refusals mirror `begin_download`:
 Files always land in the Hugging Face cache (`config.library.hub_cache()`), never in an
 arbitrary directory; `hub.target` is informational. The `hf` child is given `HF_ENDPOINT`
 = `config.hub.endpoint` alongside `HF_HUB_CACHE`, so the weights come from the same Hub
-ft-man listed the repo from — otherwise a configured mirror decided what was offered and
+paddock listed the repo from — otherwise a configured mirror decided what was offered and
 huggingface.co delivered it.
 
 **`POST /api/hub/install-cli`** — body `{}`. ⚠ confirms. `409` when `hf` is already
@@ -1374,7 +1374,7 @@ is on — a render check against the first target, whose outcome lands in
 `templates.preflight`.
 
 **`POST /api/templates/revert`** — body `{"model_path": "/models/x"}`. ⚠ confirms.
-`404` when unknown; `409 "… is not using an ft-man template override"` when
+`404` when unknown; `409 "… is not using an paddock template override"` when
 `templates::status(path)` is not `Overridden`. Otherwise the `Restore built-in template`
 confirmation naming every directory. On accept, `templates::revert` runs over each target
 that is actually overridden, and the last preflight result is cleared.
@@ -1608,7 +1608,7 @@ Six panes.
   `template_status.label`, and `converted_to`. Then the `guidance` bullets in order,
   colored by `level`.
 * **Sampling** — below the bullets: `sampling_effective` summarized the way
-  `Sampling::summary` prints it (or "recommends nothing"), marked as an ft-man override when
+  `Sampling::summary` prints it (or "recommends nothing"), marked as an paddock override when
   `sampling_status.kind` is `overridden`; then three number inputs seeded from
   `sampling_effective` and placeheld with the framework default each key falls back to when
   absent. A blank field means "leave the key out", which is why the inputs hold strings

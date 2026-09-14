@@ -611,7 +611,7 @@ fn activity_pane(f: &mut Frame, app: &App, area: Rect) {
             lines.push(t.field("Prompt tokens", count(r.prompt_tokens_total)));
             lines.push(t.field("Output tokens", count(r.completion_tokens_total)));
             // Prefix reuse is the engine's own figure in principle, but it only appears
-            // in a completion's usage block -- which ft-man never sees, since it polls
+            // in a completion's usage block -- which paddock never sees, since it polls
             // the control plane rather than proxying model traffic. This is inferred
             // from TTFT against prompt size, and is labelled so it never reads as
             // something the server reported.

@@ -137,7 +137,7 @@ export function SamplingEditor(props: { model: ModelEntry }): ReactNode {
     <>
       <Field label="Sampling">
         {model.sampling_effective ? summarize(model.sampling_effective) : "recommends nothing"}
-        {overridden ? <span className="dim"> · ft-man override</span> : null}
+        {overridden ? <span className="dim"> · paddock override</span> : null}
       </Field>
       <p className="dim">
         Written into the checkpoint’s <span className="mono">generation_config.json</span>, which is
@@ -186,7 +186,7 @@ export function SamplingEditor(props: { model: ModelEntry }): ReactNode {
           title={
             overridden
               ? "Restore the checkpoint's own generation_config.json"
-              : "No ft-man override is in place"
+              : "No paddock override is in place"
           }
           onClick={() => run(api.revertSampling({ path: model.path }))}
         >

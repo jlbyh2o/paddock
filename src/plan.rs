@@ -16,7 +16,7 @@
 //!
 //! **`--moe-strategy auto` never picks `fused`**, because the engine cannot know whether
 //! the experts would fit in HBM and a wrong guess is a weight-load OOM rather than a
-//! slower-but-working run. ft-man does know — it has NVML and the model's own geometry —
+//! slower-but-working run. paddock does know — it has NVML and the model's own geometry —
 //! so it is the right place to offer the choice the engine will not make.
 //!
 //! Everything here is integer arithmetic over quantities the engine has already measured
@@ -257,7 +257,7 @@ impl Startup {
 /// Predict the MoE-first split for a given `--kv-reserve-tokens`.
 ///
 /// A faithful port of FreeToken's `cache_budget.plan_cache_budget`, kept in step with it
-/// deliberately: this is what lets ft-man say what a configuration *will* do before the
+/// deliberately: this is what lets paddock say what a configuration *will* do before the
 /// engine spends four minutes loading weights to demonstrate it. The Python raises on the
 /// two impossible cases; here they are `Err`, because a planner that panics is worse than
 /// one that says the budget is too small.

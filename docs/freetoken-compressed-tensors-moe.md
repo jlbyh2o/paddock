@@ -3,8 +3,8 @@
 **Status: fixed upstream; this is history.** FreeToken #418/#427/#438 replaced every
 family-local quantization detector with one `QuantConfig` layer that reads each module's
 scheme by name, in either dialect. That covers this failure and more, so the local fork and
-its patch were abandoned on 2026-09-11 and both ft-man and the container image now track
-plain upstream. Kept because it records why ft-man's compatibility checks exist and what
+its patch were abandoned on 2026-09-11 and both paddock and the container image now track
+plain upstream. Kept because it records why paddock's compatibility checks exist and what
 they were built against.
 
 Everything below marked **VERIFIED** was executed and observed on the server;
@@ -195,7 +195,7 @@ To confirm they still fail without the fix, `git stash push` the four changed fi
 
 ---
 
-## 6. ft-man still describes upstream behavior -- leave it alone
+## 6. paddock still describes upstream behavior -- leave it alone
 
 These places encode the finding and are **still correct**, because they describe the
 FreeToken that users actually run:

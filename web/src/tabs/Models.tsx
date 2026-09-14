@@ -180,7 +180,7 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
       >
         {!model ? (
           <Empty>
-            <p>Select a checkpoint to see what ft-man knows about it.</p>
+            <p>Select a checkpoint to see what paddock knows about it.</p>
           </Empty>
         ) : (
           <>

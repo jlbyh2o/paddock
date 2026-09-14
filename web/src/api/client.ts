@@ -74,10 +74,10 @@ import type {
 /**
  * True when the bundle was built to run against the in-browser fixture.
  *
- * `__FT_MAN_MOCK__` is replaced at build time (see `vite.config.ts`), so a production
+ * `__PADDOCK_MOCK__` is replaced at build time (see `vite.config.ts`), so a production
  * build folds every mock branch away and the fixture never reaches the bundle.
  */
-export const MOCK: boolean = __FT_MAN_MOCK__;
+export const MOCK: boolean = __PADDOCK_MOCK__;
 
 /** A non-2xx reply, with the envelope's sentence already unwrapped. */
 export class ApiError extends Error {
@@ -131,7 +131,7 @@ function asErrorEnvelope(
 async function mockCall(method: string, path: string, body: unknown): Promise<unknown> {
   // Folded away entirely in a production build, which is what keeps the fixture and
   // the mock router out of `dist/`.
-  if (!__FT_MAN_MOCK__) throw new ApiError(0, "this build carries no mock daemon");
+  if (!__PADDOCK_MOCK__) throw new ApiError(0, "this build carries no mock daemon");
   const mod = await import("../mock/server.ts");
   const reply = mod.handle(method, path, body);
   const envelope = asErrorEnvelope(reply);

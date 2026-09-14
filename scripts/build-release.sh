@@ -6,7 +6,7 @@
 # binary starts on Debian 12/13, Ubuntu 22.04+ and RHEL 9 regardless of what the host
 # runs. build.rs embeds web/dist as it finds it, which is why the frontend goes first.
 #
-#   scripts/build-release.sh              # -> target/bookworm/release/ft-man
+#   scripts/build-release.sh              # -> target/bookworm/release/paddock
 #   scripts/build-release.sh --skip-web   # reuse an existing web/dist
 set -euo pipefail
 
@@ -25,14 +25,14 @@ if [ ! -f web/dist/index.html ]; then
   exit 1
 fi
 
-echo "== building ft-man in $RUST_IMAGE"
+echo "== building paddock in $RUST_IMAGE"
 docker run --rm \
   -v "$PWD:/src" -w /src \
   -e CARGO_TARGET_DIR="/src/$TARGET_DIR" \
   "$RUST_IMAGE" \
   cargo build --release --locked
 
-bin="$TARGET_DIR/release/ft-man"
+bin="$TARGET_DIR/release/paddock"
 echo "== $bin"
 "$bin" --version
 floor="$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1 | sed 's/GLIBC_//')"

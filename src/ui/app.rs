@@ -743,12 +743,12 @@ impl App {
         let adopted = engine.adopt();
 
         let mut serve = ServeConfig::new();
-        // Seed from the last-used profile so restarting ft-man lands where it left off.
+        // Seed from the last-used profile so restarting paddock lands where it left off.
         if let Some(last) = profiles.last_used.as_ref().and_then(|n| profiles.get(n)) {
             serve = last.serve.clone();
         }
         // Seed bind address and port only when the profile did not already pin them:
-        // a saved profile that serves on 1920 must keep doing so, and ft-man then polls
+        // a saved profile that serves on 1920 must keep doing so, and paddock then polls
         // 1920 rather than the config's default.
         if !serve.is_set("host") {
             serve.set("host", config.server.host.clone());
@@ -876,12 +876,12 @@ impl App {
     /// What the poll has to say, if anything.
     ///
     /// A refused connection is only news when something is supposed to be answering. The
-    /// endpoint is a place ft-man looks, not a service it requires: with the engine
+    /// endpoint is a place paddock looks, not a service it requires: with the engine
     /// stopped, "connection refused" is the correct and expected outcome, and reporting it
     /// as an error both alarms the reader and buries the one line that matters — the
     /// status field directly above, which already says the engine is not running.
     ///
-    /// It becomes worth saying when ft-man believes an engine is live and the port still
+    /// It becomes worth saying when paddock believes an engine is live and the port still
     /// will not answer, because then the two disagree and the reader should know.
     pub fn poll_error(&self) -> Option<String> {
         if let Some(e) = &self.telemetry.error {
@@ -1629,7 +1629,7 @@ impl App {
         let was_live = self.engine.is_live();
         changed |= self.engine.poll();
         // `poll` adopts a foreign engine out of the state file, so this is where a stopped
-        // ft-man learns an engine exists. The backed-off poll has to hear about it too.
+        // paddock learns an engine exists. The backed-off poll has to hear about it too.
         if !was_live && self.engine.is_live() {
             self.wake_poll();
         }
@@ -1646,7 +1646,7 @@ impl App {
     }
 }
 
-/// The URL ft-man polls: whatever the serve configuration will bind, falling back to
+/// The URL paddock polls: whatever the serve configuration will bind, falling back to
 /// the configured default. Either can be a wildcard bind, which `poll_host` turns into
 /// the loopback the engine is also listening on.
 fn endpoint_for(config: &Config, serve: &ServeConfig) -> String {

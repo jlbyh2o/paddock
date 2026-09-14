@@ -422,7 +422,7 @@ impl<'de> Deserialize<'de> for ServeConfig {
 }
 
 /// Carry a profile written against an older FreeToken forward onto the current flag
-/// names. ft-man follows the CLI it is installed next to rather than supporting several
+/// names. paddock follows the CLI it is installed next to rather than supporting several
 /// at once, so a renamed flag has to be translated on the way in — otherwise loading an
 /// existing profile would quietly drop the setting as an unknown knob.
 fn migrate(mut values: BTreeMap<String, String>) -> BTreeMap<String, String> {

@@ -46,11 +46,11 @@ const STALE_MS = 3000;
  * Open the stream. Returns a function that closes it and cancels any pending
  * reconnect or auth probe.
  *
- * In a mock build this is the fixture's ticker instead; `__FT_MAN_MOCK__` is a
+ * In a mock build this is the fixture's ticker instead; `__PADDOCK_MOCK__` is a
  * compile-time constant, so a production build keeps only the live half.
  */
 export function openEventStream(handlers: EventStreamHandlers): () => void {
-  return __FT_MAN_MOCK__ ? openMockStream(handlers) : openLiveStream(handlers);
+  return __PADDOCK_MOCK__ ? openMockStream(handlers) : openLiveStream(handlers);
 }
 
 /**

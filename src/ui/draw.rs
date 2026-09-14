@@ -40,7 +40,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn tab_bar(f: &mut Frame, app: &App, area: Rect) {
     let t = &app.theme;
-    let mut spans: Vec<Span> = vec![Span::styled(" ft-man ", t.title())];
+    let mut spans: Vec<Span> = vec![Span::styled(" paddock ", t.title())];
 
     for (i, tab) in Tab::ALL.iter().enumerate() {
         let active = *tab == app.tab;

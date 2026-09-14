@@ -57,7 +57,7 @@ CREDENTIAL='\bhf_[A-Za-z0-9]{30,}|\bghp_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9
 STRONG="$IDENTITY|$CREDENTIAL"
 # WEAK (real signals in files we wrote, noise everywhere else) also comes from that file.
 # Paths this build authored. Everything else in the image came from upstream.
-AUTHORED='/opt/ft /usr/local/bin/ft-man /etc/profile.d /opt/supervisor-scripts/freetoken-setup.sh /etc/supervisor/conf.d/freetoken-setup.conf /opt/freetoken/venv/lib/python3.12/site-packages/freetoken'
+AUTHORED='/opt/ft /usr/local/bin/paddock /etc/profile.d /opt/supervisor-scripts/freetoken-setup.sh /etc/supervisor/conf.d/freetoken-setup.conf /opt/freetoken/venv/lib/python3.12/site-packages/freetoken'
 
 # The base image is not ours. Building on vastai/base-image means inheriting an empty
 # /root/.ssh (Vast fills it at boot), git checkouts of vast-cli and nvm, and CPython's stdlib

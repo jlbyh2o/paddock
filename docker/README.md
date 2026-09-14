@@ -1,6 +1,6 @@
-# freetoken-ftman container
+# freetoken-paddock container
 
-FreeToken's MoE serving engine and ft-man's terminal and web UIs in one image, for running
+FreeToken's MoE serving engine and paddock's terminal and web UIs in one image, for running
 on a rented NVIDIA GPU.
 
 ## What is pinned
@@ -9,10 +9,10 @@ on a rented NVIDIA GPU.
 |---|---|
 | Base | builders on `nvidia/cuda:13.0.3-devel-ubuntu24.04`; final stage on `vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-08-28`, which already carries `nvcc` and `g++` for the JIT fallback |
 | FreeToken | upstream `FlashML-org/FreeToken` at `0ffd5c8`, unmodified |
-| ft-man | built from this repository's working tree, web interface included |
+| paddock | built from this repository's working tree, web interface included |
 | Python | 3.12 (the base image's), venv at `/opt/freetoken/venv` |
 | Rust | `rust:1.98.0-slim-bookworm` — bookworm's older glibc so the binary runs on the ubuntu24.04 final stage |
-| Node | `node:24-bookworm-slim` — builds `web/dist`, which `build.rs` embeds into the ft-man binary |
+| Node | `node:24-bookworm-slim` — builds `web/dist`, which `build.rs` embeds into the paddock binary |
 
 `uv` is installed unpinned from `astral.sh/uv/install.sh`, which is the one input to this
 build that is not version-locked.
@@ -33,7 +33,7 @@ docker/build.sh                                    # build + scan, no push
 DOCKER_NAMESPACE=<account> docker/build.sh --push  # build + scan + push
 ```
 
-Tags come from what is actually inside the built image — `ft0.1.2-man0.2.1-cu13` — read
+Tags come from what is actually inside the built image — `ft0.1.2-pad0.3.0-cu13` — read
 back out of it after the build rather than assumed beforehand, so a tag cannot claim a
 version the image does not have. `:latest` moves with every push.
 
@@ -47,7 +47,7 @@ and the failure arrives at weight load rather than at boot. Filter offers on CUD
 
 | Field | Value |
 |---|---|
-| Image | `<account>/freetoken-ftman:latest` |
+| Image | `<account>/freetoken-paddock:latest` |
 | Launch mode | **Jupyter-python notebook + SSH** (or Interactive shell server) |
 | On-start script | `entrypoint.sh` |
 | `PORTAL_CONFIG` | append `localhost:18919:1919:/:FreeToken API` to the template's value |
@@ -90,7 +90,7 @@ ssh -N -L 1919:127.0.0.1:1919 <vast-ssh-target>
 curl http://127.0.0.1:1919/v1/models
 ```
 
-The engine still binds `0.0.0.0` inside the container so the tunnel and ft-man's own polling
+The engine still binds `0.0.0.0` inside the container so the tunnel and paddock's own polling
 both reach it; what changes is that Vast never publishes the port. On this base you need not tunnel at all: Caddy already fronts the engine. Add
 `localhost:18919:1919:/:FreeToken API` to the instance's `PORTAL_CONFIG` and the API appears
 in the Instance Portal on 18919, behind the portal's TLS and authentication. `PORTAL_CONFIG`
@@ -103,16 +103,16 @@ inject one as usual.
 Once you are in:
 
 ```bash
-ft-man --doctor     # what it found: the ft binary, the GPU, your checkpoints
-ft-man              # the UI
+paddock --doctor     # what it found: the ft binary, the GPU, your checkpoints
+paddock              # the UI
 ```
 
 ### Web interface
 
-`ft-man web` is already running: the `ft-man-web` supervisor program (see
+`paddock web` is already running: the `paddock-web` supervisor program (see
 `docker/supervisor/`) starts it at boot, once `freetoken-setup` has written the config it
 needs. It binds `127.0.0.1:7979` — set in the `[web]` section `onstart.sh` writes — for the
-same reason the engine binds loopback: `ft-man web` can start and stop the engine, delete
+same reason the engine binds loopback: `paddock web` can start and stop the engine, delete
 checkpoints and write files, and it has no authentication of its own unless you set one.
 
 Reach it the same two ways as the engine:
@@ -120,14 +120,14 @@ Reach it the same two ways as the engine:
 - **SSH tunnel**, no port mapping needed: `ssh -N -L 7979:127.0.0.1:7979 <vast-ssh-target>`,
   then open `http://127.0.0.1:7979` locally.
 - **Through Caddy**, the same as `localhost:18919:1919:/:FreeToken API` fronts the engine:
-  append an entry such as `localhost:17979:7979:/:ft-man web` to the instance's
+  append an entry such as `localhost:17979:7979:/:paddock web` to the instance's
   `PORTAL_CONFIG` (pick any host-side port that is not already claimed by the template) and
   the UI appears in the Instance Portal, behind the portal's TLS and authentication.
 
 To require a bearer token as well — worth doing if you go through Caddy rather than a
 tunnel — add `token = "..."` under `[web]` in
-`$WORKSPACE/config/ft-man/config.toml` and restart the program:
-`supervisorctl restart ft-man-web`.
+`$WORKSPACE/config/paddock/config.toml` and restart the program:
+`supervisorctl restart paddock-web`.
 
 A TUI opened over SSH and the supervised web daemon can run at once: both adopt the same
 engine from `serve.json` and either can start or stop it, but a job (a conversion, a
@@ -135,7 +135,7 @@ download, a benchmark) started in one is only visible to that process until it f
 
 ### What the setup program does
 
-It creates the `/workspace` layout and writes the ft-man config, then bridges the instance
+It creates the `/workspace` layout and writes the paddock config, then bridges the instance
 environment into login shells via `/etc/profile.d/10-freetoken.sh`.
 
 On this base that bridge is belt-and-braces: `10-prep-env.sh` already writes the instance
@@ -155,7 +155,7 @@ Convert once, then keep the FTW build somewhere you control:
 
 ```bash
 # first rental only
-ft-man                                  # Hub tab: pick a quantization and download;
+paddock                                  # Hub tab: pick a quantization and download;
                                         # Jobs tab: convert to FTW
 hf upload <you>/<model>-ftw /workspace/models/<dir> --repo-type model --private
 
@@ -163,7 +163,7 @@ hf upload <you>/<model>-ftw /workspace/models/<dir> --repo-type model --private
 hf download <you>/<model>-ftw --local-dir /workspace/models/<dir>
 ```
 
-`<dir>` is what ft-man named the build, shown on the Models tab: the repo id with `/`
+`<dir>` is what paddock named the build, shown on the Models tab: the repo id with `/`
 replaced by `--`, plus the quantization when the repo ships more than one — so
 `unsloth--Qwen3.8-Flash-Next-GGUF--UD-IQ3_XXS-ftw`. The organization and quantization are
 in the name because two organizations publish the same model name often enough, and two
@@ -233,8 +233,8 @@ On an RTX 4060 Laptop (sm_89, driver 610.57.04), inside the built image:
 
 | | |
 |---|---|
-| `ft` / `ft-man` | freetoken 0.1.2 / ft-man 0.2.1 |
-| `ft-man --doctor` | resolves the venv via config, `/workspace` paths, and NVML (names the GPU, VRAM and UUID) |
+| `ft` / `paddock` | freetoken 0.1.2 / paddock 0.2.1 |
+| `paddock --doctor` | resolves the venv via config, `/workspace` paths, and NVML (names the GPU, VRAM and UUID) |
 | torch | 2.11.0+cu130, `cuda.is_available()` true, bf16 matmul on device returns finite values |
 | accel stack | `flashinfer` 0.6.18.post1, `flashinfer_cubin`, `flashinfer_jit_cache`, `sgl_kernel` all import; cubins resolve to the packaged directory |
 | nvcc JIT fallback | compiles and runs a real CUDA kernel on the GPU inside the final image |

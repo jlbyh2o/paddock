@@ -1,7 +1,7 @@
 //! Finding the FreeToken CLI on this machine.
 //!
 //! FreeToken installs into a virtualenv, so `ft` is usually *not* on the PATH of the
-//! shell that launched ft-man. Rather than making the user configure a path before the
+//! shell that launched paddock. Rather than making the user configure a path before the
 //! tool does anything useful, look in the obvious places and report clearly what was
 //! found — the Dashboard shows the resolved path so there is never a mystery about
 //! which install is being driven.

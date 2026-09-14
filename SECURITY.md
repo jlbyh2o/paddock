@@ -3,10 +3,10 @@
 ## Reporting a vulnerability
 
 Please use GitHub's [private vulnerability
-reporting](https://github.com/jlbyh2o/ft-man-tui/security/advisories/new) rather than opening
+reporting](https://github.com/jlbyh2o/paddock/security/advisories/new) rather than opening
 a public issue. There is no security contact email.
 
-## The engine ft-man drives has no authentication
+## The engine paddock drives has no authentication
 
 This is the most important thing to know about running FreeToken anywhere but a machine you
 alone can reach.
@@ -16,7 +16,7 @@ Anthropic- and Responses-compatible routes are registered with no auth dependenc
 that can open a TCP connection to the engine's port can spend your GPU, read the prompts you
 send it, and generate whatever it likes.
 
-ft-man defaults `--host` to `0.0.0.0` because the common case is a machine deliberately sat
+paddock defaults `--host` to `0.0.0.0` because the common case is a machine deliberately sat
 beside a GPU on a trusted network. That default is wrong the moment the host has a public
 address.
 
@@ -30,7 +30,7 @@ address.
 
 ## The web interface has no authentication by default either
 
-`ft-man web` serves the same control surface the TUI has, over HTTP, to whoever can reach
+`paddock web` serves the same control surface the TUI has, over HTTP, to whoever can reach
 the port: it can start and stop the engine, delete checkpoints, write files (an FTW
 conversion, a chat template override) and read every log line and request in the ring.
 Authentication is an opt-in bearer token (`[web] token` / `--token`) checked against
@@ -46,7 +46,7 @@ it — do not publish port 7979 directly to the internet.
 
 ## Tokens
 
-ft-man reads a Hugging Face token from `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, `hub.token` in
+paddock reads a Hugging Face token from `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, `hub.token` in
 its config file, or the token cached by the `hf` CLI, in that order. It sends that token only
 to the configured Hub endpoint (`https://huggingface.co` unless you change it). It is never
 written to logs, and never to a container image — `docker/scan-image.sh` fails the build if a

@@ -67,7 +67,7 @@ fn frames(state: Shared) -> impl Stream<Item = Result<Event, Infallible>> {
 
         // `retry` first, so a browser that loses the connection comes back in two
         // seconds rather than on whatever default its engine picks.
-        if tx.send(Ok(Event::default().comment("ft-man"))).await.is_err() {
+        if tx.send(Ok(Event::default().comment("paddock"))).await.is_err() {
             return;
         }
         if tx.send(Ok(Event::default().retry(Duration::from_millis(2000)))).await.is_err() {

@@ -1,0 +1,47 @@
+# paddock's web interface as a system service, running as the user who owns the FreeToken
+# install so that config, state, profiles and the engine's log files land in that user's
+# normal XDG locations.
+#
+#   sudo install -m644 contrib/paddock-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now paddock-web
+#
+# This is a template. Replace YOUR_USER throughout with the account that owns the
+# FreeToken install, and set HF_HOME below if the Hugging Face cache lives somewhere other
+# than that user's default:
+#
+#   sed -i "s/YOUR_USER/$USER/g" contrib/paddock-web.service
+
+[Unit]
+Description=paddock web interface
+Documentation=https://github.com/jlbyh2o/paddock
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_USER
+# paddock reads its config from ~/.config/paddock and keeps state under ~/.local/state.
+# The listen address comes from [web] listen in that config; pass --listen here to
+# override it for this unit only.
+ExecStart=/home/YOUR_USER/.local/bin/paddock web
+WorkingDirectory=/home/YOUR_USER
+# What an interactive login would export from /etc/profile.d. Set this when the cache is
+# shared between accounts or containers, so that anything paddock spawns (the engine, `hf
+# download`) resolves the same cache; drop the line to use the user's own default.
+Environment=HF_HOME=/workspace/huggingface
+Environment=PATH=/home/YOUR_USER/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Diagnostics go to the journal as well as ~/.local/state/paddock/logs/paddock.log.
+Environment=PADDOCK_LOG=info
+Restart=on-failure
+RestartSec=3
+
+# The engine runs in its own session under this daemon. Stopping or restarting the web
+# service must not take a loaded model down with it: signal only the daemon itself, and
+# let it re-adopt the engine when it comes back.
+KillMode=process
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

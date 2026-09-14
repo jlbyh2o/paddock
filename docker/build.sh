@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-IMAGE_NAME="${IMAGE_NAME:-freetoken-ftman}"
+IMAGE_NAME="${IMAGE_NAME:-freetoken-paddock}"
 PUSH=0
 for arg in "$@"; do
   case "$arg" in
@@ -56,13 +56,13 @@ docker buildx build \
 echo "==> reading component versions from the image"
 FT_VERSION="$(docker run --rm --entrypoint /opt/freetoken/venv/bin/python "$STAGING" \
   -c 'import freetoken; print(freetoken.version.__version__)' | tr -d '\r\n')"
-MAN_VERSION="$(docker run --rm --entrypoint ft-man "$STAGING" --version \
+PADDOCK_VERSION="$(docker run --rm --entrypoint paddock "$STAGING" --version \
   | awk '{print $NF}' | tr -d '\r\n')"
 CUDA_MAJOR="$(docker run --rm --entrypoint /bin/bash "$STAGING" \
   -c 'nvcc --version | sed -n "s/.*release \([0-9]*\).*/\1/p" | head -1' | tr -d '\r\n')"
 
-TAG="ft${FT_VERSION}-man${MAN_VERSION}-cu${CUDA_MAJOR}"
-echo "    freetoken $FT_VERSION, ft-man $MAN_VERSION, cuda $CUDA_MAJOR  ->  :$TAG"
+TAG="ft${FT_VERSION}-pad${PADDOCK_VERSION}-cu${CUDA_MAJOR}"
+echo "    freetoken $FT_VERSION, paddock $PADDOCK_VERSION, cuda $CUDA_MAJOR  ->  :$TAG"
 
 # build.rs embeds a placeholder page, silently, whenever web/dist/index.html is missing --
 # that keeps `cargo build` working with no Node installed, but it also means a frontend
@@ -71,8 +71,8 @@ echo "    freetoken $FT_VERSION, ft-man $MAN_VERSION, cuda $CUDA_MAJOR  ->  :$TA
 # it as text; no need for binutils) rather than trusting the build to have failed loudly.
 echo "==> checking the web frontend actually got embedded"
 if docker run --rm --entrypoint /bin/bash "$STAGING" \
-     -c 'grep -aq "was not built into this binary" /usr/local/bin/ft-man'; then
-  echo "ft-man shipped the frontend-not-built placeholder page. web/dist did not build." >&2
+     -c 'grep -aq "was not built into this binary" /usr/local/bin/paddock'; then
+  echo "paddock shipped the frontend-not-built placeholder page. web/dist did not build." >&2
   echo "Not tagging or pushing $STAGING." >&2
   exit 1
 fi
@@ -88,14 +88,14 @@ echo "==> checking the binary carries no build-machine identity"
 IDENTITY_PATTERNS='jeremy|/home/|jlbyh2o@'
 if docker run --rm --entrypoint /bin/bash "$STAGING" -c '
     command -v strings >/dev/null 2>&1 \
-      && strings -n 6 /usr/local/bin/ft-man \
-      || tr -c "[:print:]\n" "\n" < /usr/local/bin/ft-man
+      && strings -n 6 /usr/local/bin/paddock \
+      || tr -c "[:print:]\n" "\n" < /usr/local/bin/paddock
   ' | grep -Eq "$IDENTITY_PATTERNS"; then
-  echo "ft-man carries build-machine identity. Matches:" >&2
+  echo "paddock carries build-machine identity. Matches:" >&2
   docker run --rm --entrypoint /bin/bash "$STAGING" -c '
       command -v strings >/dev/null 2>&1 \
-        && strings -n 6 /usr/local/bin/ft-man \
-        || tr -c "[:print:]\n" "\n" < /usr/local/bin/ft-man
+        && strings -n 6 /usr/local/bin/paddock \
+        || tr -c "[:print:]\n" "\n" < /usr/local/bin/paddock
     ' | grep -E "$IDENTITY_PATTERNS" | sort -u | head -20 >&2
   echo "Not tagging or pushing $STAGING." >&2
   exit 1
@@ -140,7 +140,7 @@ On Vast, rent a host with driver r580+ (CUDA 13), then:
   launch mode    Jupyter notebook + SSH   (Entrypoint gives no sshd, so no way in)
   on-start       entrypoint.sh            (required: this mode replaces the entrypoint)
   PORTAL_CONFIG  append  localhost:18919:1919:/:FreeToken API
-                 and, for the ft-man web interface, localhost:17979:7979:/:ft-man web
+                 and, for the paddock web interface, localhost:17979:7979:/:paddock web
   ports          do NOT map 1919 or 7979 directly - neither has auth on by default;
                  Caddy publishes them on 18919 and 17979 instead
   env            HF_TOKEN=<token>   (only for gated or private repos)

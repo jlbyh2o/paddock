@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# Supervisor wrapper for ft-man's web interface.
+# Supervisor wrapper for paddock's web interface.
 #
-# ft-man web needs the config onstart.sh writes -- the FreeToken venv path, the workspace
+# paddock web needs the config onstart.sh writes -- the FreeToken venv path, the workspace
 # library roots, the loopback [server] and [web] binds -- to exist before it starts.
 # Priority ordering in the two supervisor .conf files already starts freetoken-setup first,
 # but supervisor does not wait for a lower-priority program to exit before starting the
@@ -10,10 +10,10 @@
 # for it instead of racing it.
 set -euo pipefail
 
-CFG="${FT_MAN_CONFIG_DIR:-/workspace/config/ft-man}/config.toml"
+CFG="${PADDOCK_CONFIG_DIR:-/workspace/config/paddock}/config.toml"
 for _ in $(seq 1 60); do
   [ -f "$CFG" ] && break
   sleep 1
 done
 
-exec /usr/local/bin/ft-man web
+exec /usr/local/bin/paddock web

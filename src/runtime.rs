@@ -1,7 +1,7 @@
 //! The background samplers both front ends run.
 //!
 //! Neither the terminal nor the browser is what decides how often `/health` is polled or
-//! how often NVML is read, so these live outside both. `ft-man` and `ft-man web` start
+//! how often NVML is read, so these live outside both. `paddock` and `paddock web` start
 //! exactly the same three tasks against exactly the same `App`.
 
 use std::time::Duration;
@@ -22,7 +22,7 @@ pub fn spawn_all(app: &App, tx: mpsc::UnboundedSender<Message>) {
 
 /// Watch the FreeToken checkout this machine builds from.
 ///
-/// The only poll in ft-man that leaves the machine: `git fetch` reaches the remote, so it
+/// The only poll in paddock that leaves the machine: `git fetch` reaches the remote, so it
 /// runs on a timer measured in minutes rather than on the UI tick. The first check is on
 /// this task too, not on the startup path — a daemon that came up with the network down
 /// would otherwise block its first frame on a fetch that cannot succeed, and a daemon
@@ -146,7 +146,7 @@ pub fn spawn_telemetry(app: &App, tx: mpsc::UnboundedSender<Message>) {
 }
 
 /// Read FreeToken's model registry once, so the Hub can say definitively whether an
-/// architecture is supported instead of guessing from a list baked into ft-man.
+/// architecture is supported instead of guessing from a list baked into paddock.
 pub fn spawn_architectures(app: &App, tx: mpsc::UnboundedSender<Message>) {
     let Some(ft) = app.ft.clone() else { return };
     let Some(argv) = ft::preflight::architectures_command(&ft) else { return };

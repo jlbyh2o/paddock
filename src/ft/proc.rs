@@ -1,15 +1,15 @@
 //! Spawning and supervising FreeToken child processes.
 //!
-//! ft-man owns the `ft serve` process directly rather than going through `ft daemon`,
+//! paddock owns the `ft serve` process directly rather than going through `ft daemon`,
 //! so it works against a plain `pip install freetoken` with nothing else running. Three
 //! things make that safe:
 //!
-//! * the child gets its own process group, so a Ctrl-C aimed at ft-man does not race
+//! * the child gets its own process group, so a Ctrl-C aimed at paddock does not race
 //!   the engine's own shutdown;
 //! * stdout and stderr are merged into a bounded ring the Logs view tails, and also
 //!   appended to a file under the state directory so a crash is still diagnosable after
-//!   ft-man exits;
-//! * a state file records `{pid, starttime, args}` so a restarted ft-man can re-adopt a
+//!   paddock exits;
+//! * a state file records `{pid, starttime, args}` so a restarted paddock can re-adopt a
 //!   serve it started earlier instead of orphaning it. `starttime` from `/proc` makes
 //!   re-adoption safe against PID reuse.
 
@@ -122,7 +122,7 @@ impl LogRing {
 
 // ---------------------------------------------------------------- serve state
 
-/// Persisted so a restarted ft-man can re-adopt a running engine.
+/// Persisted so a restarted paddock can re-adopt a running engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServeState {
     pub pid: u32,
@@ -132,7 +132,7 @@ pub struct ServeState {
     pub port: u16,
     pub args: Vec<String>,
     pub log_path: PathBuf,
-    /// Unix seconds when ft-man started it.
+    /// Unix seconds when paddock started it.
     pub started_at: i64,
 }
 
@@ -172,7 +172,7 @@ pub fn proc_starttime(pid: u32) -> Option<u64> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineState {
-    /// No engine started by, or adopted by, this ft-man.
+    /// No engine started by, or adopted by, this paddock.
     Stopped,
     /// Process spawned; weights are loading. Readiness comes from `/health`.
     Starting,
@@ -220,7 +220,7 @@ pub struct Engine {
     /// runs five times a second.
     last_adopt_check: Option<std::time::Instant>,
     /// A live engine recorded in the state file that this supervisor does not own — one a
-    /// second ft-man on the same machine started. Refreshed with the adoption check.
+    /// second paddock on the same machine started. Refreshed with the adoption check.
     foreign: Option<ServeState>,
 }
 
@@ -250,7 +250,7 @@ impl Engine {
         }
     }
 
-    /// Re-attach to an engine a previous ft-man run started, if it is still alive.
+    /// Re-attach to an engine a previous paddock run started, if it is still alive.
     pub fn adopt(&mut self) -> Option<ServeState> {
         let state = ServeState::load()?;
         if !state.is_alive() {
@@ -266,12 +266,13 @@ impl Engine {
         self.command_line = Some(format!("ft serve {}", state.args.join(" ")));
         self.log.push(
             format!(
-                "[ft-man] re-attached to engine pid {} serving {} on port {}",
+                "[paddock] re-attached to engine pid {} serving {} on port {}",
                 state.pid, state.model, state.port
             ),
             false,
         );
-        self.log.push(format!("[ft-man] earlier output is in {}", state.log_path.display()), false);
+        self.log
+            .push(format!("[paddock] earlier output is in {}", state.log_path.display()), false);
         // It is ours now, so it is no longer somebody else's.
         self.foreign = None;
         Some(state)
@@ -353,8 +354,8 @@ impl Engine {
         // The header goes into the file too. A log that does not say which command wrote
         // it is far less useful hours later, when the question is which model failed.
         for line in [
-            format!("[ft-man] $ {display}"),
-            format!("[ft-man] pid {pid}, logging to {}", log_path.display()),
+            format!("[paddock] $ {display}"),
+            format!("[paddock] pid {pid}, logging to {}", log_path.display()),
         ] {
             write_line(&file, &line);
             self.log.push(line, false);
@@ -406,7 +407,7 @@ impl Engine {
         self.stop_stage = if force { 2 } else { 0 };
         self.log.push(
             format!(
-                "[ft-man] sent {} to process group {pid}",
+                "[paddock] sent {} to process group {pid}",
                 if force { "SIGKILL" } else { "SIGINT" }
             ),
             false,
@@ -427,7 +428,7 @@ impl Engine {
         };
         self.stop_stage = stage;
         signal_group(pid, signal);
-        self.log.push(format!("[ft-man] {why}"), true);
+        self.log.push(format!("[paddock] {why}"), true);
     }
 
     /// Called every tick: reap the child if it exited, notice when an adopted engine goes
@@ -448,14 +449,14 @@ impl Engine {
                     self.state = EngineState::Exited { code, signal };
                     ServeState::clear();
                     self.log.push(
-                        format!("[ft-man] engine exited: {}", describe_exit(code, signal)),
+                        format!("[paddock] engine exited: {}", describe_exit(code, signal)),
                         true,
                     );
                     let _ = self.events.send(EngineEvent::Exited { code, signal });
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    self.log.push(format!("[ft-man] failed to reap the engine: {e}"), true);
+                    self.log.push(format!("[paddock] failed to reap the engine: {e}"), true);
                     self.child = None;
                 }
             }
@@ -474,7 +475,7 @@ impl Engine {
                     self.stop_stage = 0;
                     self.state = EngineState::Exited { code: None, signal: None };
                     ServeState::clear();
-                    self.log.push("[ft-man] the engine is gone".into(), true);
+                    self.log.push("[paddock] the engine is gone".into(), true);
                 }
             }
         }
@@ -514,12 +515,12 @@ impl Engine {
     pub fn mark_ready(&mut self) {
         if self.state == EngineState::Starting {
             self.state = EngineState::Running;
-            self.log.push("[ft-man] engine is ready to serve".into(), false);
+            self.log.push("[paddock] engine is ready to serve".into(), false);
         }
     }
 
     /// Called on exit. The engine is a long-lived service and the state file lets a
-    /// later run re-adopt it, so quitting ft-man deliberately leaves it running; only a
+    /// later run re-adopt it, so quitting paddock deliberately leaves it running; only a
     /// stop the user actually asked for (which has already set `Stopping`) is carried
     /// through here.
     pub fn shutdown_blocking_if_requested(&mut self) {
@@ -571,8 +572,8 @@ where
     });
 }
 
-/// Put the child in its own process group so signals sent to ft-man's group (a Ctrl-C
-/// in the terminal that launched it) do not reach the engine, and so ft-man can signal
+/// Put the child in its own process group so signals sent to paddock's group (a Ctrl-C
+/// in the terminal that launched it) do not reach the engine, and so paddock can signal
 /// the whole engine tree — the API server plus its backend workers — at once.
 fn detach_process_group(cmd: &mut Command) {
     unsafe {
@@ -766,7 +767,7 @@ impl Job {
     pub fn failure_reason(&self) -> Option<String> {
         let interesting = |l: &str| {
             !l.is_empty()
-                && !l.starts_with("[ft-man]")
+                && !l.starts_with("[paddock]")
                 && !l.starts_with("File \"")
                 && !l.starts_with('^')
                 && !l.starts_with('~')
@@ -787,7 +788,7 @@ impl Job {
         if let Some(pid) = self.pid {
             if self.is_running() {
                 signal_group(pid, libc::SIGINT);
-                self.log.push("[ft-man] cancel requested (SIGINT)".into(), false);
+                self.log.push("[paddock] cancel requested (SIGINT)".into(), false);
             }
         }
     }
@@ -799,7 +800,7 @@ impl Job {
     #[cfg(test)]
     pub fn fake(kind: JobKind, title: &str, status: JobStatus, progress: JobProgress) -> Self {
         let log = LogRing::new(64);
-        log.push("[ft-man] $ ft ...".into(), false);
+        log.push("[paddock] $ ft ...".into(), false);
         log.push("loading weights".into(), false);
         Self {
             id: NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed),
@@ -809,7 +810,7 @@ impl Job {
             status,
             progress,
             log,
-            log_path: PathBuf::from("/tmp/ft-man-test.log"),
+            log_path: PathBuf::from("/tmp/paddock-test.log"),
             started_at: chrono::Local::now(),
             finished_at: None,
             output_path: None,
@@ -839,7 +840,7 @@ pub struct JobSpec<'a> {
 ///
 /// Both long commands speak a line protocol on stdout when their progress env var is
 /// set: `FTCONVERT <phase> <done> <total>` and `FTBENCH <done> <total> <label>`, plus
-/// `FTBENCH_OUT <path>` for the written profile. Parsing those is what lets ft-man show
+/// `FTBENCH_OUT <path>` for the written profile. Parsing those is what lets paddock show
 /// a real progress bar instead of a spinner.
 pub fn spawn_job(
     ft: &Freetoken,
@@ -948,7 +949,7 @@ fn spawn_command(
         .ok()
         .map(|f| Arc::new(Mutex::new(f)));
 
-    let header = format!("[ft-man] $ {display}");
+    let header = format!("[paddock] $ {display}");
     write_line(&file, &header);
     log.push(header, false);
 
@@ -973,7 +974,7 @@ fn spawn_command(
             }
             Err(e) => JobStatus::Failed(e.to_string()),
         };
-        write_line(&outcome_file, &format!("[ft-man] finished: {status:?}"));
+        write_line(&outcome_file, &format!("[paddock] finished: {status:?}"));
         let _ = events.send(JobEvent::Finished(id, status));
     });
 
@@ -1087,7 +1088,7 @@ mod tests {
         let job = Job::fake(JobKind::Convert, "t", JobStatus::Running, JobProgress::default());
         job.log.clear();
         for line in [
-            "[ft-man] $ ft checkpoint --model /models/x",
+            "[paddock] $ ft checkpoint --model /models/x",
             "Converting dense weights: 40%",
             "Traceback (most recent call last):",
             "  File \"/x/convert.py\", line 288, in load_moe_expert_sources",
@@ -1107,7 +1108,7 @@ mod tests {
     fn a_job_that_printed_nothing_useful_has_no_reason_to_offer() {
         let job = Job::fake(JobKind::Bench, "t", JobStatus::Running, JobProgress::default());
         job.log.clear();
-        job.log.push("[ft-man] $ ft bench bw".into(), false);
+        job.log.push("[paddock] $ ft bench bw".into(), false);
         job.log.push("   ".into(), false);
         assert_eq!(job.failure_reason(), None, "our own header is not a failure reason");
     }

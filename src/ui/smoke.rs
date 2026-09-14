@@ -1180,7 +1180,7 @@ async fn the_download_client_uses_the_apps_token() {
 /// actions operate on a real directory rather than a fabricated path.
 fn with_checkpoint(a: &mut App, tag: &str, with_own_template: bool) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "ft-man-tpl-ui-{tag}-{}-{:?}",
+        "paddock-tpl-ui-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
@@ -1344,7 +1344,7 @@ async fn applying_to_a_cache_resident_checkpoint_writes_it_and_does_not_panic() 
 
     // Shaped like a real cache entry, because that shape is what the bug turned on.
     let root = std::env::temp_dir().join(format!(
-        "ft-man-cache-tpl-{}-{:?}",
+        "paddock-cache-tpl-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
@@ -1370,7 +1370,7 @@ async fn applying_to_a_cache_resident_checkpoint_writes_it_and_does_not_panic() 
     let confirm = a.confirm.as_ref().expect("applying must still be confirmed");
     let body = confirm.body.join("\n");
     assert!(body.contains(&dir.display().to_string()), "it must name a directory:\n{body}");
-    // And say that this directory is not private to ft-man.
+    // And say that this directory is not private to paddock.
     assert!(
         body.contains("Hugging Face cache"),
         "the reader must be told other tools see this too:\n{body}"
@@ -1408,7 +1408,7 @@ async fn reverting_a_model_with_no_override_is_refused_not_silently_ignored() {
     press(&mut a, KeyCode::Char('u'));
     assert!(a.confirm.is_none(), "there is nothing to confirm");
     assert!(
-        a.toasts.iter().any(|t| t.text.contains("not using an ft-man template override")),
+        a.toasts.iter().any(|t| t.text.contains("not using an paddock template override")),
         "the user should be told why nothing happened"
     );
     // The hand-placed template is untouched.
@@ -1754,7 +1754,7 @@ async fn the_advertised_start_refusal_is_the_one_a_start_actually_gives() {
     assert_eq!(refusal.status, 503);
 }
 
-/// The cross-process race: a second ft-man on this machine starts an engine between two
+/// The cross-process race: a second paddock on this machine starts an engine between two
 /// of our ticks. The state file is the handoff, so a start re-reads it rather than
 /// trusting the last poll — and attaches to what it finds instead of putting a second
 /// engine on the same GPU and port.
@@ -1799,7 +1799,7 @@ async fn a_start_attaches_to_an_engine_another_process_already_started() {
     crate::ft::proc::ServeState::clear();
 }
 
-/// `use_model` derives `--served-model-name` from the checkpoint, but only when ft-man is
+/// `use_model` derives `--served-model-name` from the checkpoint, but only when paddock is
 /// the one that put the current value there. A name typed by hand is the API this engine
 /// publishes; clients send it in request bodies, and picking a different model must not
 /// silently rewrite it.
@@ -1809,12 +1809,12 @@ async fn using_a_model_never_overwrites_a_hand_set_served_name() {
     populate(&mut a);
     let first = a.models[0].path.clone();
 
-    // Unset: ft-man fills it in.
+    // Unset: paddock fills it in.
     assert!(!a.serve.is_set("served_model_name"));
     crate::actions::use_model(&mut a, &first, false).unwrap();
     assert_eq!(a.serve.get("served_model_name"), Some("Qwen3.6-35B-A3B"));
 
-    // Still ft-man's own value, so switching models moves it along.
+    // Still paddock's own value, so switching models moves it along.
     let second = a.models[1].path.clone();
     crate::actions::use_model(&mut a, &second, false).unwrap();
     assert_eq!(a.serve.get("served_model_name"), Some("Qwen3.6-35B-A3B-ftw"));

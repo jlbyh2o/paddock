@@ -385,7 +385,7 @@ export const fixture: Snapshot = {
     model: "Qwen3.6-35B-A3B",
     port: 1919,
     command_line: `ft serve --model ${FTW_PATH} --served-model-name Qwen3.6-35B-A3B --moe-strategy hybrid --moe-cache-auto --kv-reserve-tokens 65536 --memory-ratio 0.92`,
-    log_path: "/home/user/.local/state/ft-man/logs/serve-20260913-084517.log",
+    log_path: "/home/user/.local/state/paddock/logs/serve-20260913-084517.log",
     endpoint: "http://127.0.0.1:1919",
     server_reachable: true,
     context_fit: {
@@ -613,7 +613,7 @@ export const fixture: Snapshot = {
       { verdict: "offload", formats: ["bf16", "fp8_block", "mxfp4"] },
       { verdict: "hybrid", formats: ["nvfp4"] },
     ],
-    bench_profile_path: "/home/user/.local/state/ft-man/bench/GPU-6f2a8c31.json",
+    bench_profile_path: "/home/user/.local/state/paddock/bench/GPU-6f2a8c31.json",
   },
 
   models: {
@@ -730,7 +730,7 @@ export const fixture: Snapshot = {
         served_name: "meta-llama/Llama-4.2-11B-Instruct",
         convertible: true,
         is_partial: false,
-        template_status: { kind: "foreign", label: "custom (not applied by ft-man)" },
+        template_status: { kind: "foreign", label: "custom (not applied by paddock)" },
         template_targets: ["/workspace/huggingface/hub/models--meta-llama--Llama-4.2-11B-Instruct/snapshots/4c1e880"],
         sampling_status: { kind: "checkpoint", label: "checkpoint's own" },
         sampling_effective: null,
@@ -780,7 +780,7 @@ export const fixture: Snapshot = {
       { path: "/workspace/huggingface/hub", exists: true },
       { path: "/home/user/models", exists: false },
     ],
-    config_path: "/home/user/.config/ft-man/config.toml",
+    config_path: "/home/user/.config/paddock/config.toml",
   },
 
   hub: {
@@ -910,7 +910,7 @@ export const fixture: Snapshot = {
     stored: [
       {
         name: "qwen-sharp",
-        path: "/home/user/.local/state/ft-man/templates/qwen-sharp.jinja",
+        path: "/home/user/.local/state/paddock/templates/qwen-sharp.jinja",
         size: 7412,
         meta: {
           source: "example-org/chat-templates",
@@ -923,7 +923,7 @@ export const fixture: Snapshot = {
       },
       {
         name: "llama-tools",
-        path: "/home/user/.local/state/ft-man/templates/llama-tools.jinja",
+        path: "/home/user/.local/state/paddock/templates/llama-tools.jinja",
         size: 5120,
         meta: {
           source: null,
@@ -1122,7 +1122,7 @@ export const fixture: Snapshot = {
         elapsed_s: 412,
         started_at: "2026-09-13T09:14:08+01:00",
         finished_at: null,
-        log_path: "/home/user/.local/state/ft-man/logs/job-3.log",
+        log_path: "/home/user/.local/state/paddock/logs/job-3.log",
         output_path: null,
         output_seq: 184,
         failure_reason: null,
@@ -1143,8 +1143,8 @@ export const fixture: Snapshot = {
         elapsed_s: 184,
         started_at: "2026-09-02T19:38:04+01:00",
         finished_at: "2026-09-02T19:41:08+01:00",
-        log_path: "/home/user/.local/state/ft-man/logs/job-2.log",
-        output_path: "/home/user/.local/state/ft-man/bench/GPU-6f2a8c31.json",
+        log_path: "/home/user/.local/state/paddock/logs/job-2.log",
+        output_path: "/home/user/.local/state/paddock/bench/GPU-6f2a8c31.json",
         output_seq: 42,
         failure_reason: null,
         is_running: false,
@@ -1165,7 +1165,7 @@ export const fixture: Snapshot = {
         elapsed_s: 96,
         started_at: "2026-09-11T16:02:11+01:00",
         finished_at: "2026-09-11T16:03:47+01:00",
-        log_path: "/home/user/.local/state/ft-man/logs/job-1.log",
+        log_path: "/home/user/.local/state/paddock/logs/job-1.log",
         output_path: null,
         output_seq: 17,
         failure_reason: "RuntimeError: not enough host memory to stage expert bank 41",
@@ -1213,7 +1213,7 @@ export const fixture: Snapshot = {
     last_seq: 5094,
     dropped: 5080,
     capacity: 2000,
-    log_path: "/home/user/.local/state/ft-man/logs/serve-20260913-084517.log",
+    log_path: "/home/user/.local/state/paddock/logs/serve-20260913-084517.log",
   },
 
   toasts: [
@@ -1252,8 +1252,8 @@ export const fixture: Snapshot = {
     convert_preflight: true,
     templates_preflight: true,
     template_sources: ["example-org/chat-templates", "unsloth/chat-templates"],
-    config_path: "/home/user/.config/ft-man/config.toml",
-    state_dir: "/home/user/.local/state/ft-man",
+    config_path: "/home/user/.config/paddock/config.toml",
+    state_dir: "/home/user/.local/state/paddock",
     disk_free: { measured_path: "/workspace", free_bytes: 442_381_369_344 },
   },
 
@@ -1314,7 +1314,7 @@ export const fixture: Snapshot = {
  * reads `severity` off the wire and never re-derives it.
  */
 function classify(text: string): LogSeverity {
-  if (text.startsWith("[ft-man]")) return "meta";
+  if (text.startsWith("[paddock]")) return "meta";
   if (
     text.includes("ERROR") ||
     text.includes("CRITICAL") ||
@@ -1328,7 +1328,7 @@ function classify(text: string): LogSeverity {
 }
 
 export const mockLogLines: LogLine[] = [
-  "[ft-man] $ ft serve --model /workspace/ftw/Qwen3.6-35B-A3B-NVFP4 --moe-strategy hybrid",
+  "[paddock] $ ft serve --model /workspace/ftw/Qwen3.6-35B-A3B-NVFP4 --moe-strategy hybrid",
   "INFO: FreeToken 0.9.4 starting",
   "INFO: resolved attention backend: fa (hybrid_linear)",
   "INFO: loading weights from FTW build (21.0 GiB)",
@@ -1415,22 +1415,22 @@ export const mockRequestRecords: RequestRecord[] = [
 export const mockJobOutput: Record<number, JobOutputLine[]> = Object.fromEntries(
   Object.entries({
     3: [
-      "[ft-man] $ ft checkpoint --model /workspace/huggingface/hub/models--meta-llama--Llama-4.2-11B-Instruct/snapshots/4c1e880 --out /workspace/ftw/Llama-4.2-11B-Instruct --moe-backend offload",
+      "[paddock] $ ft checkpoint --model /workspace/huggingface/hub/models--meta-llama--Llama-4.2-11B-Instruct/snapshots/4c1e880 --out /workspace/ftw/Llama-4.2-11B-Instruct --moe-backend offload",
       "reading config.json",
       "dense tensors: 240 of 240",
       "writing expert bank 18 of 40",
       "writing expert bank 19 of 40",
     ],
     2: [
-      "[ft-man] $ ft bench bw --gpu GPU-6f2a8c31",
+      "[paddock] $ ft bench bw --gpu GPU-6f2a8c31",
       "cpu stream read: 71.4 GB/s (14 threads, avx512_vnni)",
       "pcie linear h2d: 48.2 GB/s",
       "nvfp4 cpu moe: 63.8 GB/s  pcie gather: 31.2 GB/s  ratio 2.04 -> hybrid",
       "mxfp4 cpu moe: 28.4 GB/s  pcie gather: 31.0 GB/s  ratio 0.92 -> offload",
-      "profile written to /home/user/.local/state/ft-man/bench/GPU-6f2a8c31.json",
+      "profile written to /home/user/.local/state/paddock/bench/GPU-6f2a8c31.json",
     ],
     1: [
-      "[ft-man] $ ft checkpoint --model .../Mixtral-8x7B --out /workspace/ftw/Mixtral-8x7B-FTW",
+      "[paddock] $ ft checkpoint --model .../Mixtral-8x7B --out /workspace/ftw/Mixtral-8x7B-FTW",
       "dense tensors: 128 of 128",
       "writing expert bank 41 of 256",
       "Traceback (most recent call last):",

@@ -1,4 +1,4 @@
-//! `ft-man web` — the same `App` the TUI runs, served over HTTP.
+//! `paddock web` — the same `App` the TUI runs, served over HTTP.
 //!
 //! One `App` behind one mutex, one task draining its message channel, one ticker, and a
 //! router whose handlers lock, act and unlock. Nothing here knows anything about what an
@@ -68,7 +68,7 @@ pub async fn run(
         .with_context(|| format!("binding {listen}"))?;
     let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or(listen);
     println!(
-        "ft-man {} serving the web interface on http://{bound} ({})",
+        "paddock {} serving the web interface on http://{bound} ({})",
         env!("CARGO_PKG_VERSION"),
         if authenticated { "token required" } else { "no authentication" }
     );

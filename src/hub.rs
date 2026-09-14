@@ -1,7 +1,7 @@
 //! Hugging Face Hub: search, inspect, and download checkpoints.
 //!
 //! Implemented directly against the Hub's HTTP API rather than shelling out to `hf`, so
-//! ft-man has no Python dependency of its own and can render real per-file progress.
+//! paddock has no Python dependency of its own and can render real per-file progress.
 //! Downloads are resumable (`Range` on an existing `.part` file), run several files at a
 //! time, and land in the same layout `hf download --local-dir` produces, so a checkpoint
 //! fetched here is interchangeable with one fetched by the official tool.
@@ -112,7 +112,7 @@ impl Hub {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
-            .user_agent(concat!("ft-man/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("paddock/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("building the Hub HTTP client")?;
         Ok(Self { http, endpoint: endpoint.trim_end_matches('/').to_string(), token })
@@ -481,19 +481,19 @@ pub fn locate_cli(
 /// Hugging Face's own installer for the `hf` CLI, exactly as their CLI guide documents it
 /// under "Standalone installer (Recommended)".
 ///
-/// Deliberately not a hand-rolled `pip install` into some virtualenv ft-man picked: which
+/// Deliberately not a hand-rolled `pip install` into some virtualenv paddock picked: which
 /// environment a CLI belongs in is the packager's decision, not this tool's, and an
 /// invented install path is one more thing to be wrong about when it moves.
 ///
 /// `--exclude-skill` is theirs too. The installer otherwise also writes agent skills into
-/// `~/.agents/skills`, which is a surprising thing for "ft-man could not find a downloader"
+/// `~/.agents/skills`, which is a surprising thing for "paddock could not find a downloader"
 /// to do to someone's home directory.
 pub const INSTALL_COMMAND: &str =
     "curl -LsSf https://hf.co/cli/install.sh | bash -s -- --exclude-skill";
 
 /// Run the documented installer, returning where `hf` ended up.
 ///
-/// The script installs into `~/.local/bin`, which is not necessarily on the PATH ft-man
+/// The script installs into `~/.local/bin`, which is not necessarily on the PATH paddock
 /// inherited, so the result is looked for there explicitly rather than trusting a
 /// subsequent PATH lookup to find it.
 pub async fn install_cli() -> Result<PathBuf, String> {
@@ -520,7 +520,7 @@ pub async fn install_cli() -> Result<PathBuf, String> {
     }
     crate::ft::locate::which("hf").ok_or_else(|| {
         "the installer reported success but `hf` is still not on PATH; open a new shell and \
-         restart ft-man, or set hub.cli in the config"
+         restart paddock, or set hub.cli in the config"
             .to_string()
     })
 }
@@ -560,7 +560,7 @@ pub async fn start_download(
     let mut wanted: Vec<RepoFile> = files.into_iter().filter(|f| f.wanted).collect();
     anyhow::ensure!(!wanted.is_empty(), "no files selected");
 
-    // `hf` moves the bytes, but the denominator is still ft-man's problem: a size missing
+    // `hf` moves the bytes, but the denominator is still paddock's problem: a size missing
     // from the repo listing is filled in with a HEAD, so the bar starts against a real
     // total rather than one that grows as it goes.
     for f in wanted.iter_mut().filter(|f| f.size == 0) {
@@ -591,7 +591,7 @@ pub async fn start_download(
         cmd.arg(&f.path);
     }
     cmd.env("HF_HUB_CACHE", &cache_dir)
-        // The mirror ft-man itself searches and reads metadata from. Without it a
+        // The mirror paddock itself searches and reads metadata from. Without it a
         // configured `hub.endpoint` decided which repos were listed and `hf` then fetched
         // the weights from huggingface.co — two different hosts for one download, which on
         // an air-gapped mirror simply fails and on a proxy quietly bypasses it.
@@ -706,7 +706,7 @@ async fn run_download(mut watch: DownloadWatch) {
         Ok(s) if s.success() => {
             watch.done.store(watch.total, Ordering::Relaxed);
             // `--format json` prints `{"path": "<snapshot dir>"}` — the revision actually
-            // materialized, which is what the rest of ft-man needs to act on.
+            // materialized, which is what the rest of paddock needs to act on.
             match serde_json::from_str::<DownloadReport>(out.trim()) {
                 Ok(r) => Ok(PathBuf::from(r.path)),
                 Err(_) => Ok(watch.repo_dir.clone()),

@@ -54,7 +54,7 @@ const PLACEHOLDER: &str = r#"<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ft-man — frontend not built</title>
+<title>paddock — frontend not built</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; display: grid; place-items: center; min-height: 100vh;
@@ -68,9 +68,9 @@ const PLACEHOLDER: &str = r#"<!doctype html>
 </head>
 <body>
 <main>
-  <h1>The ft-man web interface was not built into this binary.</h1>
+  <h1>The paddock web interface was not built into this binary.</h1>
   <p>The API is running and serving JSON under <code>/api</code>; only the single-page
-     application is missing. Build it, then rebuild ft-man:</p>
+     application is missing. Build it, then rebuild paddock:</p>
   <pre>cd web &amp;&amp; npm ci &amp;&amp; npm run build
 cargo build --release</pre>
   <p>A release binary never ships this page: the release workflow fails when

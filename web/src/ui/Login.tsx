@@ -1,6 +1,6 @@
 /**
  * The login page, shown when `GET /api/auth` says a token is required and this
- * browser does not have one. `POST /api/login` sets the `ft_man_token` cookie,
+ * browser does not have one. `POST /api/login` sets the `paddock_token` cookie,
  * which is what the `EventSource` stream needs — it cannot send a header.
  */
 
@@ -34,7 +34,7 @@ export function Login(props: { onAuthorized: () => void }): ReactNode {
 
   return (
     <div className="login">
-      <Pane title="ft-man">
+      <Pane title="paddock">
         <p className="dim">This instance is protected by a token.</p>
         <form onSubmit={submit}>
           <label htmlFor="token">Token</label>

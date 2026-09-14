@@ -1,5 +1,5 @@
 /**
- * A tiny in-browser stand-in for `ft-man web`, used when `VITE_MOCK=1`.
+ * A tiny in-browser stand-in for `paddock web`, used when `VITE_MOCK=1`.
  *
  * It holds the fixture as mutable state, answers the routes `client.ts` calls,
  * and pushes a snapshot roughly ten times a second the way the real SSE stream
@@ -9,7 +9,7 @@
  * refusal shapes of §1.2, because "which problem does the reader see" is exactly the
  * kind of thing a fixture should be able to reproduce.
  *
- * It is imported dynamically behind `__FT_MAN_MOCK__`, which a production build
+ * It is imported dynamically behind `__PADDOCK_MOCK__`, which a production build
  * replaces with `false`, so the chunk is folded away and never reaches `dist/`.
  */
 

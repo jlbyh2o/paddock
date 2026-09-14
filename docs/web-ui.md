@@ -1,6 +1,6 @@
 # The web interface
 
-ft-man 0.3 adds a browser interface with the same reach as the terminal one: every
+paddock 0.3 adds a browser interface with the same reach as the terminal one: every
 screen, every action, the same confirmations, on the same state. This document records
 the design decisions so that the two front ends stay one program with two faces rather
 than drifting into two programs.
@@ -8,12 +8,12 @@ than drifting into two programs.
 ## What it is
 
 ```
-ft-man web                       # headless: serve the web UI on 0.0.0.0:7979
-ft-man web --listen 127.0.0.1:8000
-ft-man                           # the TUI, unchanged
+paddock web                       # headless: serve the web UI on 0.0.0.0:7979
+paddock web --listen 127.0.0.1:8000
+paddock                           # the TUI, unchanged
 ```
 
-`ft-man web` runs the same `App` the TUI runs: the same telemetry poller, hardware
+`paddock web` runs the same `App` the TUI runs: the same telemetry poller, hardware
 sampler, engine supervisor, job runner and download tracker, but instead of drawing to a
 terminal it serves a single-page application over HTTP and streams state changes to it.
 It is a long-lived daemon. Like the TUI it never stops an engine on exit unless a stop was
@@ -64,7 +64,7 @@ an index from the browser, because the list may have changed between render and 
   `{ "error": "..." }` with a 4xx/5xx status. Actions that produce a toast in the TUI
   produce the same toast here; it arrives in the next snapshot.
 - Optional bearer token (`[web] token`, `--token`): when set, every `/api` request must
-  carry it as `Authorization: Bearer` or as the `ft_man_token` cookie the login page
+  carry it as `Authorization: Bearer` or as the `paddock_token` cookie the login page
   sets. When unset there is no authentication, which is the `ft serve` default too.
 
 The exact routes, bodies and the `Snapshot` shape are specified in
@@ -113,16 +113,17 @@ looks at the adopted engine too.
 
 ## Deployment on a headless box
 
-A systemd system unit running as the user who owns the FreeToken install:
+A systemd system unit running as the user who owns the FreeToken install. The full
+template, with comments, is `contrib/paddock-web.service`:
 
 ```ini
 [Unit]
-Description=ft-man web interface
+Description=paddock web interface
 After=network-online.target
 
 [Service]
-User=jeremy
-ExecStart=%h/.local/bin/ft-man web
+User=YOUR_USER
+ExecStart=%h/.local/bin/paddock web
 Environment=HF_HOME=/workspace/huggingface
 Restart=on-failure
 KillMode=process

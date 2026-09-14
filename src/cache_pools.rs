@@ -3,7 +3,7 @@
 //! Two things have to line up with the engine and neither is visible when it goes wrong.
 //! The limit key is the one FreeToken publishes (`_LIMIT_KEYS` in its `cache_report.py`),
 //! and the unit is the one it denominates that bound in: tokens for the paged pools, slots
-//! for the others. ft-man sizes every pool in the unit `/v1/cache/rebuild` accepts, which
+//! for the others. paddock sizes every pool in the unit `/v1/cache/rebuild` accepts, which
 //! for KV and the window is *pages*, so those two convert — invisible on a model with
 //! `page_size` 1 and a factor of 128 on DSV4.
 //!
@@ -73,7 +73,7 @@ pub fn limit_key(pool: Pool) -> &'static str {
     }
 }
 
-/// How many published tokens make one of the units ft-man sizes this pool in. The paged
+/// How many published tokens make one of the units paddock sizes this pool in. The paged
 /// pools are published in tokens and rebuilt in pages; the others are one to one.
 pub fn tokens_per_unit(geo: &CacheGeometry, pool: Pool) -> u64 {
     match pool {
@@ -156,7 +156,7 @@ mod tests {
         assert!(!present(&g, Pool::Swa));
     }
 
-    /// The keys are FreeToken's, not ft-man's own names for the pools: a mismatch here is
+    /// The keys are FreeToken's, not paddock's own names for the pools: a mismatch here is
     /// silent, because every lookup simply misses and falls back to the local estimate.
     #[test]
     fn server_published_limits_win_over_the_fallback() {

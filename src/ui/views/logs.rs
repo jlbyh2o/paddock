@@ -48,7 +48,7 @@ fn body(f: &mut Frame, app: &mut App, area: Rect) {
             match app.engine.log_path.as_ref() {
                 Some(p) => format!("No output yet.\n\nThe engine's log file is {}.", p.display()),
                 None => {
-                    "No engine has been started from ft-man in this session.\n\nStart one from \
+                    "No engine has been started from paddock in this session.\n\nStart one from \
                          the Serve tab (Enter), or attach to a server that is already running by \
                          pointing server.host and server.port at it."
                         .to_string()
@@ -105,14 +105,14 @@ fn body(f: &mut Frame, app: &mut App, area: Rect) {
 pub enum Severity {
     Error,
     Warn,
-    /// A line ft-man wrote itself, tagged `[ft-man]`.
+    /// A line paddock wrote itself, tagged `[paddock]`.
     Meta,
     Normal,
 }
 
 /// Classify one line of engine output. `err` is whether it arrived on stderr.
 pub fn classify(text: &str, err: bool) -> Severity {
-    if text.starts_with("[ft-man]") {
+    if text.starts_with("[paddock]") {
         return Severity::Meta;
     }
     if is_error_text(text) {
@@ -180,9 +180,9 @@ mod tests {
     /// left to whichever front end happens to be read first.
     #[test]
     fn classification_names_the_same_four_cases_the_terminal_colors() {
-        assert_eq!(classify("[ft-man] $ ft serve --model x", false), Severity::Meta);
+        assert_eq!(classify("[paddock] $ ft serve --model x", false), Severity::Meta);
         // Our own lines win over their content: the exit line names a status, not an error.
-        assert_eq!(classify("[ft-man] engine exited: ERROR", true), Severity::Meta);
+        assert_eq!(classify("[paddock] engine exited: ERROR", true), Severity::Meta);
         assert_eq!(classify("ERROR:freetoken.engine:boom", false), Severity::Error);
         assert_eq!(classify("WARNING: falling back to torch", false), Severity::Warn);
         assert_eq!(classify("INFO: loading weights", false), Severity::Normal);

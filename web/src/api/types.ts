@@ -1,5 +1,5 @@
 /**
- * The ft-man web API, as TypeScript.
+ * The paddock web API, as TypeScript.
  *
  * This file is the frontend's source of truth and the exact counterpart of
  * `docs/web-api.md`; the two are maintained together. Field names are snake_case
@@ -81,7 +81,7 @@ export type Preflight =
   | { kind: "warn"; detail: string }
   | { kind: "fail"; detail: string };
 
-/** What ft-man recorded when it applied a template. Mirrors `templates::AppliedTemplate`. */
+/** What paddock recorded when it applied a template. Mirrors `templates::AppliedTemplate`. */
 export interface AppliedTemplate {
   name: string;
   source: string | null;
@@ -114,7 +114,7 @@ export interface Sampling {
   top_p: number | null;
 }
 
-/** What ft-man recorded when it applied sampling defaults. Mirrors `sampling::AppliedSampling`. */
+/** What paddock recorded when it applied sampling defaults. Mirrors `sampling::AppliedSampling`. */
 export interface AppliedSampling {
   sampling: Sampling;
   /** ISO-8601. */
@@ -1157,7 +1157,7 @@ export interface Snapshot {
   seq: number;
   /** Unix milliseconds when the snapshot was built. */
   ts_ms: number;
-  /** The ft-man version. */
+  /** The paddock version. */
   version: string;
   engine: EngineSnapshot;
   telemetry: TelemetrySnapshot;
@@ -1221,7 +1221,7 @@ export interface LogLine {
   severity: LogSeverity;
 }
 
-/** How a log line is colored. "meta" is a `[ft-man]` line of ft-man's own. */
+/** How a log line is colored. "meta" is a `[paddock]` line of paddock's own. */
 export type LogSeverity = "error" | "warn" | "meta" | "normal";
 
 /** One line of a job's output, classified like an engine log line. */
@@ -1235,7 +1235,7 @@ export type LogPage = SeqPage<LogLine>;
 
 /** One served request. Mirrors `ft::types::RequestRecord` plus derived fields. */
 export interface RequestRecord {
-  /** ft-man's own append sequence — not the engine's cursor. */
+  /** paddock's own append sequence — not the engine's cursor. */
   seq: number;
   /** ISO-8601, as the engine wrote it. */
   ts: string;

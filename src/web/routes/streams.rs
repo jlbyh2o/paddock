@@ -332,7 +332,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str, body: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ft-man-tail-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("paddock-tail-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();

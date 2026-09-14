@@ -251,7 +251,7 @@ export function App(): ReactNode {
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">ft-man</span>
+        <span className="brand">paddock</span>
         <nav className="tabs" aria-label="Views">
           {TABS.map((def, i) => {
             let badge: number | null = null;
@@ -297,7 +297,7 @@ export function App(): ReactNode {
 
       {connection.everConnected && !connection.connected ? (
         <div className="disconnected" role="alert">
-          Disconnected from ft-man — retrying. The numbers below are the last state seen.
+          Disconnected from paddock — retrying. The numbers below are the last state seen.
         </div>
       ) : null}
       {MOCK ? (

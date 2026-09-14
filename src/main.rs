@@ -1,4 +1,4 @@
-//! ft-man — a terminal UI for managing FreeToken.
+//! paddock — a terminal UI for managing FreeToken.
 //!
 //! Download checkpoints from Hugging Face, convert them to FreeToken's FTW format, tune
 //! every `ft serve` knob, launch and supervise the engine, retune its cache pools live,
@@ -38,21 +38,21 @@ use crate::ui::app::{App, Message, Tab};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "ft-man",
+    name = "paddock",
     version,
     about = "Manage FreeToken from a terminal or a browser",
-    long_about = "ft-man is a control panel for a FreeToken install: browse and download \
+    long_about = "paddock is a control panel for a FreeToken install: browse and download \
                   checkpoints, convert them to FTW, configure and supervise `ft serve`, resize \
                   cache pools on a live engine, and watch throughput, requests and logs.\n\n\
-                  Run it bare for the terminal UI, or `ft-man web` for the same thing in a \
+                  Run it bare for the terminal UI, or `paddock web` for the same thing in a \
                   browser."
 )]
 struct Cli {
-    /// Server host ft-man polls for telemetry.
+    /// Server host paddock polls for telemetry.
     #[arg(long, value_name = "HOST", global = true)]
     host: Option<String>,
 
-    /// Server port ft-man polls for telemetry.
+    /// Server port paddock polls for telemetry.
     #[arg(long, value_name = "PORT", global = true)]
     port: Option<u16>,
 
@@ -105,6 +105,10 @@ enum Command {
 fn main() -> Result<()> {
     install_panic_hook();
     let cli = Cli::parse();
+
+    // Before anything reads config or state: an install made under the old name is moved
+    // into place, so the rename does not read as a factory reset.
+    config::migrate_legacy_dirs();
 
     if cli.init_config {
         let cfg = Config::default();
@@ -163,10 +167,10 @@ fn build_config(cli: &Cli) -> Result<Config> {
     Ok(config)
 }
 
-/// `--doctor`: everything ft-man resolved, so a misconfigured install can be diagnosed
+/// `--doctor`: everything paddock resolved, so a misconfigured install can be diagnosed
 /// without entering the UI.
 fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
-    println!("ft-man {}", env!("CARGO_PKG_VERSION"));
+    println!("paddock {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("config file    {}", config::config_path().display());
     println!("profiles       {}", config::profiles_path().display());
@@ -270,7 +274,7 @@ fn doctor(config: &Config, ft: Result<ft::Freetoken, String>) -> Result<()> {
     Ok(())
 }
 
-/// Log ft-man's own diagnostics.
+/// Log paddock's own diagnostics.
 ///
 /// The TUI writes to a file and nowhere else: stdout and stderr belong to the terminal
 /// once it starts. The web daemon adds stderr at `info`, because it is a service and
@@ -280,9 +284,9 @@ fn init_logging(web: bool) -> Result<()> {
 
     let dir = config::log_dir();
     std::fs::create_dir_all(&dir).ok();
-    let appender = tracing_appender::rolling::never(&dir, "ft-man.log");
+    let appender = tracing_appender::rolling::never(&dir, "paddock.log");
     let default = if web { "info" } else { "warn" };
-    let filter = EnvFilter::try_from_env("FT_MAN_LOG").unwrap_or_else(|_| EnvFilter::new(default));
+    let filter = EnvFilter::try_from_env("PADDOCK_LOG").unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(appender).with_ansi(false))
         .with(web.then(|| fmt::layer().with_writer(std::io::stderr)))

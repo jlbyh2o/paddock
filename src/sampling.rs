@@ -13,7 +13,7 @@
 //!   carries `eos_token_id` and friends, and a replacement that dropped the stop ids would
 //!   leave the model generating past the end of its turn;
 //! * a marker file records what was applied and whether there was an original, so
-//!   [`status`] can report the truth even after ft-man restarts;
+//!   [`status`] can report the truth even after paddock restarts;
 //! * [`revert`] puts it back exactly.
 //!
 //! Only `temperature`, `top_k` and `top_p` are offered, because those are the only three
@@ -30,9 +30,39 @@ use serde::{Deserialize, Serialize};
 /// The file `GenerationConfig.from_pretrained(model_path)` reads.
 pub const CONFIG_FILE: &str = "generation_config.json";
 /// Where the checkpoint's own generation config is parked while an override is in place.
-pub const BACKUP_FILE: &str = "generation_config.json.ft-man-original";
-/// Records what ft-man applied, so an override survives a restart visibly.
-pub const MARKER_FILE: &str = ".ft-man-sampling.json";
+pub const BACKUP_FILE: &str = "generation_config.json.paddock-original";
+/// Records what paddock applied, so an override survives a restart visibly.
+pub const MARKER_FILE: &str = ".paddock-sampling.json";
+
+/// What these two were called before the rename. Read as a fallback for the reason spelled
+/// out in [`crate::templates`]: the backup is the only copy of the checkpoint's own
+/// generation config, and a scan must not write to a checkpoint directory to find it.
+pub const LEGACY_BACKUP_FILE: &str = "generation_config.json.ft-man-original";
+pub const LEGACY_MARKER_FILE: &str = ".ft-man-sampling.json";
+
+/// The marker actually on disk, preferring the current name.
+fn marker_path(model_dir: &Path) -> Option<std::path::PathBuf> {
+    let current = model_dir.join(MARKER_FILE);
+    if current.is_file() {
+        return Some(current);
+    }
+    let legacy = model_dir.join(LEGACY_MARKER_FILE);
+    legacy.is_file().then_some(legacy)
+}
+
+/// The backup actually on disk, preferring the current name. When neither exists this is
+/// where a new one goes.
+fn backup_path(model_dir: &Path) -> std::path::PathBuf {
+    let current = model_dir.join(BACKUP_FILE);
+    if current.is_file() {
+        return current;
+    }
+    let legacy = model_dir.join(LEGACY_BACKUP_FILE);
+    if legacy.is_file() {
+        return legacy;
+    }
+    current
+}
 
 /// The sampling defaults a request that specifies nothing will resolve to.
 ///
@@ -150,7 +180,7 @@ impl Sampling {
 
 // ---------------------------------------------------------------- per model
 
-/// What ft-man recorded when it applied a sampling override to a checkpoint.
+/// What paddock recorded when it applied a sampling override to a checkpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppliedSampling {
     pub sampling: Sampling,
@@ -164,7 +194,7 @@ pub enum Status {
     /// Whatever the checkpoint ships, untouched.
     #[default]
     Checkpoint,
-    /// ft-man applied an override.
+    /// paddock applied an override.
     Overridden(Box<AppliedSampling>),
 }
 
@@ -219,7 +249,7 @@ pub fn unsupported(format: crate::models::Format) -> Option<&'static str> {
 
 /// What sampling a checkpoint directory will actually hand the engine.
 ///
-/// Reads the file rather than the marker, so it is equally right for a checkpoint ft-man
+/// Reads the file rather than the marker, so it is equally right for a checkpoint paddock
 /// has never touched — which is the whole point of showing it next to an override.
 pub fn effective(model_dir: &Path) -> Option<Sampling> {
     let obj = read_object(&model_dir.join(CONFIG_FILE)).ok()?;
@@ -229,8 +259,8 @@ pub fn effective(model_dir: &Path) -> Option<Sampling> {
 
 /// Whether an override is in place, and what it was.
 pub fn status(model_dir: &Path) -> Status {
-    let marker = model_dir.join(MARKER_FILE);
-    if let Ok(raw) = std::fs::read_to_string(&marker) {
+    if let Some(marker) = marker_path(model_dir) {
+        let raw = std::fs::read_to_string(&marker).unwrap_or_default();
         if let Ok(applied) = serde_json::from_str::<AppliedSampling>(&raw) {
             // Trust the marker only while the file it describes is still there; someone
             // may have deleted it by hand, or a `hf download` may have replaced it.
@@ -244,7 +274,7 @@ pub fn status(model_dir: &Path) -> Status {
 
 /// Apply sampling defaults to a checkpoint directory.
 ///
-/// Re-applying over an existing ft-man override does not re-back-up: the first backup is
+/// Re-applying over an existing paddock override does not re-back-up: the first backup is
 /// the checkpoint's genuine original, and clobbering it with a previous override would
 /// make [`revert`] restore the wrong thing. The new file is always built by merging over
 /// that original, never over the override it replaces, so applying twice lands in the same
@@ -256,7 +286,9 @@ pub fn apply(model_dir: &Path, want: &Sampling) -> Result<()> {
     }
 
     let target = model_dir.join(CONFIG_FILE);
-    let backup = model_dir.join(BACKUP_FILE);
+    // Reuse a pre-rename backup rather than making a second one: it holds the checkpoint's
+    // genuine original, stop token ids and all.
+    let backup = backup_path(model_dir);
     let previous = status(model_dir);
 
     let had_original = match &previous {
@@ -304,6 +336,11 @@ pub fn apply(model_dir: &Path, want: &Sampling) -> Result<()> {
         applied_at: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         had_original,
     };
+    // Bring the old names forward while this directory is being written anyway.
+    if backup != model_dir.join(BACKUP_FILE) && backup.is_file() {
+        let _ = std::fs::rename(&backup, model_dir.join(BACKUP_FILE));
+    }
+    let _ = std::fs::remove_file(model_dir.join(LEGACY_MARKER_FILE));
     crate::config::write_atomic(
         &model_dir.join(MARKER_FILE),
         &serde_json::to_string_pretty(&applied)?,
@@ -314,10 +351,10 @@ pub fn apply(model_dir: &Path, want: &Sampling) -> Result<()> {
 /// Undo an override, restoring the checkpoint exactly as it was.
 pub fn revert(model_dir: &Path) -> Result<()> {
     let Status::Overridden(applied) = status(model_dir) else {
-        anyhow::bail!("no ft-man sampling override is in place here");
+        anyhow::bail!("no paddock sampling override is in place here");
     };
     let target = model_dir.join(CONFIG_FILE);
-    let backup = model_dir.join(BACKUP_FILE);
+    let backup = backup_path(model_dir);
 
     if applied.had_original {
         anyhow::ensure!(
@@ -329,10 +366,11 @@ pub fn revert(model_dir: &Path) -> Result<()> {
             .with_context(|| format!("restoring {}", target.display()))?;
     } else if target.is_file() {
         // The checkpoint never had one; a leftover file would keep feeding the engine
-        // ft-man's numbers, so it has to go.
+        // paddock's numbers, so it has to go.
         std::fs::remove_file(&target).with_context(|| format!("removing {}", target.display()))?;
     }
     let _ = std::fs::remove_file(model_dir.join(MARKER_FILE));
+    let _ = std::fs::remove_file(model_dir.join(LEGACY_MARKER_FILE));
     Ok(())
 }
 
@@ -379,7 +417,7 @@ mod tests {
 
     fn tmpdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "ft-man-sampling-{tag}-{}-{:?}",
+            "paddock-sampling-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -490,7 +528,7 @@ mod tests {
     fn a_sampling_override_overrules_a_greedy_checkpoint() {
         let dir = tmpdir("do-sample");
         // Without do_sample: true on the way out, load_generation_sampling short-circuits
-        // on the checkpoint's false and never reads a single value ft-man wrote.
+        // on the checkpoint's false and never reads a single value paddock wrote.
         write(&dir, CONFIG_FILE, r#"{"do_sample": false}"#);
 
         apply(&dir, &want()).unwrap();
@@ -510,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_reads_a_checkpoint_ft_man_never_touched() {
+    fn effective_reads_a_checkpoint_paddock_never_touched() {
         let dir = tmpdir("effective");
         write(&dir, CONFIG_FILE, r#"{"temperature": 0.7, "top_k": 20}"#);
 
@@ -583,7 +621,8 @@ mod real_checkpoint {
 
     #[test]
     fn an_override_on_a_real_config_changes_only_the_sampling() {
-        let dir = std::env::temp_dir().join(format!("ft-man-sampling-real-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("paddock-sampling-real-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(CONFIG_FILE), QWEN).unwrap();
@@ -613,5 +652,82 @@ mod real_checkpoint {
         revert(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join(CONFIG_FILE)).unwrap(), QWEN);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod legacy_names {
+    use super::*;
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "paddock-legacy-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// An override written before the rename, exactly as it sits on disk today.
+    fn as_ft_man_left_it(dir: &Path) {
+        std::fs::write(dir.join(CONFIG_FILE), r#"{"do_sample": true, "temperature": 0.3}"#)
+            .unwrap();
+        std::fs::write(dir.join(LEGACY_BACKUP_FILE), r#"{"eos_token_id": 7, "temperature": 1.0}"#)
+            .unwrap();
+        std::fs::write(
+            dir.join(LEGACY_MARKER_FILE),
+            r#"{"sampling":{"temperature":0.3},"applied_at":"2026-09-13T18:02:11+01:00","had_original":true}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_pre_rename_override_is_still_seen() {
+        let dir = tmpdir("seen");
+        as_ft_man_left_it(&dir);
+        // Reporting "checkpoint's own" here would be a lie: an override is in force.
+        assert!(status(&dir).is_overridden());
+    }
+
+    #[test]
+    fn a_pre_rename_override_still_reverts_to_the_real_original() {
+        let dir = tmpdir("revert");
+        as_ft_man_left_it(&dir);
+
+        revert(&dir).unwrap();
+
+        let restored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(CONFIG_FILE)).unwrap()).unwrap();
+        assert_eq!(restored["eos_token_id"], serde_json::json!(7));
+        assert_eq!(restored["temperature"], serde_json::json!(1.0));
+        assert!(!dir.join(LEGACY_MARKER_FILE).exists(), "the old marker outlived the revert");
+        assert!(!dir.join(LEGACY_BACKUP_FILE).exists());
+    }
+
+    #[test]
+    fn applying_over_a_pre_rename_override_keeps_the_real_original_and_renames_forward() {
+        let dir = tmpdir("forward");
+        as_ft_man_left_it(&dir);
+
+        apply(&dir, &Sampling { temperature: Some(0.8), ..Default::default() }).unwrap();
+
+        // The backup must still be the checkpoint's, not the 0.3 override it replaced.
+        let backup: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(BACKUP_FILE)).unwrap()).unwrap();
+        assert_eq!(backup["temperature"], serde_json::json!(1.0));
+        assert_eq!(backup["eos_token_id"], serde_json::json!(7));
+
+        // And the directory is left on the current names only.
+        assert!(!dir.join(LEGACY_BACKUP_FILE).exists());
+        assert!(!dir.join(LEGACY_MARKER_FILE).exists());
+        assert!(dir.join(MARKER_FILE).is_file());
+
+        // A revert now still reaches the genuine original.
+        revert(&dir).unwrap();
+        let restored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(CONFIG_FILE)).unwrap()).unwrap();
+        assert_eq!(restored["eos_token_id"], serde_json::json!(7));
     }
 }

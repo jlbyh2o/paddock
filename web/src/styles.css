@@ -1,5 +1,5 @@
 /*
- * ft-man web — hand-written CSS, no framework.
+ * paddock web — hand-written CSS, no framework.
  *
  * The palette is the TUI's (`src/ui/theme.rs`) so the two front ends read as one
  * program: one accent, one muted tone, and good/warn/bad carrying the same meaning
@@ -930,7 +930,7 @@ input.error {
 .logline.warn {
   color: var(--warn);
 }
-/* `[ft-man]`'s own lines: present, but never louder than the engine's. */
+/* `[paddock]`'s own lines: present, but never louder than the engine's. */
 .logline.meta {
   color: var(--dim);
 }

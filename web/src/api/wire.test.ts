@@ -2,7 +2,7 @@
  * The wire contract, checked against the daemon's own serialization.
  *
  * `snapshot.populated.json`, `snapshot.empty.json` and `knobs.json` are written by
- * `src/web/tests.rs` with `FT_MAN_DUMP_SNAPSHOTS=1`; they are what `ft-man web`
+ * `src/web/tests.rs` with `PADDOCK_DUMP_SNAPSHOTS=1`; they are what `paddock web`
  * actually sends. Two things are asserted here, and both are mechanical because the
  * two halves of the contract were built from the same prose by different hands:
  *

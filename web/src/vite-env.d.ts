@@ -5,4 +5,4 @@
  * production build, where `vite.config.ts` replaces it with the literal `false` so
  * Rollup folds every `import("./mock/…")` away and the fixture never ships.
  */
-declare const __FT_MAN_MOCK__: boolean;
+declare const __PADDOCK_MOCK__: boolean;
