@@ -360,21 +360,28 @@ pub(crate) fn populate(app: &mut App) {
         siblings,
     });
     app.supported_archs = Some(vec!["Qwen3MoeForCausalLM".into()]);
-    app.hub_view.compat = Some(crate::compat::evaluate(
-        &serde_json::json!({
-            "architectures": ["Qwen3MoeForCausalLM"],
-            "num_experts": 128,
+    // The real attention shape of the repo this fixture names: 30 linear layers and 10
+    // full ones, so the KV note has something true to say and the render path is
+    // exercised by every screenshot test below.
+    app.hub_view.compat_config = Some(Box::new(serde_json::json!({
+        "architectures": ["Qwen3MoeForCausalLM"],
+        "num_experts": 128,
+        "quantization_config": {"format": "nvfp4-pack-quantized"},
+        "text_config": {
+            "num_hidden_layers": 40,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 2,
+            "head_dim": 256,
+            "hidden_size": 2048,
             "max_position_embeddings": 262144,
-            "quantization_config": {"format": "nvfp4-pack-quantized"}
-        }),
-        20 << 30,
-        app.supported_archs.as_deref(),
-        crate::compat::Hardware {
-            vram_bytes: 16 << 30,
-            host_ram_bytes: 40 << 30,
-            free_disk_bytes: 60 << 30,
-        },
-    ));
+            "layer_types": std::iter::repeat_n("linear_attention", 30)
+                .chain(std::iter::repeat_n("full_attention", 10))
+                .collect::<Vec<_>>(),
+        }
+    })));
+    app.gpus = vec![crate::probe::Gpu { memory_total: 16 << 30, ..Default::default() }];
+    app.disk_free_target = Some((std::path::PathBuf::from("/tmp"), 60 << 30));
+    app.reprice_compat();
 
     for i in 0..30u64 {
         app.requests_view.push(RequestRecord {
@@ -1536,6 +1543,7 @@ async fn the_hub_reports_an_incompatible_repo_before_any_download() {
             host_ram_bytes: 40 << 30,
             free_disk_bytes: 60 << 30,
         },
+        None,
     ));
 
     let screen = render_text(&mut a, Tab::Hub, 130, 34);
@@ -1567,6 +1575,7 @@ async fn an_unreadable_registry_leaves_the_verdict_honest_rather_than_wrong() {
         1 << 30,
         None,
         crate::compat::Hardware::default(),
+        None,
     ));
     let screen = render_text(&mut a, Tab::Hub, 130, 34);
     assert!(screen.contains("unverified"), "say it could not check:\n{screen}");
@@ -1578,40 +1587,69 @@ async fn an_unreadable_registry_leaves_the_verdict_honest_rather_than_wrong() {
 /// the verdict unconditionally, so whenever the small config fetch won the race (which
 /// is most of the time) the result was wiped the instant it arrived and the pane showed
 /// nothing at all.
+///
+/// The verdict surviving is now the weaker half of the claim. The report is a function of
+/// three things that arrive independently — the config, the listing that gives a download
+/// its size, and FreeToken's registry — so it has to be the *same* report whichever order
+/// they land in, not merely a non-empty one.
 #[tokio::test]
-async fn a_compatibility_verdict_survives_the_file_listing_landing_after_it() {
+async fn a_compatibility_verdict_does_not_depend_on_which_response_lands_first() {
+    let mut verdicts = Vec::new();
     for compat_first in [true, false] {
         let mut a = app().await;
         a.tab = Tab::Hub;
-
-        let report = crate::compat::evaluate(
-            &serde_json::json!({"architectures": ["Qwen3MoeForCausalLM"], "num_experts": 128}),
-            1 << 30,
-            Some(&["Qwen3MoeForCausalLM".to_string()]),
-            crate::compat::Hardware::default(),
-        );
+        a.gpus = vec![crate::probe::Gpu { memory_total: 16 << 30, ..Default::default() }];
+        let config = serde_json::json!({
+            "architectures": ["Qwen3MoeForCausalLM"], "num_experts": 128,
+            "num_hidden_layers": 48, "num_attention_heads": 32, "num_key_value_heads": 8,
+            "head_dim": 128, "max_position_embeddings": 262144,
+        });
         let info = Ok(RepoInfo {
             id: "Qwen/Qwen3.6-35B-A3B".into(),
             sha: Some("abc123".into()),
             gated: serde_json::Value::Bool(false),
-            siblings: vec![crate::hub::Sibling { path: "config.json".into(), size: Some(1400) }],
+            siblings: vec![
+                crate::hub::Sibling { path: "config.json".into(), size: Some(1400) },
+                crate::hub::Sibling {
+                    path: "model-00001-of-00002.safetensors".into(),
+                    size: Some(6 << 30),
+                },
+            ],
         });
+        let archs = Ok(vec!["Qwen3MoeForCausalLM".to_string()]);
 
+        // The registry is the third racer, and it used to leave whichever verdict it lost
+        // to saying architecture support was unverified for ever.
         if compat_first {
-            a.handle(Message::Compatibility(Box::new(Ok(report))));
+            a.handle(Message::Compatibility(Box::new(Ok(config))));
             a.handle(Message::HubInfo(Box::new(info)));
+            a.handle(Message::Architectures(archs));
         } else {
+            a.handle(Message::Architectures(archs));
             a.handle(Message::HubInfo(Box::new(info)));
-            a.handle(Message::Compatibility(Box::new(Ok(report))));
+            a.handle(Message::Compatibility(Box::new(Ok(config))));
         }
 
+        let report = a
+            .hub_view
+            .compat
+            .as_ref()
+            .unwrap_or_else(|| panic!("no verdict (compat_first={compat_first})"));
         assert!(
-            a.hub_view.compat.is_some(),
-            "the verdict must survive regardless of arrival order (compat_first={compat_first})"
+            !report.notes.iter().any(|(_, m)| m.contains("unverified")),
+            "the registry answered (compat_first={compat_first}): {:?}",
+            report.notes
         );
+        assert!(
+            !report.context_is_upper_bound,
+            "the listing gives the weights a size (compat_first={compat_first})"
+        );
+        verdicts.push((report.verdict(), report.max_servable_context, report.summary()));
+
         let screen = render_text(&mut a, Tab::Hub, 130, 34);
         assert!(screen.contains("Compatibility"), "compat_first={compat_first}:\n{screen}");
     }
+    assert_eq!(verdicts[0], verdicts[1], "the same inputs, in either order, one answer");
 }
 
 #[tokio::test]

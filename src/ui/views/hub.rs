@@ -289,7 +289,9 @@ fn target(f: &mut Frame, app: &App, area: Rect) {
         ];
         lines.push(Line::from(head));
 
-        for (level, note) in report.notes.iter().take(3) {
+        // Four, not three: the KV note is an Info on a model that fits and therefore
+        // sorts last, and it is the one finding here that nothing else in paddock reports.
+        for (level, note) in report.notes.iter().take(4) {
             let (mark, color) = match level {
                 crate::compat::Level::Blocker => ("✗ ", t.bad),
                 crate::compat::Level::Caution => ("! ", t.warn),

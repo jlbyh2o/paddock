@@ -172,7 +172,10 @@ pub enum Message {
     /// report on — a wheel install, or a tree git could not answer for.
     Checkout(Option<Box<crate::ft::FtCheckout>>),
     /// A candidate repo's `config.json`, evaluated for compatibility.
-    Compatibility(Box<Result<crate::compat::Report, String>>),
+    /// The repo's `config.json`, not a finished verdict. Judging it needs the file
+    /// listing and FreeToken's registry too, and both arrive on their own schedule, so
+    /// the config is kept and the report rebuilt whenever one of its inputs moves.
+    Compatibility(Box<Result<serde_json::Value, String>>),
     /// The `.jinja` listing for a template repo.
     TemplateRepo(Box<Result<TemplateListing, String>>),
     /// A template was fetched and saved into the store.
@@ -243,6 +246,11 @@ pub struct HubView {
     pub revision: String,
     pub loading_info: bool,
     pub target: TextInput,
+    /// The `config.json` the verdict below was judged from, kept so the judgement can be
+    /// remade. Which quantization is selected changes how much of the card the weights
+    /// take, and therefore how much context is left — so the report is not a one-shot
+    /// answer to a fetch, it is a function of state that keeps moving.
+    pub compat_config: Option<Box<serde_json::Value>>,
     /// Compatibility verdict for the repo whose files are listed.
     pub compat: Option<crate::compat::Report>,
     /// Why the verdict is missing, when the check could not be made.
@@ -1142,6 +1150,45 @@ impl App {
         changed
     }
 
+    /// The hardware a Hub candidate would have to run on.
+    ///
+    /// Read entirely from state already sampled on the hardware tick, so this is cheap
+    /// enough to call on a keypress — which matters, because the compatibility report is
+    /// rebuilt every time the file selection changes.
+    fn compat_hardware(&self) -> crate::compat::Hardware {
+        crate::compat::Hardware {
+            vram_bytes: self.gpus.first().map(|g| g.memory_total).unwrap_or(0),
+            host_ram_bytes: self.host.memory_total,
+            free_disk_bytes: match &self.disk_free_target {
+                Some((_, free)) => *free,
+                // Only before the first hardware tick, which a reader cannot get ahead of
+                // in practice. Measuring once beats reporting no disk limit at all.
+                None => crate::hub::disk_free(&self.hub_view.target.value).unwrap_or(0),
+            },
+        }
+    }
+
+    /// Rebuild the compatibility verdict from the config the check fetched.
+    ///
+    /// Three of the four inputs land asynchronously and in any order — the config, the
+    /// file listing that gives a download its size, and FreeToken's architecture registry
+    /// — and the fourth, which quantization is selected, is a reader's own keypress and
+    /// can change at any time after all three. Evaluating once on arrival got whichever
+    /// of them had happened to appear first; this re-runs the arithmetic, which is pure
+    /// and costs nothing, whenever any of them moves.
+    pub fn reprice_compat(&mut self) {
+        let Some(config) = self.hub_view.compat_config.clone() else { return };
+        let (selected, _) = self.hub_view.selected();
+        self.hub_view.compat = Some(crate::compat::evaluate(
+            &config,
+            selected,
+            self.supported_archs.as_deref(),
+            self.compat_hardware(),
+            // The context this reader actually serves, where they have said so.
+            self.serve.get("kv_reserve_tokens").and_then(|v| v.parse().ok()),
+        ));
+    }
+
     // ---- message handling -------------------------------------------
 
     pub fn handle(&mut self, msg: Message) {
@@ -1227,6 +1274,7 @@ impl App {
                         self.hub_view.variant_sel = Selection::default();
                         self.hub_view.file_sel = Selection::default();
                         self.hub_view.custom_selection = false;
+                        self.hub_view.compat_config = None;
                         self.hub_view.focus = HubFocus::Results;
                     }
                     Err(e) => self.error(format!("Hub search failed: {e}")),
@@ -1267,6 +1315,10 @@ impl App {
                             crate::hub::cache_repo_dir(&self.config.library.hub_cache(), &info.id);
                         self.hub_view.target.set(target.display().to_string());
                         self.hub_view.info = Some(info);
+                        // The listing is what gives a download its size, and the size is
+                        // what says how much of the card is left for the cache. A verdict
+                        // reached before it landed priced no weights at all.
+                        self.reprice_compat();
                     }
                     Err(e) => self.error(format!("could not read repo metadata: {e}")),
                 }
@@ -1284,7 +1336,12 @@ impl App {
                 }
             }
             Message::Architectures(res) => match res {
-                Ok(names) => self.supported_archs = Some(names),
+                Ok(names) => {
+                    self.supported_archs = Some(names);
+                    // A verdict judged before the registry answered says support is
+                    // unverified. Now that it has answered, say what it actually is.
+                    self.reprice_compat();
+                }
                 // Not fatal: the Hub check then says support is unverified rather than
                 // inventing a verdict.
                 Err(e) => tracing::warn!("could not read FreeToken's model registry: {e}"),
@@ -1302,12 +1359,14 @@ impl App {
             Message::Compatibility(res) => {
                 self.hub_view.checking_compat = false;
                 match *res {
-                    Ok(report) => {
-                        self.hub_view.compat = Some(report);
+                    Ok(config) => {
+                        self.hub_view.compat_config = Some(Box::new(config));
                         self.hub_view.compat_error = None;
+                        self.reprice_compat();
                     }
                     Err(e) => {
                         self.hub_view.compat = None;
+                        self.hub_view.compat_config = None;
                         tracing::warn!("compatibility check failed: {e}");
                         self.hub_view.compat_error = Some(e);
                     }

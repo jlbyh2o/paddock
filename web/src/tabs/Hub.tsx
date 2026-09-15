@@ -17,7 +17,7 @@ import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Empty, Field, Pane } from "../ui/primitives.tsx";
 import { SearchField, useFilterField } from "../ui/SearchField.tsx";
-import { DASH, bytes, count, dateOnly, shortSha } from "../format.ts";
+import { DASH, bytes, count, dateOnly, shortSha, tokens } from "../format.ts";
 
 const VERDICT_TONE: Record<CompatVerdict, Severity> = {
   supported: "good",
@@ -210,11 +210,24 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
                   {compat.verdict_label}
                 </Field>
                 <Field label="Summary">{compat.summary}</Field>
+                {compat.kv ? (
+                  <Field label="KV cache">
+                    {compat.kv_summary}
+                    {compat.kv_row_shape ? ` · ${compat.kv_row_shape}` : ""}
+                  </Field>
+                ) : null}
+                {compat.max_servable_context !== null ? (
+                  <Field label="Context here">
+                    {compat.context_is_upper_bound ? "at most " : ""}
+                    {tokens(compat.max_servable_context)}
+                    {compat.context !== null ? ` of ${tokens(compat.context)} advertised` : ""}
+                  </Field>
+                ) : null}
                 {compat.notes.length === 0 ? (
                   <p className="dim">nothing known stands in the way</p>
                 ) : (
                   <ul className="bullets">
-                    {compat.notes.slice(0, 3).map((note, i) => (
+                    {compat.notes.slice(0, 4).map((note, i) => (
                       <li key={i} className={NOTE_TONE[note.level] ?? "dim"}>
                         <span>{note.text}</span>
                       </li>

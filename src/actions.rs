@@ -1000,13 +1000,8 @@ pub fn open_repo(app: &mut App, repo_id: &str, revision: Option<&str>) -> Outcom
 /// One small request against a download measured in tens of gigabytes: the whole point
 /// is to answer "can this even work here?" before committing to the transfer.
 fn check_compatibility(app: &mut App, hub: Hub, repo: String, revision: String) {
-    let archs = app.supported_archs.clone();
-    let hw = crate::compat::Hardware {
-        vram_bytes: app.gpus.first().map(|g| g.memory_total).unwrap_or(0),
-        host_ram_bytes: app.host.memory_total,
-        free_disk_bytes: crate::hub::disk_free(&app.hub_view.target.value).unwrap_or(0),
-    };
     app.hub_view.checking_compat = true;
+    app.hub_view.compat_config = None;
     let tx = app.tx.clone();
     tokio::spawn(async move {
         let res = async {
@@ -1014,13 +1009,13 @@ fn check_compatibility(app: &mut App, hub: Hub, repo: String, revision: String) 
                 .fetch_text(&repo, &revision, "config.json")
                 .await
                 .map_err(|e| format!("{e:#}"))?;
-            let config: serde_json::Value =
-                serde_json::from_str(&raw).map_err(|e| format!("config.json is not JSON: {e}"))?;
-            // Size comes from the listing the caller already has; passing 0 keeps the
-            // report to what the config alone can say.
-            Ok::<_, String>(crate::compat::evaluate(&config, 0, archs.as_deref(), hw))
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .map_err(|e| format!("config.json is not JSON: {e}"))
         }
         .await;
+        // The config, not a verdict. Judging it also needs the file listing and
+        // FreeToken's registry, and this request races both of them, so the arithmetic
+        // happens in `App::reprice_compat` where all three can be seen at once.
         let _ = tx.send(Message::Compatibility(Box::new(res)));
     });
 }
@@ -1039,6 +1034,9 @@ pub fn choose_variant(app: &mut App, label: &str) -> Outcome {
     let (total, count) = app.hub_view.selected();
     app.hub_view.variant = Some(label.clone());
     app.hub_view.custom_selection = false;
+    // A quantization is a weight size, and a weight size is how much of the card is left
+    // for the cache. The context the verdict promises moves with this choice.
+    app.reprice_compat();
     app.info(format!("{label}: {count} file(s), {}", crate::util::bytes(total)));
     Ok(Done::Ok)
 }
@@ -1053,6 +1051,7 @@ pub fn toggle_file(app: &mut App, path: &str, wanted: Option<bool>) -> Result<bo
     // The selection no longer is a quantization, so nothing downstream may go on
     // claiming it is one.
     app.hub_view.custom_selection = true;
+    app.reprice_compat();
     Ok(now)
 }
 
@@ -1060,6 +1059,7 @@ pub fn toggle_file(app: &mut App, path: &str, wanted: Option<bool>) -> Result<bo
 pub fn select_files(app: &mut App, all: bool) -> usize {
     app.hub_view.files.iter_mut().for_each(|f| f.wanted = all);
     app.hub_view.custom_selection = true;
+    app.reprice_compat();
     app.hub_view.files.iter().filter(|f| f.wanted).count()
 }
 

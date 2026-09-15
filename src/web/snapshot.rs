@@ -488,6 +488,13 @@ pub struct CompatOut<'a> {
     verdict: crate::compat::Verdict,
     verdict_label: &'static str,
     summary: String,
+    /// `kv.describe()` and `kv.row.describe()`, rendered here rather than in the browser.
+    /// The structured `kv` object is flattened in above and carries every input; these
+    /// two exist so both front ends say the same sentence about them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kv_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kv_row_shape: Option<String>,
 }
 
 /// Free space and — mandatory beside it — the directory the figure was taken from.
@@ -548,6 +555,8 @@ fn hub(app: &App) -> HubSnapshot<'_> {
             verdict: r.verdict(),
             verdict_label: r.verdict().label(),
             summary: r.summary(),
+            kv_summary: r.kv.as_ref().map(|kv| kv.describe()),
+            kv_row_shape: r.kv.as_ref().map(|kv| kv.row.describe()),
         }),
         compat_error: v.compat_error.as_deref(),
         checking_compat: v.checking_compat,

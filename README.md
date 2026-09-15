@@ -172,7 +172,9 @@ is in [docs/design-notes.md](docs/design-notes.md).
   the arithmetic attached.
 - **It says whether a repo can run here before you download it.** One `config.json` fetch,
   checked against FreeToken's own architecture registry and this machine's VRAM, RAM and
-  disk.
+  disk — and against the KV cache, which is the wall weights offload past and the cache
+  cannot. A model whose weights fit can still hold a tenth of the context it advertises,
+  and the Hub tab says so half an hour before the transfer would have.
 - **You pick a quantization, not sixty files.** A GGUF repo is a shelf of builds; the Hub
   tab asks `UD-IQ3_XXS` or `Q8_0` and selects the right shards, tokenizer and projector.
 - **The library is the Hugging Face cache**, not a directory of its own — so anything

@@ -638,7 +638,7 @@ export const fixture: Snapshot = {
         ftw_fingerprint: "ftw1-9a3c77e2",
         converted_to: null,
         modified_ms: 1_788_900_000_000,
-        summary: "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx",
+        summary: "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx · 20.0 KiB/tok",
         served_name: "Qwen/Qwen3.6-35B-A3B:NVFP4",
         convertible: false,
         is_partial: false,
@@ -692,7 +692,7 @@ export const fixture: Snapshot = {
         ftw_fingerprint: null,
         converted_to: FTW_PATH,
         modified_ms: 1_788_100_000_000,
-        summary: "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx",
+        summary: "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx · 20.0 KiB/tok",
         served_name: "Qwen/Qwen3.6-35B-A3B",
         convertible: true,
         is_partial: false,
@@ -887,12 +887,34 @@ export const fixture: Snapshot = {
       num_layers: 62,
       quant: "gguf",
       context: 262_144,
+      // 62 layers, every one of them caching: the shape that makes a checkpoint whose
+      // weights offload perfectly well still unable to hold what it advertises.
+      kv: {
+        layers: 62,
+        growing_layers: 62,
+        windowed_layers: 0,
+        flat_layers: 0,
+        row: { kind: "grouped", kv_heads: 8, head_dim: 128 },
+        row_bytes: 4096,
+        bytes_per_token: 253_952,
+        window: null,
+      },
+      max_servable_context: 45_056,
+      context_is_upper_bound: true,
       notes: [
         { level: "caution", text: "GGUF weights load, but FTW conversion is not available for them." },
         { level: "info", text: "512 experts at this quantization need roughly 19.5 GiB of host RAM when offloaded." },
         { level: "info", text: "19.5 GiB to download; 412 GiB free on /workspace." },
+        {
+          level: "caution",
+          text:
+            "serves at most about 44k of its advertised 256k on this card, before any weights " +
+            "or expert cache (248 KiB/token, 62 of 62 layers cache)",
+        },
       ],
       verdict: "caution",
+      kv_summary: "248 KiB/token, 62 of 62 layers cache",
+      kv_row_shape: "8 kv heads x 128",
       verdict_label: "supported, with caveats",
       summary: "Qwen3MoeForCausalLM · MoE x512 · GGUF · 256k ctx",
     },

@@ -28,6 +28,49 @@ Every flag carries its type, range, default,
 help text and mutual exclusions in one schema. Setting `--moe-cache-size` clears
 `--moe-cache-rate` for you, because the engine would reject the pair.
 
+### It prices the cache before the download, not after
+
+Ask whether a card can run a
+checkpoint and the instinct is to compare weights against VRAM. That is the wall that
+moves: weights offload, and `--moe-cache-*` decides how much of them sit on the card. The
+wall that does not move is the KV cache, and until a model is downloaded and served
+nothing else reports it.
+
+The KV cache is not one buffer a conversation accumulates into. A token is attended to
+once *per layer*, over that layer's own inputs, so every layer keeps its own key and value
+row for every token it has seen — layer 12's rows are not substitutable for layer 30's.
+N caching layers means N independent caches:
+
+    bytes/token = 2 (K and V) x layers that keep a growing cache x KV width x bytes/element
+
+Nothing there is parameter count, which is why the number paddock reports on the Hub tab is
+`growing_layers of layers` and not the layer count alone. A modern checkpoint usually caches
+on far fewer layers than it has: a linear-attention layer folds each token into a fixed-size
+state and overwrites it, so it costs the same at one token as at 256k, and a sliding-window
+layer keeps rows but forgets everything past its window. A model with full attention on
+every layer escapes neither. Across the eight real checkpoints in `compat.rs`'s fixtures the
+cost per token spans 11 KiB to 248 KiB, and two of them — both 35B-class MoE models that
+offload their weights the same way — differ nearly tenfold on their own: 20 KiB a token
+against 192 KiB, which at 256k is 5 GiB of cache against 48 GiB.
+
+So the Hub tab reads `config.json`, derives that split, and says what this card actually
+holds against what the repo advertises. What it will not do is invent the half it cannot
+know: an offloaded MoE keeps an unknowable share of its expert banks in VRAM, so rather
+than guess a split the estimate prices a card holding *no* weights and says "at most". That
+is still decisive — a checkpoint that cannot reach a useful context with the weights taken
+out of the picture certainly cannot with them in it — and it is honest about which half is
+arithmetic and which is a bound.
+
+The blocker is judged against your own `--kv-reserve-tokens`, not a number paddock picked.
+Someone serving 256k conversations and someone serving 8k ones are not asking the same
+question of the same card, and the verdict should answer the one being asked.
+
+This matters more over time than the architecture check beside it. Architecture support is
+a moving target that upstream keeps widening; a checkpoint whose loader does not exist
+today may well have one next month. KV geometry is fixed by the checkpoint and never
+improves. Of the two walls, the one that has been checked the longest is the one that keeps
+falling down.
+
 ### It notices when you are serving a fraction of your context
 
 FreeToken sizes the KV

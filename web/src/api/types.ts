@@ -476,6 +476,33 @@ export interface CompatNote {
   text: string;
 }
 
+/** How one caching layer's per-token row is shaped. Mirrors `compat::KvRow`. */
+export type KvRow =
+  | { kind: "grouped"; kv_heads: number; head_dim: number }
+  | { kind: "latent"; width: number };
+
+/**
+ * How a checkpoint caches, and what that costs per token. Mirrors `compat::KvGeometry`.
+ *
+ * Read `growing_layers` against `layers`: every layer keeps its own cache, but only the
+ * growing ones gain a row per token. Sliding layers forget past `window` and flat
+ * (linear-attention) layers keep a fixed state per sequence, so neither scales with the
+ * conversation. That split, not parameter count, is what decides whether a card can hold
+ * a model's advertised context.
+ */
+export interface KvGeometry {
+  layers: number;
+  growing_layers: number;
+  windowed_layers: number;
+  flat_layers: number;
+  row: KvRow;
+  /** Bytes one caching layer keeps per token. */
+  row_bytes: number;
+  /** `growing_layers * row_bytes` — the figure two candidate repos compare on. */
+  bytes_per_token: number;
+  window: number | null;
+}
+
 /** A pre-download verdict from config.json alone. Mirrors `compat::Report`. */
 export interface CompatReport {
   arch: string | null;
@@ -485,14 +512,32 @@ export interface CompatReport {
   num_layers: number | null;
   quant: string | null;
   context: number | null;
+  /** Null when config.json does not carry enough to price a cache row. */
+  kv: KvGeometry | null;
+  /**
+   * The largest context this machine can actually hold, already clamped to the
+   * checkpoint's own ceiling. Null when there is no GPU to price against, or when nothing
+   * in the model grows with the conversation.
+   */
+  max_servable_context: number | null;
+  /**
+   * True when the resident weights could not be priced — an offloaded MoE, or a listing
+   * whose size has not arrived — so `max_servable_context` is a ceiling the real
+   * configuration falls short of. Never present it as a figure to plan on.
+   */
+  context_is_upper_bound: boolean;
   /** Most severe first. */
   notes: CompatNote[];
   /** Derived: `Report::verdict()`. */
   verdict: CompatVerdict;
   /** Derived: `Verdict::label()`, e.g. "supported, with caveats". */
   verdict_label: string;
-  /** Derived: `Report::summary()`, e.g. "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx". */
+  /** Derived: `Report::summary()`, e.g. "Qwen3MoeForCausalLM · MoE x128 · NVFP4 · 256k ctx · 20.0 KiB/tok". */
   summary: string;
+  /** Derived: `KvGeometry::describe()`. Absent when `kv` is null. */
+  kv_summary?: string;
+  /** Derived: `KvRow::describe()`, e.g. "2 kv heads x 256". Absent when `kv` is null. */
+  kv_row_shape?: string;
 }
 
 /** Free space, and the directory the figure was actually measured at. */

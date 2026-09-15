@@ -78,7 +78,7 @@
     "state": "serving"
   },
   "config": {
-    "config_path": "/home/user/.cache/tmp/paddock-tests-1694934/config.toml",
+    "config_path": "/home/user/.cache/tmp/paddock-tests-2366286/config.toml",
     "confirm_destructive": true,
     "convert_preflight": true,
     "disk_free": {
@@ -101,7 +101,7 @@
     "poll_ms": 1000,
     "server_host": "0.0.0.0",
     "server_port": 1919,
-    "state_dir": "/home/user/.cache/tmp/paddock-tests-1694934/state",
+    "state_dir": "/home/user/.cache/tmp/paddock-tests-2366286/state",
     "template_sources": [
       "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
     ],
@@ -257,18 +257,18 @@
     "gpus": [
       {
         "index": 0,
-        "memory_free": 4359738368,
-        "memory_ratio": 0.8731149137020111,
-        "memory_total": 34359738368,
-        "memory_used": 30000000000,
-        "name": "NVIDIA GeForce RTX 5090",
-        "pcie_link": "gen5 x16",
-        "power_limit_watts": 575.0,
-        "power_watts": 498.0,
-        "short_uuid": "GPU-9e8d7c6b-5a4",
-        "temperature": 71,
-        "utilization": 96,
-        "uuid": "GPU-9e8d7c6b-5a49-4f13-8207-c1b0a4e6d3f5"
+        "memory_free": 17179869184,
+        "memory_ratio": 0.0,
+        "memory_total": 17179869184,
+        "memory_used": 0,
+        "name": "",
+        "pcie_link": null,
+        "power_limit_watts": null,
+        "power_watts": null,
+        "short_uuid": "",
+        "temperature": null,
+        "utilization": null,
+        "uuid": ""
       }
     ],
     "host": {
@@ -304,18 +304,36 @@
     "compat": {
       "arch": "Qwen3MoeForCausalLM",
       "context": 262144,
+      "context_is_upper_bound": true,
       "is_moe": true,
+      "kv": {
+        "bytes_per_token": 20480,
+        "flat_layers": 30,
+        "growing_layers": 10,
+        "layers": 40,
+        "row": {
+          "head_dim": 256,
+          "kind": "grouped",
+          "kv_heads": 2
+        },
+        "row_bytes": 2048,
+        "window": null,
+        "windowed_layers": 0
+      },
+      "kv_row_shape": "2 kv heads x 256",
+      "kv_summary": "20.0 KiB/token, 10 of 40 layers cache, 30 keep a fixed state",
+      "max_servable_context": 262144,
       "model_type": null,
       "notes": [
         {
           "level": "info",
-          "text": "larger than 16.0 GiB of VRAM, so it needs an offload MoE backend rather than fused"
+          "text": "holds its full 256k of context here, before its linear-attention state pool (20.0 KiB/token, 10 of 40 layers cache, 30 keep a fixed state)"
         }
       ],
       "num_experts": 128,
-      "num_layers": null,
+      "num_layers": 40,
       "quant": "nvfp4-pack-quantized",
-      "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4-PACK-QUANTIZED · 256k ctx",
+      "summary": "Qwen3MoeForCausalLM · MoE x128 · NVFP4-PACK-QUANTIZED · 256k ctx · 20.0 KiB/tok",
       "verdict": "supported",
       "verdict_label": "supported"
     },
@@ -440,7 +458,7 @@
         "ratio": 0.36666666666666664,
         "repo": "nvidia/GLM-5.2-NVFP4",
         "revision": "main",
-        "started_at": "2026-09-14T17:04:52.987257255-06:00",
+        "started_at": "2026-09-14T18:53:04.968158839-06:00",
         "status": {
           "kind": "running"
         },
@@ -471,7 +489,7 @@
         "progress_detail": "27.9 GiB / 63.3 GiB  (experts)",
         "progress_ratio": 0.4411764705882353,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T17:04:52.987212860-06:00",
+        "started_at": "2026-09-14T18:53:04.968116248-06:00",
         "status": {
           "kind": "running"
         },
@@ -499,7 +517,7 @@
         "progress_detail": "",
         "progress_ratio": null,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T17:04:52.987256031-06:00",
+        "started_at": "2026-09-14T18:53:04.968157580-06:00",
         "status": {
           "kind": "failed",
           "reason": "with status 1"
@@ -518,7 +536,7 @@
     "log_path": null
   },
   "models": {
-    "config_path": "/home/user/.cache/tmp/paddock-tests-1694934/config.toml",
+    "config_path": "/home/user/.cache/tmp/paddock-tests-2366286/config.toml",
     "items": [
       {
         "arch": "Qwen3MoeForCausalLM",
@@ -540,14 +558,14 @@
           },
           {
             "level": "dim",
-            "text": "Larger than 32.0 GiB of VRAM — an offload MoE backend is required."
+            "text": "Larger than 16.0 GiB of VRAM — an offload MoE backend is required."
           }
         ],
         "is_moe": true,
         "is_partial": false,
         "max_position": 262144,
         "model_type": "qwen3_moe",
-        "modified_ms": 1789427092987,
+        "modified_ms": 1789433584968,
         "name": "Qwen3.6-35B-A3B",
         "num_experts": 128,
         "num_layers": 48,
@@ -597,7 +615,7 @@
           },
           {
             "level": "dim",
-            "text": "Larger than 32.0 GiB of VRAM — an offload MoE backend is required."
+            "text": "Larger than 16.0 GiB of VRAM — an offload MoE backend is required."
           }
         ],
         "is_moe": true,
@@ -1126,6 +1144,6 @@
       "ttl_ms": 8000
     }
   ],
-  "ts_ms": 1789427092991,
+  "ts_ms": 1789433584971,
   "version": "0.3.0"
 }

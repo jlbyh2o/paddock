@@ -312,6 +312,7 @@ Data-free enums as strings:
 | `models::Format` | `"hf"`, `"ftw"`, `"gguf"`, `"partial_ftw"` (plus a sibling `format_label` field carrying `"HF"`, `"FTW"`, `"GGUF"`, `"PART"`) |
 | `compat::Verdict` | `"supported"`, `"caution"`, `"unsupported"`, `"unknown"` (plus `verdict_label`, from `Verdict::label()`) |
 | `compat::Level` | `"info"`, `"caution"`, `"blocker"` |
+| `compat::KvRow` | internally tagged: `{"kind": "grouped", "kv_heads": n, "head_dim": n}` or `{"kind": "latent", "width": n}` |
 | `plan::Level` | `"info"`, `"advice"`, `"warning"` |
 | `knobs::Group` | `"model"`, `"server"`, `"runtime"`, `"memory"`, `"moe"`, `"api"` |
 | `ui::app::Pool` | `"moe"`, `"kv"`, `"mamba"`, `"swa"` |
@@ -484,7 +485,7 @@ Each field is an array of non-negative integers, oldest first, at most 120 entri
 | `files` | `RepoFile[]` | `app.hub_view.files`: `{path, size, wanted}` |
 | `selected_bytes` | number | Sum of `size` over `wanted` files — the Files pane title |
 | `selected_count` | number | Count of `wanted` files |
-| `compat` | `CompatReport \| null` | `app.hub_view.compat`: `compat::Report` verbatim (`arch`, `model_type`, `is_moe`, `num_experts`, `num_layers`, `quant`, `context`, `notes` as `{level, text}[]`) plus derived `verdict`, `verdict_label` (`Verdict::label()`) and `summary` (`Report::summary()`) |
+| `compat` | `CompatReport \| null` | `app.hub_view.compat`: `compat::Report` verbatim (`arch`, `model_type`, `is_moe`, `num_experts`, `num_layers`, `quant`, `context`, `kv`, `max_servable_context`, `context_is_upper_bound`, `notes` as `{level, text}[]`) plus derived `verdict`, `verdict_label` (`Verdict::label()`), `summary` (`Report::summary()`) and, when `kv` is non-null, `kv_summary` (`KvGeometry::describe()`) and `kv_row_shape` (`KvRow::describe()`) |
 | `compat_error` | string \| null | `app.hub_view.compat_error` |
 | `checking_compat` | boolean | `app.hub_view.checking_compat` |
 | `target` | string | `app.hub_view.target.value` — the cache directory the download lands in, `hub::cache_repo_dir(config.library.hub_cache(), info.id)`. Informational; downloads always go to the cache |
@@ -1636,13 +1637,46 @@ Six panes.
   `hub.loading_info`.
 * **Compatibility / Download to** — one pane whose title follows `hub.compat`:
   `Compatibility — <verdict_label>`, `— checking…`, `— could not check`, or `Download to`.
-  Contents: the verdict, `compat.summary`, up to three `compat.notes` with a marker per
-  `level`, or the "nothing known stands in the way" sentence when there are none;
+  Contents: the verdict, `compat.summary`, the `compat.kv_summary`/`kv_row_shape` line and
+  the `max_servable_context` line when either is present, up to **four** `compat.notes`
+  with a marker per `level`, or the "nothing known stands in the way" sentence when there
+  are none;
   `hub.compat_error` and its explanation when set; `info.id @ revision (sha[..12])` with a
   gated marker; `hub.target`; the "hf CLI is not installed" warning when `hub.hf_cli` is
   null (or "Installing…" when `hub.hf_installing`); and, when something is selected,
   `selected_bytes` "to download" beside `hub.disk_free.free_bytes` free on
   `hub.disk_free.measured_path` — **the path must be shown with the number**.
+
+#### `compat.kv` — what the cache costs
+
+`compat::KvGeometry`, or `null` when `config.json` does not carry enough to price a cache
+row. Every field is read from the config alone, so it is available before the file listing
+has landed and before a quantization has been picked.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `layers` | number | `num_hidden_layers` |
+| `growing_layers` | number | Layers whose cache gains a row per token, for ever |
+| `windowed_layers` | number | Sliding-window layers: they cache, but forget past `window` |
+| `flat_layers` | number | Linear-attention / state-space layers: one fixed state per sequence |
+| `row` | `KvRow` | `{"kind": "grouped", kv_heads, head_dim}` or `{"kind": "latent", width}` (MLA) |
+| `row_bytes` | number | Bytes one caching layer keeps per token |
+| `bytes_per_token` | number | `growing_layers * row_bytes` — the figure two repos compare on |
+| `window` | number \| null | The sliding window's span, when any layer slides |
+
+**Read `growing_layers` against `layers`, not `layers` alone.** That split, not parameter
+count, decides whether a card can hold what a checkpoint advertises: two 35B MoE
+checkpoints in paddock's own fixtures differ by more than tenfold here.
+
+Beside it, `max_servable_context` is the largest context this machine can hold, already
+clamped to the checkpoint's own ceiling, or `null` when there is no GPU to price against
+or nothing in the model grows with the conversation. `context_is_upper_bound` says the
+figure is soft: an offloaded MoE keeps an unknown share of its expert banks in VRAM, so
+the number is a ceiling the real configuration falls short of. **A client must not present
+an upper-bound figure as one to plan on** — both front ends prefix it with "at most".
+
+KV is priced at bf16 throughout, because FreeToken has no KV dtype flag to read. Should
+one land, every figure here halves for fp8 and nothing else about the shape changes.
 
 ### 5.5 Templates
 
