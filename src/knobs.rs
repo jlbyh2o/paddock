@@ -269,12 +269,14 @@ pub static KNOBS: &[Knob] = &[
                        "minimax_m3", "muse_glimmer", "gemma4"]),
         "auto", "Splits chain-of-thought into reasoning_content. 'off' leaves it inline in the message."),
     // ---- Multimodal ------------------------------------------------------
-    // Every family that registers a vision encoder serves image input by default — the Qwen
-    // families, and Gemma-4 since #467 — and the encoder tower built for it comes out of the
-    // same VRAM the KV and expert pools are priced against. That makes this group a memory
-    // group as much as an API one, which is why it sits beside the MoE knobs rather than
-    // under "API behavior". The flags are read in each family's own units, so the help below
-    // describes what they mean rather than quoting one family's numbers.
+    // Every family that registers a vision encoder serves image input by default, and the
+    // encoder tower built for it comes out of the same VRAM the KV and expert pools are
+    // priced against. That makes this group a memory group as much as an API one, which is
+    // why it sits beside the MoE knobs rather than under "API behavior". Which families
+    // those are is FreeToken's registry to answer and it grows release to release, so
+    // nothing here names them — a list kept by hand is a list that goes stale. The flags are
+    // read in each family's own units, so the help below describes what they mean rather
+    // than quoting one family's numbers.
     knob!("text_model_only", "--text-model-only", "Text only", Group::Multimodal,
         Kind::Flag, "off",
         "Serve a multimodal checkpoint without its encoder towers: none are built, the VRAM they \
@@ -292,9 +294,10 @@ pub static KNOBS: &[Knob] = &[
          encoder with no block stack stays resident either way."),
     knob!("image_min_tokens", "--image-min-tokens", "Image min tokens", Group::Multimodal,
         Kind::Int { min: Some(1), max: None }, "the processor's own limit",
-        "Fewest tokens one image may take; smaller images are scaled up to it. Each family reads \
-         this in its own units — a dynamic-resolution family as a pixel area, and a family with \
-         fixed budgets not at all, since it has nothing between its budgets to choose."),
+        "Fewest tokens one image may take; smaller images are scaled up to it. Each family \
+         translates this into its own processor's terms — as a pixel area, or as a token count \
+         handed straight through — and a family with fixed budgets ignores it, having nothing \
+         between its budgets to choose."),
     knob!("image_max_tokens", "--image-max-tokens", "Image max tokens", Group::Multimodal,
         Kind::Int { min: Some(1), max: None }, "the processor's own limit",
         "Most tokens one image may take, and so the cap on what one image costs in prefill. A \
@@ -303,9 +306,10 @@ pub static KNOBS: &[Knob] = &[
     knob!("mm_processor_kwargs", "--mm-processor-kwargs", "Processor kwargs", Group::Multimodal,
         Kind::Text, "none",
         "JSON object of extra keyword arguments for the checkpoint's image processor, for knobs \
-         the token budget does not cover — {\"size\": {\"longest_edge\": 1048576}} for a \
-         dynamic-resolution family, {\"max_soft_tokens\": 1120} for a fixed-budget one. Applied \
-         after the budget, so an explicit key wins."),
+         the token budget does not cover. The keys are the processor's own, so they differ by \
+         family: {\"size\": {\"longest_edge\": 1048576}}, {\"max_image_tokens\": 2048} and \
+         {\"max_soft_tokens\": 1120} are each one family's spelling. Applied after the budget, \
+         so an explicit key wins."),
     knob!("mm_embed_cache_device", "--mm-embed-cache-device", "Embedding cache", Group::Multimodal,
         Kind::Choice(&["cpu", "cuda"]), "cpu",
         "Where encoded image embeddings wait between prefill chunks. 'cpu' keeps them out of the \

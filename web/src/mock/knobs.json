@@ -684,7 +684,7 @@
       "exclusive_with": [],
       "flag": "--image-min-tokens",
       "group": "multimodal",
-      "help": "Fewest tokens one image may take; smaller images are scaled up to it. Each family reads this in its own units — a dynamic-resolution family as a pixel area, and a family with fixed budgets not at all, since it has nothing between its budgets to choose.",
+      "help": "Fewest tokens one image may take; smaller images are scaled up to it. Each family translates this into its own processor's terms — as a pixel area, or as a token count handed straight through — and a family with fixed budgets ignores it, having nothing between its budgets to choose.",
       "key": "image_min_tokens",
       "kind": {
         "kind": "int",
@@ -712,7 +712,7 @@
       "exclusive_with": [],
       "flag": "--mm-processor-kwargs",
       "group": "multimodal",
-      "help": "JSON object of extra keyword arguments for the checkpoint's image processor, for knobs the token budget does not cover — {\"size\": {\"longest_edge\": 1048576}} for a dynamic-resolution family, {\"max_soft_tokens\": 1120} for a fixed-budget one. Applied after the budget, so an explicit key wins.",
+      "help": "JSON object of extra keyword arguments for the checkpoint's image processor, for knobs the token budget does not cover. The keys are the processor's own, so they differ by family: {\"size\": {\"longest_edge\": 1048576}}, {\"max_image_tokens\": 2048} and {\"max_soft_tokens\": 1120} are each one family's spelling. Applied after the budget, so an explicit key wins.",
       "key": "mm_processor_kwargs",
       "kind": {
         "kind": "text"
