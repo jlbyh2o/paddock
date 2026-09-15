@@ -34,10 +34,10 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --locked -- -D warnings
       # No GPU on the runner. NVML is dlopened at runtime, not linked, so the suite builds
       # and runs without one; anything needing a real device is not part of it.
-      - run: cargo test
+      - run: cargo test --locked
 
   msrv:
     name: rust 1.88 (declared MSRV)
@@ -50,4 +50,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # check, not test: this job exists to prove the crate still compiles on the version
       # Cargo.toml promises, not to re-run the suite.
-      - run: cargo check --all-targets
+      - run: cargo check --all-targets --locked
