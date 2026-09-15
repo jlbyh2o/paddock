@@ -27,7 +27,13 @@ import type {
   Toast,
   ToastKind,
 } from "../api/types.ts";
-import { fixture, mockJobOutput, mockKnobs, mockLogLines, mockRequestRecords } from "./fixture.ts";
+import {
+  fixture,
+  mockJobOutput,
+  mockKnobs,
+  mockLogLines,
+  mockRequestRecords,
+} from "./fixture.ts";
 
 type Subscriber = (snapshot: Snapshot) => void;
 
@@ -91,8 +97,12 @@ function tick(): void {
     .filter((t) => t.age_ms < t.ttl_ms);
 
   // Nudge the series so the sparklines move.
-  const push = (arr: number[], next: number): number[] => [...arr.slice(1), Math.max(0, next)];
-  const jitter = (base: number, swing: number) => Math.round(base + (Math.random() - 0.5) * swing);
+  const push = (arr: number[], next: number): number[] => [
+    ...arr.slice(1),
+    Math.max(0, next),
+  ];
+  const jitter = (base: number, swing: number) =>
+    Math.round(base + (Math.random() - 0.5) * swing);
   s.series = {
     ...s.series,
     decode_tps: push(s.series.decode_tps, jitter(48, 14)),
@@ -105,12 +115,17 @@ function tick(): void {
   // Advance the download and the conversion.
   const download = s.jobs.downloads[0];
   if (download && download.is_running) {
-    const done = Math.min(download.total_bytes, download.done_bytes + download.rate_bps / 4);
+    const done = Math.min(
+      download.total_bytes,
+      download.done_bytes + download.rate_bps / 4,
+    );
     download.done_bytes = done;
     download.ratio = done / download.total_bytes;
     download.elapsed_s += 0.25;
     download.eta_s =
-      download.rate_bps > 1 ? Math.round((download.total_bytes - done) / download.rate_bps) : null;
+      download.rate_bps > 1
+        ? Math.round((download.total_bytes - done) / download.rate_bps)
+        : null;
     if (done >= download.total_bytes) {
       download.is_running = false;
       download.status = { kind: "done" };
@@ -121,7 +136,10 @@ function tick(): void {
   }
   const job = s.jobs.items.find((j) => j.is_running);
   if (job) {
-    job.progress.done = Math.min(job.progress.total, job.progress.done + job.rate_bps / 4);
+    job.progress.done = Math.min(
+      job.progress.total,
+      job.progress.done + job.rate_bps / 4,
+    );
     job.progress_ratio = job.progress.done / job.progress.total;
     job.elapsed_s += 0.25;
   }
@@ -149,7 +167,11 @@ export function reset(): void {
 
 // ---------------------------------------------------------------- helpers
 
-function page<T extends { seq: number }>(all: T[], after: number, limit: number): SeqPage<T> {
+function page<T extends { seq: number }>(
+  all: T[],
+  after: number,
+  limit: number,
+): SeqPage<T> {
   const first = all[0];
   const last = all[all.length - 1];
   const items = all.filter((item) => item.seq > after).slice(0, limit);
@@ -172,7 +194,8 @@ function recount(): void {
     api: 0,
   };
   for (const knob of mockKnobs.knobs) {
-    if (state.serve.values[knob.key] !== undefined) counts[knob.group] = (counts[knob.group] ?? 0) + 1;
+    if (state.serve.values[knob.key] !== undefined)
+      counts[knob.group] = (counts[knob.group] ?? 0) + 1;
   }
   state.serve.set_counts = counts as Snapshot["serve"]["set_counts"];
   const parts = ["ft serve"];
@@ -203,18 +226,23 @@ function repricePools(): void {
     mamba: 262_144,
     swa: 16 * 12_288,
   };
-  if (!state.cache.has_pending) {
-    state.cache.proposed_bytes = null;
-    state.cache.delta_bytes = null;
-  } else {
-    const proposed = pools.reduce((sum, row) => sum + row.shown * unit[row.pool], 0);
+  if (state.cache.has_pending) {
+    const proposed = pools.reduce(
+      (sum, row) => sum + row.shown * unit[row.pool],
+      0,
+    );
     state.cache.proposed_bytes = proposed;
-    state.cache.delta_bytes = proposed - (state.cache.current_bytes?.total ?? 0);
+    state.cache.delta_bytes =
+      proposed - (state.cache.current_bytes?.total ?? 0);
     state.cache.over_budget =
-      (state.cache.budget_bytes ?? 0) > 0 && proposed > (state.cache.budget_bytes ?? 0);
+      (state.cache.budget_bytes ?? 0) > 0 &&
+      proposed > (state.cache.budget_bytes ?? 0);
     state.cache.budget_ratio = state.cache.budget_bytes
       ? Math.min(1, proposed / state.cache.budget_bytes)
       : null;
+  } else {
+    state.cache.proposed_bytes = null;
+    state.cache.delta_bytes = null;
   }
 }
 
@@ -227,7 +255,11 @@ const logRing: LogLine[] = clone(mockLogLines);
  * Answer one request. A refusal comes back as a `MockRefusal` envelope, which
  * `client.ts` turns into the same `ApiError` a real non-2xx reply produces.
  */
-export function handle(method: string, rawPath: string, body: unknown): unknown {
+export function handle(
+  method: string,
+  rawPath: string,
+  body: unknown,
+): unknown {
   const url = new URL(rawPath, "http://mock.local");
   const path = url.pathname;
   const num = (key: string, fallback: number): number => {
@@ -247,9 +279,17 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       case "/api/knobs":
         return mockKnobs;
       case "/api/logs":
-        return page(logRing, num("after", 0), num("limit", 500)) satisfies LogPage;
+        return page(
+          logRing,
+          num("after", 0),
+          num("limit", 500),
+        ) satisfies LogPage;
       case "/api/requests":
-        return page(requestRing, num("after", 0), num("limit", 200)) satisfies RequestPage;
+        return page(
+          requestRing,
+          num("after", 0),
+          num("limit", 200),
+        ) satisfies RequestPage;
       case "/api/templates/preview": {
         const name = url.searchParams.get("name") ?? "";
         const stored = state.templates.stored.find((t) => t.name === name);
@@ -305,7 +345,10 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       return refuse("an engine is already running; stop it first");
     case "/api/engine/stop":
       return ask({
-        title: payload["force"] === true ? "Force-stop the engine" : "Stop the engine",
+        title:
+          payload["force"] === true
+            ? "Force-stop the engine"
+            : "Stop the engine",
         body: [
           `Qwen3.6-35B-A3B is serving on http://127.0.0.1:1919.`,
           "",
@@ -333,21 +376,45 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
     case "/api/models/convert":
       return ask({
         title: "Convert anyway?",
-        body: ["The checkpoint check reported a caution.", "", "Converting writes to " + state.models.items[0]?.ftw_output_path],
+        body: [
+          "The checkpoint check reported a caution.",
+          "",
+          "Converting writes to " + state.models.items[0]?.ftw_output_path,
+        ],
         options: ["Cancel", "Confirm"],
         default_index: 0,
         destructive: false,
         action: { kind: "convert_anyway", source: str("path") },
       });
-    case "/api/models/delete":
+    case "/api/models/delete": {
+      const p = str("path");
+      const isHf = p.includes("models--") && p.includes("snapshots");
+      if (isHf) {
+        // Extract repo id from path: models--org--name/snapshots/...
+        const match = p.match(/models--([^/]+)\/snapshots/);
+        const repo = match?.[1]?.replace(/--/g, "/") ?? "unknown";
+        return ask({
+          title: "Delete from HF cache",
+          body: [
+            p,
+            "",
+            "This runs `hf cache delete` to remove the snapshot and any dangling blobs. Cannot be undone.",
+          ],
+          options: ["Cancel", "Confirm"],
+          default_index: 0,
+          destructive: true,
+          action: { kind: "delete_hf_cache_model", path: p, repo },
+        });
+      }
       return ask({
         title: "Delete checkpoint",
-        body: [str("path"), "", "21.0 GiB will be freed. This cannot be undone."],
+        body: [p, "", "21.0 GiB will be freed. This cannot be undone."],
         options: ["Cancel", "Confirm"],
         default_index: 0,
         destructive: true,
-        action: { kind: "delete_model", path: str("path") },
+        action: { kind: "delete_model", path: p },
       });
+    }
 
     case "/api/hub/search":
       state.hub.query = str("query");
@@ -379,7 +446,10 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       let wanted = false;
       state.hub.files = state.hub.files.map((f) => {
         if (f.path !== target) return f;
-        wanted = typeof payload["wanted"] === "boolean" ? (payload["wanted"] as boolean) : !f.wanted;
+        wanted =
+          typeof payload["wanted"] === "boolean"
+            ? (payload["wanted"] as boolean)
+            : !f.wanted;
         return { ...f, wanted };
       });
       state.hub.custom_selection = true;
@@ -399,7 +469,11 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
     case "/api/hub/install-cli":
       return ask({
         title: "Install the Hugging Face CLI",
-        body: [state.hub.hf_install_command, "", "This runs Hugging Face's own installer script."],
+        body: [
+          state.hub.hf_install_command,
+          "",
+          "This runs Hugging Face's own installer script.",
+        ],
         options: ["Cancel", "Confirm"],
         default_index: 0,
         destructive: false,
@@ -434,7 +508,11 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         options: ["Cancel", "Confirm"],
         default_index: 0,
         destructive: false,
-        action: { kind: "apply_template", template: str("template"), model: str("model_path") },
+        action: {
+          kind: "apply_template",
+          template: str("template"),
+          model: str("model_path"),
+        },
       });
     case "/api/templates/revert":
       return ask({
@@ -523,7 +601,8 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         value = (delta > 0 ? options[0] : options[options.length - 1]) ?? null;
       } else {
         const next = index + delta;
-        value = next < 0 || next >= options.length ? null : (options[next] ?? null);
+        value =
+          next < 0 || next >= options.length ? null : (options[next] ?? null);
       }
       if (value === null) delete state.serve.values[key];
       else state.serve.values[key] = value;
@@ -601,7 +680,10 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         ];
       }
       state.serve.last_used_profile = name;
-      toast(existing < 0 ? `saved profile ${name}` : `updated profile ${name}`, "success");
+      toast(
+        existing < 0 ? `saved profile ${name}` : `updated profile ${name}`,
+        "success",
+      );
       return { status: "ok", created: existing < 0 };
     }
     case "/api/profiles/load":
@@ -639,7 +721,10 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         const percent = Number(payload["percent"] ?? 0);
         const step = Math.max(1, Math.round(row.max * Math.abs(percent)));
         const base = row.pending ?? row.current;
-        const next = Math.max(row.min, Math.min(row.max, base + (percent < 0 ? -step : step)));
+        const next = Math.max(
+          row.min,
+          Math.min(row.max, base + (percent < 0 ? -step : step)),
+        );
         row.pending = next === row.current ? null : next;
         repricePools();
         emit();
@@ -658,7 +743,10 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
         body: [
           ...(state.cache.pools ?? [])
             .filter((row) => row.pending !== null)
-            .map((row) => `${row.label}: ${row.current} → ${row.pending ?? 0} ${row.unit}`),
+            .map(
+              (row) =>
+                `${row.label}: ${row.current} → ${row.pending ?? 0} ${row.unit}`,
+            ),
           "",
           `${state.cache.active_requests} request(s) are in flight; the rebuild is rejected until they finish.`,
         ],
@@ -686,7 +774,8 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       const before = state.jobs.items.length + state.jobs.downloads.length;
       state.jobs.items = state.jobs.items.filter((j) => j.is_running);
       state.jobs.downloads = state.jobs.downloads.filter((d) => d.is_running);
-      const removed = before - state.jobs.items.length - state.jobs.downloads.length;
+      const removed =
+        before - state.jobs.items.length - state.jobs.downloads.length;
       emit();
       return { status: "ok", removed };
     }
@@ -698,7 +787,11 @@ export function handle(method: string, rawPath: string, body: unknown): unknown 
       return { status: "ok" };
     case "/api/requests/clear":
       requestRing.length = 0;
-      state.requests = { ...state.requests, count: 0, first_seq: state.requests.last_seq };
+      state.requests = {
+        ...state.requests,
+        count: 0,
+        first_seq: state.requests.last_seq,
+      };
       emit();
       return { status: "ok" };
     case "/api/requests/pause": {
@@ -730,12 +823,16 @@ function validateValue(knob: Knob, raw: string): string | null {
     case "text":
       return null;
     case "flag":
-      return value === "true" || value === "false" ? null : "must be true or false";
+      return value === "true" || value === "false"
+        ? null
+        : "must be true or false";
     case "int": {
       if (!/^[+-]?\d+$/.test(value)) return "must be a whole number";
       const n = Number(value);
-      if (knob.kind.min !== null && n < knob.kind.min) return `must be at least ${knob.kind.min}`;
-      if (knob.kind.max !== null && n > knob.kind.max) return `must be at most ${knob.kind.max}`;
+      if (knob.kind.min !== null && n < knob.kind.min)
+        return `must be at least ${knob.kind.min}`;
+      if (knob.kind.max !== null && n > knob.kind.max)
+        return `must be at most ${knob.kind.max}`;
       return null;
     }
     case "float": {
@@ -752,7 +849,8 @@ function validateValue(knob: Knob, raw: string): string | null {
       const options = knob.kind.options;
       const chosen: string[] = [];
       for (const token of value.split(/\s+/)) {
-        if (!options.includes(token)) return `must be one or more of: ${options.join(", ")}`;
+        if (!options.includes(token))
+          return `must be one or more of: ${options.join(", ")}`;
         if (chosen.includes(token)) return `${token} is named twice`;
         chosen.push(token);
       }

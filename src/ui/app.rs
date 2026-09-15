@@ -153,6 +153,8 @@ pub enum Message {
     AskConfirm(Box<Confirm>),
     /// `remove_dir_all` of a checkpoint finished.
     ModelDeleted(PathBuf, Result<(), String>),
+    /// `hf cache delete` finished.
+    HfCacheDeleted(PathBuf, Result<(), String>),
     /// The leftovers of a failed conversion are gone; the retry can start.
     LeftoversRemoved(PathBuf, Result<(), String>),
     /// Hub search results.
@@ -1237,6 +1239,14 @@ impl App {
             Message::ModelDeleted(path, result) => match result {
                 Ok(()) => {
                     self.success(format!("deleted {}", path.display()));
+                    self.refresh_disk_free();
+                    self.request_scan();
+                }
+                Err(e) => self.error(format!("could not delete {}: {e}", path.display())),
+            },
+            Message::HfCacheDeleted(path, result) => match result {
+                Ok(()) => {
+                    self.success(format!("deleted {} from the HF cache", path.display()));
                     self.refresh_disk_free();
                     self.request_scan();
                 }

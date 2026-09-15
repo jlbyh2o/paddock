@@ -125,6 +125,47 @@ pub fn run_action(app: &mut App, action: ConfirmAction) -> Done {
             });
             Done::started()
         }
+        ConfirmAction::DeleteHfCacheModel { path, repo } => {
+            // The hub cache belongs to `huggingface_hub`: deleting a snapshot directory
+            // only removes symlinks into `blobs/`, leaving the actual weight data behind.
+            // `hf cache delete` is the reference implementation that knows how to take a
+            // repo apart — removing dangling blobs and cleaning up refs.
+            let Some(cli) = app.hf_cli.clone() else {
+                app.error("the hf CLI is not installed — install it from the Hub tab first");
+                return Done::Ok;
+            };
+            app.info(format!("deleting {} from the HF cache…", path.display()));
+            let tx = app.tx.clone();
+            let repo_clone = repo.clone();
+            tokio::task::spawn_blocking(move || {
+                let result = std::process::Command::new(&cli)
+                    .arg("cache")
+                    .arg("delete")
+                    .arg(&repo_clone)
+                    .output()
+                    .map_err(|e| format!("could not run {}: {e}", cli.display()))
+                    .and_then(|out| {
+                        if out.status.success() {
+                            Ok(())
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let msg = if stderr.trim().is_empty() {
+                                stdout.trim().to_string()
+                            } else {
+                                stderr.trim().to_string()
+                            };
+                            Err(if msg.is_empty() {
+                                format!("hf cache delete exited with status {}", out.status)
+                            } else {
+                                msg
+                            })
+                        }
+                    });
+                let _ = tx.send(Message::HfCacheDeleted(path, result));
+            });
+            Done::started()
+        }
         ConfirmAction::CancelJob(id) => {
             if let Some(j) = app.jobs.iter_mut().find(|j| j.id == id) {
                 j.cancel();
@@ -506,15 +547,23 @@ pub fn delete_model(app: &mut App, path: &Path) -> Outcome {
     // `hf cache delete` is the only thing that knows how to take a repo apart properly.
     if crate::templates::is_hub_cache_path(&path) {
         let repo = model.repo.clone().unwrap_or_else(|| name.clone());
-        return Err(warn_off(
-            app,
-            409,
-            format!(
-                "{name} is in the Hugging Face cache, which paddock only reads — remove it \
-                 with `hf cache delete {repo}`, which also frees the blobs the snapshot \
-                 only links to"
-            ),
-        ));
+        // For HF cache models, the confirmation is simpler — no dir_size walk needed.
+        let confirm = Confirm::new(
+            "Delete from HF cache",
+            vec![
+                format!("Permanently delete {name} from the Hugging Face cache?"),
+                String::new(),
+                path.display().to_string(),
+                "This runs `hf cache delete` to remove the snapshot and any dangling blobs. \
+                 Cannot be undone."
+                    .into(),
+            ],
+            ConfirmAction::DeleteHfCacheModel { path: path.clone(), repo },
+            true,
+        );
+        let tx = app.tx.clone();
+        let _ = tx.send(Message::AskConfirm(Box::new(confirm)));
+        return Ok(Done::started());
     }
     // `dir_size` walks the whole tree. On the daemon that walk happens under the one mutex
     // every browser shares, so it goes to the blocking pool and the confirmation is raised

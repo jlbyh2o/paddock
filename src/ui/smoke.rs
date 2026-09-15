@@ -12,6 +12,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
+use crate::actions::Done;
 use crate::config::{Config, Profile, Profiles};
 use crate::ft::proc::{JobKind, JobProgress, JobStatus};
 use crate::ft::types::*;
@@ -1048,22 +1049,28 @@ async fn deleting_a_model_is_confirmed_and_names_the_path() {
 /// The Hugging Face cache is `huggingface_hub`'s: a snapshot is symlinks into `blobs/`,
 /// so `remove_dir_all` frees the links, leaves the blobs, and breaks `refs/`.
 #[tokio::test]
-async fn deleting_a_checkpoint_inside_the_hub_cache_is_refused_with_the_right_command() {
-    let mut a = app().await;
+async fn deleting_a_checkpoint_inside_the_hub_cache_raises_a_confirmation() {
+    let (mut a, mut rx) = app_with_inbox().await;
     populate(&mut a);
     let cached =
         std::path::PathBuf::from("/cache/hub/models--Qwen--Qwen3.6-35B-A3B/snapshots/abc123");
     a.models[0].path = cached.clone();
     a.models[0].repo = Some("Qwen/Qwen3.6-35B-A3B".into());
 
-    let refusal = crate::actions::delete_model(&mut a, &cached).expect_err("must be refused");
-    assert_eq!(refusal.status, 409);
-    assert!(refusal.toasted, "a state refusal reaches the terminal as a toast");
+    let done = crate::actions::delete_model(&mut a, &cached).expect("must start a confirmation");
+    assert!(matches!(done, Done::Started { .. }), "should raise a confirmation");
+    // The confirmation is sent via the message channel; pump delivers it.
+    pump(&mut a, &mut rx).await;
+    let confirm = a.confirm.as_ref().expect("confirmation should be pending");
+    assert_eq!(confirm.title, "Delete from HF cache");
     assert!(
-        refusal.message.contains("hf cache delete Qwen/Qwen3.6-35B-A3B"),
-        "{}",
-        refusal.message
+        confirm.body.iter().any(|l| l.contains("hf cache delete")),
+        "should mention hf cache delete"
     );
+    assert!(matches!(
+        confirm.action,
+        ConfirmAction::DeleteHfCacheModel { ref repo, .. } if repo == "Qwen/Qwen3.6-35B-A3B"
+    ));
     assert!(cached.starts_with("/cache"), "nothing was deleted");
 }
 

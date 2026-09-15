@@ -320,6 +320,11 @@ pub enum ConfirmAction {
         force: bool,
     },
     DeleteModel(std::path::PathBuf),
+    /// Delete a Hugging Face cache entry via `hf cache delete`.
+    DeleteHfCacheModel {
+        path: std::path::PathBuf,
+        repo: String,
+    },
     CancelJob(u64),
     CancelDownload(u64),
     DeleteProfile(String),
@@ -364,6 +369,11 @@ impl Serialize for ConfirmAction {
             ConfirmAction::DeleteModel(path) => {
                 m.serialize_entry("kind", "delete_model")?;
                 m.serialize_entry("path", path)?;
+            }
+            ConfirmAction::DeleteHfCacheModel { path, repo } => {
+                m.serialize_entry("kind", "delete_hf_cache_model")?;
+                m.serialize_entry("path", path)?;
+                m.serialize_entry("repo", repo)?;
             }
             ConfirmAction::CancelJob(id) => {
                 m.serialize_entry("kind", "cancel_job")?;
