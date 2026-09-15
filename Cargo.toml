@@ -1,6 +1,6 @@
 [package]
 name = "paddock"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.88"
 description = "A control panel for FreeToken, in a terminal or a browser: models, conversion, serving, tuning, and telemetry"
