@@ -1318,7 +1318,20 @@ mod tests {
         engine.stop(false);
         assert_eq!(engine.state, EngineState::Stopped);
         assert!(engine.stop_at.is_none());
-        // And polling an engine with no process must not invent an exit.
+
+        // `poll` also re-adopts, and adoption reads a real `serve.json` off the disk this
+        // test is running on. That made this the one assertion in the file whose result
+        // depended on what else was happening: a parallel test plants a state file naming
+        // a live PID (`a_start_attaches_to_an_engine_another_process_already_started`), and
+        // a developer running the suite on the box that actually serves has one sitting
+        // there permanently. Either way this engine adopted it and read as `Adopted`.
+        //
+        // Pinning the adoption clock rather than taking `lock_serve_state` is deliberate:
+        // the lock would serialize against the parallel test but not against a real file,
+        // and adoption is not what this test is about. It has its own tests, which do take
+        // the lock. What is being asserted here is only that polling an engine with no
+        // process of its own does not invent an exit for it.
+        engine.last_adopt_check = Some(std::time::Instant::now());
         engine.poll();
         assert_eq!(engine.state, EngineState::Stopped);
     }
