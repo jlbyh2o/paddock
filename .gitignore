@@ -3,6 +3,11 @@
 **/*.rs.bk
 *.pdb
 
+# Node and Vitest artifacts. The frontend lives in web/ and ignores its own, but a
+# vitest run from the repository root drops these here too.
+node_modules/
+.vitest/
+
 # Personal identity patterns for docker/scan-image.sh; never committed.
 docker/scan-identity
 
