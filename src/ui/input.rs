@@ -329,10 +329,10 @@ fn dashboard_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('t') => {
             let _ = actions::smoke_test(app);
         }
-        // `u` for upstream: ask the loaded model what the commits this checkout is behind
+        // `u` for origin: ask the loaded model what the commits this checkout is behind
         // actually change.
         KeyCode::Char('u') => {
-            let _ = actions::summarize_upstream(app);
+            let _ = actions::summarize_origin(app);
         }
         // Shift-u: read about it with `u`, then do it with `U`.
         KeyCode::Char('U') => {

@@ -24,13 +24,13 @@ pub async fn smoke_test(State(state): State<Shared>, Body(_): Body<Empty>) -> Ap
     reply(state.act(actions::smoke_test))
 }
 
-/// Ask the loaded model what upstream changed. Returns as soon as the request is out; the
+/// Ask the loaded model what origin changed. Returns as soon as the request is out; the
 /// answer arrives in the snapshot, because a summary takes longer than a request should.
-pub async fn summarize_upstream(
+pub async fn summarize_origin(
     State(state): State<Shared>,
     Body(_): Body<Empty>,
 ) -> ApiResult<Reply> {
-    reply(state.act(actions::summarize_upstream))
+    reply(state.act(actions::summarize_origin))
 }
 
 /// Pull the FreeToken checkout and reinstall it. Answers with a pending confirmation

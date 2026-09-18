@@ -29,7 +29,7 @@ pub fn spawn_all(app: &App, tx: mpsc::UnboundedSender<Message>) {
 /// left running for days would never notice a commit pushed after it started.
 pub fn spawn_checkout(app: &App, tx: mpsc::UnboundedSender<Message>) {
     let Some(dir) = crate::ft::checkout::locate(&app.config.freetoken, app.ft.as_ref()) else {
-        tracing::debug!("no FreeToken checkout found; skipping the upstream check");
+        tracing::debug!("no FreeToken checkout found; skipping the origin check");
         return;
     };
     tracing::info!(path = %dir.display(), "watching the FreeToken checkout");

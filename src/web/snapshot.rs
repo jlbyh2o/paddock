@@ -1124,10 +1124,10 @@ fn config(app: &App) -> ConfigSnapshot {
 
 // ---------------------------------------------------------------- environment
 
-/// A model-written summary of what upstream changed, and the conditions it was written
+/// A model-written summary of what origin changed, and the conditions it was written
 /// under — which model, which range, and whether it saw the whole patch.
 #[derive(Serialize)]
-pub struct UpstreamSummaryOut<'a> {
+pub struct OriginSummaryOut<'a> {
     range: &'a str,
     commits: usize,
     model: &'a str,
@@ -1151,15 +1151,12 @@ pub struct EnvironmentSnapshot<'a> {
     endpoint: &'a str,
     hostname: &'a str,
     // Local FreeToken vendor checkout status.
-    ft_upstream_sha: Option<&'a str>,
     ft_origin_sha: Option<&'a str>,
-    ft_upstream_behind: Option<usize>,
-    ft_origin_ahead: Option<usize>,
     ft_origin_behind: Option<usize>,
     ft_dirty: Option<bool>,
     ft_checkout_note: Option<String>,
-    /// The engine's summary of the upstream commits, once asked for. Null until then.
-    upstream_summary: Option<UpstreamSummaryOut<'a>>,
+    /// The engine's summary of the origin commits, once asked for. Null until then.
+    origin_summary: Option<OriginSummaryOut<'a>>,
     /// The commit the working tree is on.
     ft_local_sha: Option<&'a str>,
     /// Which tree was read. The checkout is found at run time, so the pane has to be
@@ -1184,17 +1181,14 @@ fn environment(app: &App) -> EnvironmentSnapshot<'_> {
         hub_token_source: app.hub_token.as_ref().map(|t| t.source),
         endpoint: app.client.base_url(),
         hostname: &app.host.hostname,
-        ft_upstream_sha: app.ft_checkout.as_ref().map(|c| c.upstream_sha.as_str()),
         ft_origin_sha: app.ft_checkout.as_ref().map(|c| c.origin_sha.as_str()),
-        ft_upstream_behind: app.ft_checkout.as_ref().map(|c| c.upstream_behind),
-        ft_origin_ahead: app.ft_checkout.as_ref().map(|c| c.origin_ahead),
         ft_origin_behind: app.ft_checkout.as_ref().map(|c| c.origin_behind),
         ft_dirty: app.ft_checkout.as_ref().map(|c| c.dirty),
         ft_local_sha: app.ft_checkout.as_ref().map(|c| c.local_sha.as_str()),
         ft_checkout_path: app.ft_checkout.as_ref().map(|c| c.path.as_str()),
         ft_kernels_stale: app.ft_checkout.as_ref().and_then(|c| c.kernels_stale),
         ft_checkout_note: note,
-        upstream_summary: app.upstream_summary.as_ref().map(|s| UpstreamSummaryOut {
+        origin_summary: app.origin_summary.as_ref().map(|s| OriginSummaryOut {
             range: &s.range,
             commits: s.commits,
             model: &s.model,
@@ -1208,14 +1202,12 @@ fn environment(app: &App) -> EnvironmentSnapshot<'_> {
 
 /// A short, human-readable summary for the dashboard.
 fn checkout_note(c: &crate::ft::FtCheckout) -> String {
-    if c.upstream_behind > 0 {
-        format!("{} commits behind upstream", c.upstream_behind)
+    if c.origin_behind > 0 {
+        format!("{} commits behind origin", c.origin_behind)
     } else if c.kernels_stale == Some(true) {
-        // Current with upstream and still not running that code: the pull landed but
+        // Current with origin and still not running that code: the pull landed but
         // the kernels were never rebuilt.
         "kernels need a rebuild".into()
-    } else if c.origin_ahead > 0 || c.origin_behind > 0 {
-        format!("{} ahead, {} behind origin", c.origin_ahead, c.origin_behind)
     } else if c.dirty {
         "local changes present".into()
     } else {

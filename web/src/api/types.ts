@@ -1140,11 +1140,11 @@ export interface BenchVerdict {
 }
 
 /**
- * A summary of the upstream commits this checkout is missing, written by the model the
+ * A summary of the origin commits this checkout is missing, written by the model the
  * engine has loaded — and the conditions it was written under, because a summary is only
  * as good as what was loaded and how much of the diff fitted.
  */
-export interface UpstreamSummary {
+export interface OriginSummary {
  /** The commit range summarized, e.g. `e0886cc..84d236c`. */
  range: string;
  commits: number;
@@ -1178,15 +1178,12 @@ export interface EnvironmentSnapshot {
  hostname: string;
  // Git status of the FreeToken checkout this machine builds from. Null throughout when
  // there is no checkout — FreeToken installed from a wheel, or git unavailable.
- ft_upstream_sha: string | null;
  ft_origin_sha: string | null;
- ft_upstream_behind: number | null;
- ft_origin_ahead: number | null;
  ft_origin_behind: number | null;
  ft_dirty: boolean | null;
  ft_checkout_note: string | null;
- /** The engine's account of the upstream commits, once asked for. Null until then. */
- upstream_summary: UpstreamSummary | null;
+ /** The engine's account of the origin commits, once asked for. Null until then. */
+ origin_summary: OriginSummary | null;
  /** The commit the working tree is on. */
  ft_local_sha: string | null;
  /** Which tree was read; it is resolved at run time, not baked into the binary. */

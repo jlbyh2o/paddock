@@ -802,7 +802,7 @@ pub fn update_freetoken(app: &mut App) -> Outcome {
             vec![
                 format!("{}", plan.dir.display()),
                 String::new(),
-                format!("git pull --ff-only  ({} commit(s) behind upstream)", plan.behind),
+                format!("git pull --ff-only  ({} commit(s) behind origin)", plan.behind),
                 "uv pip install -e \".[accel]\"".to_string(),
                 String::new(),
                 "the engine must be started again afterwards".into(),
@@ -844,9 +844,9 @@ fn update_plan(app: &mut App) -> Result<UpdatePlan, Refusal> {
             "the checkout has local changes; commit or discard them first",
         ));
     }
-    let behind = checkout.as_ref().map(|c| c.upstream_behind).unwrap_or(0);
+    let behind = checkout.as_ref().map(|c| c.origin_behind).unwrap_or(0);
     if behind == 0 {
-        return Err(warn_off(app, 409, "already at upstream; nothing to update"));
+        return Err(warn_off(app, 409, "already at origin; nothing to update"));
     }
     // What is true about the world first, what is missing from the setup second: being told
     // the venv is unconfigured is no use to someone who has nothing to pull anyway.
@@ -924,7 +924,7 @@ fn start_update(app: &mut App) -> Done {
     }
 }
 
-/// Ask the running engine what upstream changed.
+/// Ask the running engine what origin changed.
 ///
 /// The one place paddock uses the model it supervises for something other than proving the
 /// server answers. The material is the commit log, the diffstat and as much of the patch
@@ -933,7 +933,7 @@ fn start_update(app: &mut App) -> Done {
 ///
 /// Every refusal here is a different missing precondition, and each says which: there is
 /// no checkout to read, it is already current, or nothing is loaded to ask.
-pub fn summarize_upstream(app: &mut App) -> Outcome {
+pub fn summarize_origin(app: &mut App) -> Outcome {
     let Some(dir) = crate::ft::checkout::locate(&app.config.freetoken, app.ft.as_ref()) else {
         return Err(warn_off(app, 503, "no FreeToken checkout to compare against"));
     };
@@ -943,8 +943,8 @@ pub fn summarize_upstream(app: &mut App) -> Outcome {
     let Some(model) = app.current_model() else {
         return Err(warn_off(app, 409, "no model is loaded to ask"));
     };
-    let Some(changes) = crate::ft::checkout::upstream_changes(&dir, PATCH_BUDGET) else {
-        return Err(warn_off(app, 409, "this checkout is already at upstream"));
+    let Some(changes) = crate::ft::checkout::origin_changes(&dir, PATCH_BUDGET) else {
+        return Err(warn_off(app, 409, "this checkout is already at origin"));
     };
 
     let prompt = format!(
@@ -959,7 +959,7 @@ pub fn summarize_upstream(app: &mut App) -> Outcome {
             if changes.truncated { " (truncated — the diffstat above is complete)" } else { "" },
         patch = changes.patch,
     );
-    app.upstream_summary = Some(crate::ui::app::UpstreamSummary {
+    app.origin_summary = Some(crate::ui::app::OriginSummary {
         range: changes.range,
         commits: changes.commits,
         model: model.clone(),
@@ -983,7 +983,7 @@ pub fn summarize_upstream(app: &mut App) -> Outcome {
             )
             .await
             .map_err(|e| format!("{e:#}"));
-        let _ = tx.send(Message::UpstreamSummary(Box::new(res)));
+        let _ = tx.send(Message::OriginSummary(Box::new(res)));
     });
     Ok(Done::started())
 }
@@ -997,7 +997,7 @@ pub fn summarize_upstream(app: &mut App) -> Outcome {
 /// running out mid-thought produces no answer at all rather than a short one.
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 
-/// Bytes of patch text sent with a summary request. Large enough for an ordinary upstream
+/// Bytes of patch text sent with a summary request. Large enough for an ordinary origin
 /// week, small enough that prefill is seconds rather than minutes on a loaded engine.
 const PATCH_BUDGET: usize = 64 * 1024;
 

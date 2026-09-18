@@ -116,7 +116,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/engine/start", post(routes::engine::start))
         .route("/api/engine/stop", post(routes::engine::stop))
         .route("/api/engine/smoke-test", post(routes::engine::smoke_test))
-        .route("/api/engine/summarize-upstream", post(routes::engine::summarize_upstream))
+        .route("/api/engine/summarize-origin", post(routes::engine::summarize_origin))
         .route("/api/freetoken/update", post(routes::engine::update_freetoken))
         .route("/api/models/rescan", post(routes::models::rescan))
         .route("/api/models/use", post(routes::models::use_model))

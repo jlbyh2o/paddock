@@ -1298,19 +1298,16 @@ export const fixture: Snapshot = {
     hub_token_source: "the HF_TOKEN environment variable",
     endpoint: "http://127.0.0.1:1919",
     hostname: "gpu-box",
-    ft_upstream_sha: "a1b2c3d",
-    ft_origin_sha: "e4f5g6h",
-    ft_upstream_behind: 3,
-    ft_origin_ahead: 5,
-    ft_origin_behind: 0,
+    ft_origin_sha: "a1b2c3d",
+    ft_origin_behind: 3,
     ft_dirty: false,
-    ft_checkout_note: "3 commits behind upstream",
+    ft_checkout_note: "3 commits behind origin",
     ft_local_sha: "9f8e7d6",
     ft_checkout_path: "/home/user/FreeToken",
     ft_kernels_stale: false,
     // A summary already written, because the pane's interesting state is the one with
     // prose in it rather than the null it starts at.
-    upstream_summary: {
+    origin_summary: {
       range: "9535656..e0886cc",
       commits: 5,
       model: "Qwen3.6-35B-A3B",

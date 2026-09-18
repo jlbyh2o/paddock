@@ -777,14 +777,12 @@ default 30), and every field below is `null` when no such tree was found.
 |---|---|---|
 | `ft_checkout_path` | string \| null | `FtCheckout::path` — which tree was read. Shown, because it is resolved rather than configured |
 | `ft_local_sha` | string \| null | `FtCheckout::local_sha` — the commit the working tree is on |
-| `ft_upstream_sha` | string \| null | `upstream/main` after a fetch, or `""` when there is no such remote |
-| `ft_origin_sha` | string \| null | `origin/main` after a fetch |
-| `ft_upstream_behind` | number \| null | Commits from `local_sha` to `upstream/main`. **Non-zero is the "a newer FreeToken exists" signal** |
-| `ft_origin_ahead`, `ft_origin_behind` | number \| null | `git rev-list --left-right HEAD...origin/main` |
+| `ft_origin_sha` | string \| null | `origin/main` after a fetch, or `""` when there is no such remote |
+| `ft_origin_behind` | number \| null | Commits from `local_sha` to `origin/main`. **Non-zero is the "a newer FreeToken exists" signal** |
 | `ft_dirty` | boolean \| null | The working tree has uncommitted changes |
 | `ft_kernels_stale` | boolean \| null | The newest built `.so` under `python/freetoken/kernel/` predates the last commit to touch `kernel/csrc/`: pulled, but not rebuilt, so the engine is not running the code on disk. `null` when nothing is built to compare against |
-| `ft_checkout_note` | string \| null | The one-line summary the panes gate on, worst-first: behind upstream, then kernels stale, then diverged from origin, then dirty, then `"up to date"` |
-| `upstream_summary` | object \| null | What the loaded model made of the commits this checkout is behind, once `POST /api/engine/summarize-upstream` has been called; `null` until then. `{range, commits, model, pending, truncated, text, error}` — `pending` while the request is out, then exactly one of `text` or `error`. `model` and `truncated` are carried because a summary is only as good as what was loaded and how much of the patch fitted, and the reader is entitled to weigh it |
+| `ft_checkout_note` | string \| null | The one-line summary the panes gate on, worst-first: behind origin, then kernels stale, then dirty, then `"up to date"` |
+| `origin_summary` | object \| null | What the loaded model made of the commits this checkout is behind, once `POST /api/engine/summarize-origin` has been called; `null` until then. `{range, commits, model, pending, truncated, text, error}` — `pending` while the request is out, then exactly one of `text` or `error`. `model` and `truncated` are carried because a summary is only as good as what was loaded and how much of the patch fitted, and the reader is entitled to weigh it |
 
 ---
 
@@ -1011,7 +1009,7 @@ snapshot's `confirm`", not as "done".**
 | 15 | `POST /api/engine/start` | Dashboard `e`, Serve `g`, Models `s` | `input::start_engine` |
 | 16 | `POST /api/engine/stop` | Dashboard `s` / `S` | `request_stop` |
 | 17 | `POST /api/engine/smoke-test` | Dashboard `t` | `smoke_test` |
-| 17a | `POST /api/engine/summarize-upstream` | Dashboard `u` | `summarize_upstream` |
+| 17a | `POST /api/engine/summarize-origin` | Dashboard `u` | `summarize_origin` |
 | 17b | `POST /api/freetoken/update` | Dashboard `U` | `update_freetoken` |
 | 18 | `POST /api/models/rescan` | Dashboard `r`, Models `r` | `App::request_scan` |
 | 19 | `POST /api/models/use` | Models `Enter` / `s` | `use_selected_model` |
@@ -1144,20 +1142,20 @@ before the reinstall.
 Refusals, in the order they are checked — what is true about the machine before what is
 missing from the setup: `503` no checkout, `409` the engine is live (an editable install is
 the files on disk, and pulling under a running engine swaps the modules it imports lazily),
-`409` the checkout is dirty, `409` already at upstream, then `503` for an unset
+`409` the checkout is dirty, `409` already at origin, then `503` for an unset
 `freetoken.venv`, a missing `git`, or a missing `uv`.
 
-**`POST /api/engine/summarize-upstream`** — body `{}`. Asks the loaded model what the
-commits between this checkout and `upstream/main` change, and answers `{"status": "started"}`
+**`POST /api/engine/summarize-origin`** — body `{}`. Asks the loaded model what the
+commits between this checkout and `origin/main` change, and answers `{"status": "started"}`
 as soon as the request is out: a summary takes longer than a request should, so the answer
-arrives in the snapshot at `environment.upstream_summary` rather than in this reply. Refuses
+arrives in the snapshot at `environment.origin_summary` rather than in this reply. Refuses
 with the precondition that is missing — `503` when there is no checkout to read, `409` when
-it is already at upstream, no engine is answering, or no model is loaded.
+it is already at origin, no engine is answering, or no model is loaded.
 
 The material sent is the commit log and the complete diffstat, plus up to 64 KiB of patch;
 the log and the stat always fit and only the patch is cut, because they describe a change
 rather than spell it out. When the patch is cut the prompt says so, and
-`upstream_summary.truncated` says so to the reader too — a summary written from half a diff
+`origin_summary.truncated` says so to the reader too — a summary written from half a diff
 is worth reading differently from one written from all of it.
 
 * `409 "the server is not answering"` when `!app.server_reachable()`.

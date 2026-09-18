@@ -78,7 +78,7 @@
     "state": "serving"
   },
   "config": {
-    "config_path": "/home/user/.cache/tmp/paddock-tests-2366286/config.toml",
+    "config_path": "/home/user/.cache/tmp/paddock-tests-346332/config.toml",
     "confirm_destructive": true,
     "convert_preflight": true,
     "disk_free": {
@@ -101,7 +101,7 @@
     "poll_ms": 1000,
     "server_host": "0.0.0.0",
     "server_port": 1919,
-    "state_dir": "/home/user/.cache/tmp/paddock-tests-2366286/state",
+    "state_dir": "/home/user/.cache/tmp/paddock-tests-346332/state",
     "template_sources": [
       "peculiar-ragdoll/Qwen-Sharp-Chat-Templates"
     ],
@@ -164,7 +164,7 @@
   },
   "environment": {
     "endpoint": "http://127.0.0.1:1919",
-    "ft_checkout_note": "3 commits behind upstream",
+    "ft_checkout_note": "3 commits behind origin",
     "ft_checkout_path": "/home/user/FreeToken",
     "ft_dirty": false,
     "ft_display": null,
@@ -173,20 +173,14 @@
     "ft_kernels_stale": false,
     "ft_local_sha": "9f8e7d6",
     "ft_origin": null,
-    "ft_origin_ahead": 0,
     "ft_origin_behind": 3,
-    "ft_origin_sha": "9f8e7d6",
+    "ft_origin_sha": "a1b2c3d",
     "ft_program": null,
-    "ft_upstream_behind": 3,
-    "ft_upstream_sha": "a1b2c3d",
     "ft_version": "freetoken version 0.1.2",
     "hostname": "inference-01",
     "hub_token_present": false,
     "hub_token_source": null,
-    "supported_archs": [
-      "Qwen3MoeForCausalLM"
-    ],
-    "upstream_summary": {
+    "origin_summary": {
       "commits": 5,
       "error": null,
       "model": "Qwen3.6-35B-A3B",
@@ -194,7 +188,10 @@
       "range": "9535656..e0886cc",
       "text": "- Image input is served on the Qwen families, so a vision-capable checkpoint now builds an encoder tower by default.",
       "truncated": true
-    }
+    },
+    "supported_archs": [
+      "Qwen3MoeForCausalLM"
+    ]
   },
   "hardware": {
     "bench_profile": {
@@ -458,7 +455,7 @@
         "ratio": 0.36666666666666664,
         "repo": "nvidia/GLM-5.2-NVFP4",
         "revision": "main",
-        "started_at": "2026-09-14T18:53:04.968158839-06:00",
+        "started_at": "2026-09-17T19:45:11.388581897-06:00",
         "status": {
           "kind": "running"
         },
@@ -489,7 +486,7 @@
         "progress_detail": "27.9 GiB / 63.3 GiB  (experts)",
         "progress_ratio": 0.4411764705882353,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T18:53:04.968116248-06:00",
+        "started_at": "2026-09-17T19:45:11.388512558-06:00",
         "status": {
           "kind": "running"
         },
@@ -517,7 +514,7 @@
         "progress_detail": "",
         "progress_ratio": null,
         "rate_bps": 0.0,
-        "started_at": "2026-09-14T18:53:04.968157580-06:00",
+        "started_at": "2026-09-17T19:45:11.388578974-06:00",
         "status": {
           "kind": "failed",
           "reason": "with status 1"
@@ -536,7 +533,7 @@
     "log_path": null
   },
   "models": {
-    "config_path": "/home/user/.cache/tmp/paddock-tests-2366286/config.toml",
+    "config_path": "/home/user/.cache/tmp/paddock-tests-346332/config.toml",
     "items": [
       {
         "arch": "Qwen3MoeForCausalLM",
@@ -565,7 +562,7 @@
         "is_partial": false,
         "max_position": 262144,
         "model_type": "qwen3_moe",
-        "modified_ms": 1789433584968,
+        "modified_ms": 1789695911388,
         "name": "Qwen3.6-35B-A3B",
         "num_experts": 128,
         "num_layers": 48,
@@ -948,7 +945,7 @@
     }
   },
   "telemetry": {
-    "age_ms": 3,
+    "age_ms": 4,
     "cache_status": {
       "geometry": {
         "cache_budget_bytes": 24000000000,
@@ -1130,20 +1127,20 @@
   },
   "toasts": [
     {
-      "age_ms": 3,
+      "age_ms": 4,
       "id": 1,
       "kind": "info",
       "text": "engine started",
       "ttl_ms": 4000
     },
     {
-      "age_ms": 3,
+      "age_ms": 4,
       "id": 2,
       "kind": "warn",
       "text": "the hf CLI is not installed",
       "ttl_ms": 8000
     }
   ],
-  "ts_ms": 1789433584971,
-  "version": "0.3.1"
+  "ts_ms": 1789695911392,
+  "version": "0.3.4"
 }

@@ -507,7 +507,7 @@ textarea {
 }
 
 /*
- * The model's account of the upstream commits. Indented under the checkout block and set
+ * The model's account of the origin commits. Indented under the checkout block and set
  * in the body colour rather than dim: it is the one thing in this pane a person reads
  * rather than scans, and it is prose, so it gets line height and paragraphs.
  */

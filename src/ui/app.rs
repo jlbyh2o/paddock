@@ -101,12 +101,12 @@ pub struct Telemetry {
     pub at: Option<Instant>,
 }
 
-/// A summary of the upstream commits this checkout is missing, written by the engine.
+/// A summary of the origin commits this checkout is missing, written by the engine.
 ///
 /// Kept whatever the outcome, refusals included: having asked and been told why not is a
 /// different state from never having asked, and the pane says so.
 #[derive(Debug, Clone)]
-pub struct UpstreamSummary {
+pub struct OriginSummary {
     /// The commit range summarized, so an answer is never read against the wrong diff.
     pub range: String,
     pub commits: usize,
@@ -168,8 +168,8 @@ pub enum Message {
     },
     /// FreeToken's model registry, read once at startup.
     Architectures(Result<Vec<String>, String>),
-    /// The engine finished summarizing the upstream commits.
-    UpstreamSummary(Box<Result<String, String>>),
+    /// The engine finished summarizing the origin commits.
+    OriginSummary(Box<Result<String, String>>),
     /// The FreeToken checkout was read again. `None` means there is no checkout to
     /// report on — a wheel install, or a tree git could not answer for.
     Checkout(Option<Box<crate::ft::FtCheckout>>),
@@ -635,8 +635,8 @@ pub struct App {
     pub ft_version: Option<String>,
     /// Local FreeToken vendor checkout git status. `None` when the vendor dir is absent.
     pub ft_checkout: Option<FtCheckout>,
-    /// The engine's account of what upstream changed, once asked for.
-    pub upstream_summary: Option<UpstreamSummary>,
+    /// The engine's account of what origin changed, once asked for.
+    pub origin_summary: Option<OriginSummary>,
     /// The `hf` CLI that Hub downloads are delegated to. `None` means the Hub tab cannot
     /// download anything, which it says rather than failing at the keypress.
     pub hf_cli: Option<std::path::PathBuf>,
@@ -788,7 +788,7 @@ impl App {
             ft_error,
             ft_version: None,
             ft_checkout: None,
-            upstream_summary: None,
+            origin_summary: None,
             client,
             tab: Tab::Dashboard,
             should_quit: false,
@@ -1356,8 +1356,8 @@ impl App {
                 // inventing a verdict.
                 Err(e) => tracing::warn!("could not read FreeToken's model registry: {e}"),
             },
-            Message::UpstreamSummary(res) => {
-                if let Some(s) = self.upstream_summary.as_mut() {
+            Message::OriginSummary(res) => {
+                if let Some(s) = self.origin_summary.as_mut() {
                     s.pending = false;
                     match *res {
                         Ok(text) => s.text = Some(text),

@@ -2,9 +2,9 @@
 //!
 //! When FreeToken is built on the machine that serves it rather than installed from a
 //! wheel, "are we running the latest?" is a question about a git working tree. This
-//! module reads that tree: which commit it is on, how far behind `upstream/main` and
-//! `origin/main` it has fallen, whether it is dirty, and whether the compiled kernels
-//! are older than the native sources they were built from.
+//! module reads that tree: which commit it is on, how far behind `origin/main` it has
+//! fallen, whether it is dirty, and whether the compiled kernels are older than the
+//! native sources they were built from.
 //!
 //! The tree is found at run time, not compile time. The binary is built inside a
 //! container that mounts this crate at `/src` and is then copied to the server, so a
@@ -42,24 +42,14 @@ const MAX_ASCENT: usize = 4;
 pub struct FtCheckout {
     /// The checkout this describes, so the pane can say which tree it read.
     pub path: String,
-    /// The upstream remote URL, e.g. `https://github.com/FlashML-org/FreeToken.git`.
-    pub upstream: String,
-    /// The origin remote URL, e.g. `https://github.com/jlbyh2o/FreeToken.git`.
+    /// The origin remote URL, e.g. `https://github.com/FlashML-org/FreeToken.git`.
     pub origin: String,
     /// The commit the working tree is on (short form).
     pub local_sha: String,
-    /// The `upstream/main` commit SHA (short form), or empty when fetch is not possible.
-    pub upstream_sha: String,
     /// The `origin/main` commit SHA (short form), or empty when fetch is not possible.
     pub origin_sha: String,
-    /// How many commits the local branch is ahead of `origin/main`.
-    pub origin_ahead: usize,
     /// How many commits the local branch is behind `origin/main`.
     pub origin_behind: usize,
-    /// How many commits the local branch is behind `upstream/main`.
-    /// Zero means either the branch is up to date with upstream or the counts disagree
-    /// and we cannot reliably report a number.
-    pub upstream_behind: usize,
     /// Whether the working tree has uncommitted changes.
     pub dirty: bool,
     /// Whether the compiled kernels predate the last commit to touch their sources.
@@ -111,26 +101,21 @@ fn ascend_to_checkout(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Read the checkout at `dir`. Blocking: this fetches from the remotes, so callers run
+/// Read the checkout at `dir`. Blocking: this fetches from the remote, so callers run
 /// it off the UI thread and on a long timer.
 ///
 /// Returns `None` when the directory does not answer as a git repository at all.
 pub fn check(dir: &Path) -> Option<FtCheckout> {
-    let upstream = git_get("config remote.upstream.url", dir).unwrap_or_default();
     let origin = git_get("config remote.origin.url", dir).unwrap_or_default();
     let local_sha = git_get("rev-parse --short HEAD", dir)?;
 
-    // Fetch so the remote tracking refs are current. Either remote may be absent — a
-    // clone of upstream alone has no `upstream`, a clone with no fork has no second
-    // remote — and a failed fetch simply leaves that side unreported.
-    git_run("fetch --quiet upstream", dir);
+    // Fetch so the remote tracking ref is current. A tree cloned by other means may
+    // have no `origin` at all, and a failed fetch simply leaves that side unreported.
     git_run("fetch --quiet origin", dir);
 
-    let upstream_sha = git_get("rev-parse --short upstream/main", dir);
     let origin_sha = git_get("rev-parse --short origin/main", dir);
 
-    let (origin_ahead, origin_behind) = commit_distance("origin/main", dir);
-    let upstream_behind = match &upstream_sha {
+    let origin_behind = match &origin_sha {
         Some(sha) => count_commits(&local_sha, sha, dir),
         None => 0,
     };
@@ -139,14 +124,10 @@ pub fn check(dir: &Path) -> Option<FtCheckout> {
 
     Some(FtCheckout {
         path: dir.display().to_string(),
-        upstream,
         origin,
         local_sha,
-        upstream_sha: upstream_sha.unwrap_or_default(),
         origin_sha: origin_sha.unwrap_or_default(),
-        origin_ahead,
         origin_behind,
-        upstream_behind,
         dirty,
         kernels_stale: kernels_stale(dir),
     })
@@ -177,9 +158,9 @@ fn newest_object(dir: &Path) -> Option<u64> {
     newest
 }
 
-/// What upstream has that this checkout does not, as text to hand to a model.
+/// What origin has that this checkout does not, as text to hand to a model.
 #[derive(Debug, Clone)]
-pub struct UpstreamChanges {
+pub struct OriginChanges {
     /// `9535656..e0886cc`, so a summary can be checked against the range it describes.
     pub range: String,
     pub commits: usize,
@@ -194,7 +175,7 @@ pub struct UpstreamChanges {
     pub truncated: bool,
 }
 
-/// Collect the commits between this checkout and `upstream/main`.
+/// Collect the commits between this checkout and `origin/main`.
 ///
 /// Reads the remote-tracking ref as it stands; the periodic check is what keeps that
 /// current, so this never reaches the network and cannot hang on it.
@@ -202,13 +183,13 @@ pub struct UpstreamChanges {
 /// `patch_budget` is in bytes of patch text. The point of the cut is that the log and the
 /// stat — the parts that describe the change rather than spell it out — must always fit,
 /// so they are gathered whole and only the patch is trimmed.
-pub fn upstream_changes(dir: &Path, patch_budget: usize) -> Option<UpstreamChanges> {
+pub fn origin_changes(dir: &Path, patch_budget: usize) -> Option<OriginChanges> {
     let local = git_get("rev-parse --short HEAD", dir)?;
-    let upstream = git_get("rev-parse --short upstream/main", dir)?;
-    if local == upstream {
+    let origin = git_get("rev-parse --short origin/main", dir)?;
+    if local == origin {
         return None;
     }
-    let range = format!("{local}..{upstream}");
+    let range = format!("{local}..{origin}");
     let log = git_args(&["log", "--reverse", "--no-merges", "--format=%h %s%n%b", &range], dir)?;
     let commits = git_args(&["rev-list", "--count", "--no-merges", &range], dir)
         .and_then(|n| n.parse().ok())
@@ -223,7 +204,7 @@ pub fn upstream_changes(dir: &Path, patch_budget: usize) -> Option<UpstreamChang
     } else {
         full
     };
-    Some(UpstreamChanges { range, commits, log, stat, patch, truncated })
+    Some(OriginChanges { range, commits, log, stat, patch, truncated })
 }
 
 /// Run a git command, discarding its output.
@@ -261,39 +242,6 @@ fn git_get(cmd: &str, workdir: &Path) -> Option<String> {
         String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
     } else {
         None
-    }
-}
-
-/// Count how many commits `A` is ahead/behind `B`.
-/// Returns (ahead, behind) as usize tuples.
-fn commit_distance(against: &str, workdir: &Path) -> (usize, usize) {
-    let out = std::process::Command::new("git")
-        .args(["rev-list", "--count", "--left-right", "HEAD..."])
-        .arg(against)
-        .current_dir(workdir)
-        .stderr(std::process::Stdio::null())
-        .output();
-    let out = match out {
-        Ok(out) => out,
-        Err(_) => return (0, 0),
-    };
-    let text = match String::from_utf8(out.stdout) {
-        Ok(s) => s,
-        Err(_) => return (0, 0),
-    };
-    let parts: Vec<usize> = text
-        .trim()
-        .split('\n')
-        .flat_map(|line| line.split('\t'))
-        .filter_map(|n| n.trim().parse().ok())
-        .collect();
-    if parts.len() >= 2 {
-        (parts[0], parts[1])
-    } else if parts.len() == 1 {
-        // Only one side printed (ahead or behind).
-        (parts[0], 0)
-    } else {
-        (0, 0)
     }
 }
 

@@ -50,7 +50,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     run(api.rescanModels());
   }, []);
   const summarize = useCallback(() => {
-    run(api.summarizeUpstream());
+    run(api.summarizeOrigin());
   }, []);
   const update = useCallback(() => {
     run(api.updateFreetoken());
@@ -103,7 +103,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     .filter((part): part is string => Boolean(part))
     .join(" · ");
 
-  const summary = s.environment.upstream_summary;
+  const summary = s.environment.origin_summary;
   const gpus = hardware.gpus;
   const bench = hardware.bench_profile;
 
@@ -167,19 +167,19 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
               button is the whole feature's discoverability, so it says which of the two is
               missing rather than sitting there gray.
             */}
-            {(s.environment.ft_upstream_behind ?? 0) > 0 ? (
+            {(s.environment.ft_origin_behind ?? 0) > 0 ? (
               <button
                 type="button"
                 className="btn"
                 onClick={summarize}
-                disabled={!engine.server_reachable || s.environment.upstream_summary?.pending}
+                disabled={!engine.server_reachable || s.environment.origin_summary?.pending}
                 title={
                   !engine.server_reachable
                     ? "no engine is answering; start one to ask it"
-                    : "ask the loaded model what the upstream commits change"
+                    : "ask the loaded model what the origin commits change"
                 }
               >
-                {s.environment.upstream_summary?.pending ? "Summarizing…" : "What changed?"}{" "}
+                {s.environment.origin_summary?.pending ? "Summarizing…" : "What changed?"}{" "}
                 <span className="dim">(u)</span>
               </button>
             ) : null}
@@ -188,7 +188,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
               live rather than hidden: the reason it cannot run now is the useful part, and
               a button that vanishes teaches nobody why.
             */}
-            {(s.environment.ft_upstream_behind ?? 0) > 0 ? (
+            {(s.environment.ft_origin_behind ?? 0) > 0 ? (
               <button
                 type="button"
                 className="btn"
@@ -250,7 +250,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             <Field label="Checkout" mono>
               {text(s.environment.ft_checkout_path)}
             </Field>
-            {s.environment.ft_upstream_sha ? (
+            {s.environment.ft_origin_sha ? (
               <>
                 {/*
                   The one line that answers "are we running the latest?": the commit the
@@ -258,21 +258,14 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
                 */}
                 <Field
                   label="Commit"
-                  tone={(s.environment.ft_upstream_behind ?? 0) > 0 ? "warn" : "good"}
+                  tone={(s.environment.ft_origin_behind ?? 0) > 0 ? "warn" : "good"}
                 >
                   <span className="mono">{text(s.environment.ft_local_sha)}</span>{" "}
-                  {(s.environment.ft_upstream_behind ?? 0) > 0
-                    ? `— ${s.environment.ft_upstream_behind} behind upstream ${s.environment.ft_upstream_sha}`
-                    : "— up to date with upstream"}
+                  {(s.environment.ft_origin_behind ?? 0) > 0
+                    ? `— ${s.environment.ft_origin_behind} behind origin ${s.environment.ft_origin_sha}`
+                    : "— up to date with origin"}
                 </Field>
                 <div className="facts">
-                  {(s.environment.ft_origin_ahead ?? 0) > 0 ||
-                  (s.environment.ft_origin_behind ?? 0) > 0 ? (
-                    <span className="mono">
-                      origin {s.environment.ft_origin_ahead ?? 0} ahead,{" "}
-                      {s.environment.ft_origin_behind ?? 0} behind
-                    </span>
-                  ) : null}
                   {s.environment.ft_dirty ? (
                     <span className="warn">working tree has local changes</span>
                   ) : null}
@@ -287,7 +280,7 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
                 </div>
               </>
             ) : (
-              <span className="dim">(no upstream remote, or git is not available)</span>
+              <span className="dim">(no origin remote, or git is not available)</span>
             )}
             {summary ? (
               <div className="summary">

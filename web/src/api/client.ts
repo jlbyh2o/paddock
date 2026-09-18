@@ -231,9 +231,9 @@ export const api = {
   /** ⚠ confirms. */
   engineStop: (req: EngineStopRequest): Promise<ActionReply> => post("/api/engine/stop", req),
   smokeTest: (): Promise<ActionReply> => post("/api/engine/smoke-test", {}),
-  /** Ask the loaded model what the upstream commits change; the answer lands in the snapshot. */
-  summarizeUpstream: (): Promise<StartedReply> =>
-    post("/api/engine/summarize-upstream", {}),
+  /** Ask the loaded model what the origin commits change; the answer lands in the snapshot. */
+  summarizeOrigin: (): Promise<StartedReply> =>
+    post("/api/engine/summarize-origin", {}),
   /** Pull the FreeToken checkout and reinstall it. Answers with a confirmation to accept. */
   updateFreetoken: (): Promise<ActionReply> => post("/api/freetoken/update", {}),
 

@@ -1413,7 +1413,7 @@ async fn wire_populated() -> Shared {
 
     // An answer already written, because the pane's interesting state is the one holding
     // prose rather than the null it starts at.
-    app.upstream_summary = Some(crate::ui::app::UpstreamSummary {
+    app.origin_summary = Some(crate::ui::app::OriginSummary {
         range: "9535656..e0886cc".into(),
         commits: 5,
         model: "Qwen3.6-35B-A3B".into(),
@@ -1427,19 +1427,15 @@ async fn wire_populated() -> Shared {
         error: None,
     });
 
-    // A checkout behind upstream, because that is the state the Engine pane has something
+    // A checkout behind origin, because that is the state the Engine pane has something
     // to say about. Reading a real one here would make the fixture depend on whichever
     // tree the machine running the tests happens to have.
     app.set_ft_checkout(Some(crate::ft::FtCheckout {
         path: "/home/user/FreeToken".into(),
-        upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
-        origin: "https://github.com/user/FreeToken.git".into(),
+        origin: "https://github.com/FlashML-org/FreeToken.git".into(),
         local_sha: "9f8e7d6".into(),
-        upstream_sha: "a1b2c3d".into(),
-        origin_sha: "9f8e7d6".into(),
-        origin_ahead: 0,
+        origin_sha: "a1b2c3d".into(),
         origin_behind: 3,
-        upstream_behind: 3,
         dirty: false,
         kernels_stale: Some(false),
     }));
@@ -1803,14 +1799,10 @@ async fn updating_freetoken_is_refused_when_already_current() {
     let dir = fake_checkout(&mut app, "current");
     app.set_ft_checkout(Some(crate::ft::FtCheckout {
         path: "/home/user/FreeToken".into(),
-        upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
-        origin: String::new(),
+        origin: "https://github.com/FlashML-org/FreeToken.git".into(),
         local_sha: "e0886cc".into(),
-        upstream_sha: "e0886cc".into(),
-        origin_sha: String::new(),
-        origin_ahead: 0,
+        origin_sha: "e0886cc".into(),
         origin_behind: 0,
-        upstream_behind: 0,
         dirty: false,
         kernels_stale: Some(false),
     }));
@@ -1818,7 +1810,7 @@ async fn updating_freetoken_is_refused_when_already_current() {
 
     let (status, body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(body["error"].as_str().unwrap_or_default().contains("already at upstream"));
+    assert!(body["error"].as_str().unwrap_or_default().contains("already at origin"));
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1830,14 +1822,10 @@ async fn updating_freetoken_is_refused_with_local_changes() {
     let dir = fake_checkout(&mut app, "dirty");
     app.set_ft_checkout(Some(crate::ft::FtCheckout {
         path: "/home/user/FreeToken".into(),
-        upstream: "https://github.com/FlashML-org/FreeToken.git".into(),
-        origin: String::new(),
+        origin: "https://github.com/FlashML-org/FreeToken.git".into(),
         local_sha: "9535656".into(),
-        upstream_sha: "e0886cc".into(),
-        origin_sha: String::new(),
-        origin_ahead: 0,
-        origin_behind: 0,
-        upstream_behind: 5,
+        origin_sha: "e0886cc".into(),
+        origin_behind: 5,
         dirty: true,
         kernels_stale: Some(false),
     }));
