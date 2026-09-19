@@ -1836,3 +1836,50 @@ async fn updating_freetoken_is_refused_with_local_changes() {
     assert!(body["error"].as_str().unwrap_or_default().contains("local changes"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A summary is the engine's account of the commits this checkout is behind origin. Once
+/// the update begins, those commits are being pulled in, so the account is stale the
+/// moment the pull starts: it is dropped then, not left hanging over a checkout that is no
+/// longer behind origin. (Skipped where git/uv are absent, since an update cannot begin.)
+#[tokio::test]
+async fn updating_freetoken_clears_a_pending_origin_summary() {
+    let mut app = fresh().await;
+    // Confirmations off: the route acts at once, so a single request reaches the update.
+    app.config.ui.confirm_destructive = false;
+    let dir = fake_checkout(&mut app, "summary");
+    app.set_ft_checkout(Some(crate::ft::FtCheckout {
+        path: "/home/user/FreeToken".into(),
+        origin: "https://github.com/FlashML-org/FreeToken.git".into(),
+        local_sha: "9535656".into(),
+        origin_sha: "e0886cc".into(),
+        origin_behind: 5,
+        dirty: false,
+        kernels_stale: Some(false),
+    }));
+    // A summary already on screen, describing exactly the five commits behind origin.
+    app.origin_summary = Some(crate::ui::app::OriginSummary {
+        range: "9535656..e0886cc".into(),
+        commits: 5,
+        model: "Qwen3.6-35B-A3B".into(),
+        pending: false,
+        truncated: false,
+        text: Some("what changed".into()),
+        error: None,
+    });
+    // `update_plan` needs a venv to name as the install target.
+    app.config.freetoken.venv = Some(std::env::temp_dir().join("paddock-fake-venv"));
+    let state = WebState::new(app, Auth::new(None).unwrap());
+
+    let (status, _body) = send(&state, post("/api/freetoken/update", serde_json::json!({}))).await;
+    if status != StatusCode::OK {
+        std::fs::remove_dir_all(&dir).ok();
+        return;
+    }
+
+    let (_, snapshot) = send(&state, get("/api/snapshot")).await;
+    assert!(
+        snapshot["environment"]["origin_summary"].is_null(),
+        "the origin summary should be dropped the moment the update begins"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

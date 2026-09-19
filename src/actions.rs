@@ -914,6 +914,10 @@ fn start_update(app: &mut App) -> Done {
             app.jobs.push(job);
             app.jobs_view.sel.last(views::jobs::rows(app).len());
             app.tab = Tab::Jobs;
+            // The summary is the engine's account of the commits this checkout is behind
+            // origin. The update consumes exactly those, so drop it as the pull begins
+            // rather than leave a summary of commits that are no longer behind.
+            app.origin_summary = None;
             app.info("updating FreeToken");
             Done::Started { job_id: Some(id), log_path: None }
         }
