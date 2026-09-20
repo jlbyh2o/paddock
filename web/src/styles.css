@@ -930,6 +930,79 @@ textarea {
   padding: 2px 0;
 }
 
+/*
+ * The Jobs tab's bandwidth profile as grouped horizontal bars: one row per format, a
+ * CPU bar and a PCIe bar each drawn to the fastest number on the profile, with the
+ * recommended strategy tagged at the row's end. It replaces the table so the two
+ * memory systems read side by side at a glance.
+ */
+.bw {
+  margin: 4px 0 6px;
+}
+
+.bw-legend {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 6px;
+  color: var(--dim);
+  font-size: var(--text-xs);
+}
+
+.bw-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bw-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+.bw-swatch.accent { background: var(--accent); }
+.bw-swatch.warn { background: var(--warn); }
+
+.bw-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.bw-label {
+  color: var(--fg);
+}
+
+.bw-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.bw-bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+}
+.bw-track { fill: var(--gauge-bg); }
+.bw-fill.accent { fill: var(--accent); }
+.bw-fill.warn { fill: var(--warn); }
+
+.bw-verdict {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: none;
+}
+.bw-verdict.good { color: var(--good); }
+.bw-verdict.warn { color: var(--warn); }
+.bw-verdict.dim { color: var(--dim); }
+
 /* ---------------------------------------------------------------- charts */
 
 /*

@@ -16,11 +16,66 @@ import { run, useJobOutput } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
 import { Bar, Empty, Field, Pane } from "../ui/primitives.tsx";
-import { bytes, duration, eta, fixed, gbs, rate, severityClass, text, timestamp } from "../format.ts";
+import { DASH, bytes, duration, eta, fixed, gbs, rate, severityClass, text, timestamp } from "../format.ts";
 
 type Row =
   | { kind: "job"; id: number; key: string }
   | { kind: "download"; id: number; key: string };
+
+/**
+ * The bandwidth profile as grouped horizontal bars — one row per format, a CPU bar
+ * and a PCIe bar each drawn to the fastest number on the profile, with the recommended
+ * strategy tagged at the row's end. It is the same comparison the table made, only the
+ * two memory systems sit side by side so the winner reads at a glance.
+ */
+function BandwidthChart(props: {
+  formats: { format: string; cpu: number | null; pcie: number | null; recommended: string | null }[];
+}): ReactNode {
+  const { formats } = props;
+  const max = Math.max(1, ...formats.flatMap((f) => [f.cpu ?? 0, f.pcie ?? 0]));
+  return (
+    <div className="bw">
+      <div className="bw-legend">
+        <span className="bw-legend-item">
+          <span className="bw-swatch accent" aria-hidden />
+          CPU
+        </span>
+        <span className="bw-legend-item">
+          <span className="bw-swatch warn" aria-hidden />
+          PCIe
+        </span>
+      </div>
+      {formats.map(({ format, cpu, pcie, recommended }) => (
+        <div className="bw-row" key={format}>
+          <span className="bw-label mono">{format}</span>
+          <div className="bw-bars">
+            <BwBar value={cpu} max={max} tone="accent" label={`${format} · CPU ${gbs(cpu)}`} />
+            <BwBar value={pcie} max={max} tone="warn" label={`${format} · PCIe ${gbs(pcie)}`} />
+          </div>
+          <span
+            className={`bw-verdict ${recommended === "offload" ? "warn" : recommended === "hybrid" ? "good" : "dim"}`}
+          >
+            {recommended ?? DASH}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** One filled bar, scaled to the profile's fastest number, with a track behind it. */
+function BwBar(props: { value: number | null; max: number; tone: string; label: string }): ReactNode {
+  const value = props.value;
+  const ratio = value == null ? 0 : Math.max(0, Math.min(1, value / props.max));
+  return (
+    <svg className="bw-bar" viewBox="0 0 100 8" preserveAspectRatio="none" role="img" aria-label={props.label}>
+      <rect className="bw-track" x="0" y="0" width="100" height="8" />
+      {value != null ? (
+        <rect className={`bw-fill ${props.tone}`} x="0" y="0" width={ratio * 100} height="8" />
+      ) : null}
+    </svg>
+  );
+}
 
 export function Jobs(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
@@ -73,6 +128,14 @@ export function Jobs(props: { snapshot: Snapshot }): ReactNode {
 
   const active = s.engine.active_jobs + s.engine.active_downloads;
   const bench = s.hardware.bench_profile;
+  const formats = bench
+    ? Object.entries(bench.dtype_kernels).map(([format, kernel]) => ({
+        format,
+        cpu: kernel.cpu_moe_gbs,
+        pcie: kernel.pcie_gather_gbs,
+        recommended: kernel.recommended,
+      }))
+    : [];
 
   return (
     <div className="panes wide">
@@ -269,32 +332,7 @@ export function Jobs(props: { snapshot: Snapshot }): ReactNode {
             <Field label="PCIe h2d">{gbs(bench.ceilings.pcie_linear_h2d_gbs)}</Field>
             <Field label="PCIe d2h">{gbs(bench.ceilings.pcie_linear_d2h_gbs)}</Field>
             <Field label="Hybrid at">ratio ≥ {fixed(bench.threshold, 2)}</Field>
-            <div className="table-wrap">
-              <table className="grid">
-                <thead>
-                  <tr>
-                    <th>format</th>
-                    <th className="r">CPU GB/s</th>
-                    <th className="r">PCIe GB/s</th>
-                    <th className="r">ratio</th>
-                    <th>verdict</th>
-                    <th>ISA</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(bench.dtype_kernels).map(([format, kernel]) => (
-                    <tr key={format}>
-                      <td className="mono">{format}</td>
-                      <td className="r">{fixed(kernel.cpu_moe_gbs)}</td>
-                      <td className="r">{fixed(kernel.pcie_gather_gbs)}</td>
-                      <td className="r">{fixed(kernel.ratio, 2)}</td>
-                      <td>{text(kernel.recommended)}</td>
-                      <td className="mono">{text(kernel.cpu_moe_isa)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <BandwidthChart formats={formats} />
             {Object.entries(bench.dtype_kernels).map(([format, kernel]) =>
               kernel.cpu_moe_overlap_gbs !== null || kernel.pcie_gather_overlap_gbs !== null ? (
                 <div className="dim" key={`${format}-overlap`}>
