@@ -1223,6 +1223,21 @@ table.grid tr.row.selected td {
   color: var(--good);
 }
 
+/*
+ * The Serve knob list. The label keeps its natural width — it is a knob name, not a
+ * column of values, so there is no reason to stretch it — and the control takes the
+ * room the row gives it. A model path or a page count is fully visible rather than
+ * cramped into a fixed 18ch sliver with half the row as dead space.
+ */
+.knobs-list li.row .row-main .grow {
+  flex: 0 1 auto;
+}
+.knobs-list li.row .row-main .knob-input {
+  flex: 1 1 160px;
+  min-width: 130px;
+  max-width: 320px;
+}
+
 .tag {
   display: inline-block;
   padding: 0 5px;

@@ -258,7 +258,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
         value={draft ?? stored ?? ""}
         placeholder={knob.default}
         aria-label={knob.label}
-        className={knobErrors[knob.key] ? "error" : ""}
+        className={knobErrors[knob.key] ? "error knob-input" : "knob-input"}
         onChange={(e) => setDrafts((prev) => ({ ...prev, [knob.key]: e.target.value }))}
         onBlur={(e) => {
           if (draft !== undefined && draft !== (stored ?? "")) commit(knob, e.target.value);
@@ -278,7 +278,6 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
             e.currentTarget.blur();
           }
         }}
-        style={{ width: "18ch" }}
       />
     );
   };
@@ -313,7 +312,7 @@ export function Serve(props: { snapshot: Snapshot }): ReactNode {
               <p>Waiting for the knob schema.</p>
             </Empty>
           ) : (
-            <ul className="rows scroll h-560">
+            <ul className="rows scroll h-560 knobs-list">
               {knobs.map((knob) => {
                 const error = knobErrors[knob.key] ?? serverErrors.get(knob.key);
                 return (
