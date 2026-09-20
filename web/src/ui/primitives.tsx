@@ -9,7 +9,7 @@
 
 import type { ReactNode } from "react";
 import type { Severity } from "../api/types.ts";
-import { DASH } from "../format.ts";
+import { DASH, bytes } from "../format.ts";
 
 // ---------------------------------------------------------------- pane
 
@@ -187,6 +187,67 @@ export function Sparkline(props: {
     </div>
   );
 }
+
+// ---------------------------------------------------------------- cache bar
+
+/** One colored slice of a {@link CacheBar}. */
+export interface CacheBarSegment {
+  /** Legend / tooltip label. */
+  label: string;
+  /** Bytes this slice occupies. */
+  bytes: number;
+  /** Tint, mapped to a CSS variable by the segment's class. */
+  tone: Severity;
+}
+
+/**
+ * A broken bar: the named pools laid side by side, each slice proportional to its
+ * share of the bar's denominator, with a title (the resident total) and a legend.
+ *
+ * The denominator is the cache budget when known, so the slices sum to the bar when
+ * the pools exactly fill it; when there is no budget the filled total is used, so
+ * the bar always reads full and the total is the only place an overcommit shows.
+ */
+export function CacheBar(props: {
+  segments: CacheBarSegment[];
+  totalBytes: number | null;
+  budgetBytes: number | null;
+}): ReactNode {
+  const { segments, budgetBytes } = props;
+  const filled = segments.reduce((n, s) => n + s.bytes, 0);
+  const knownBudget = (budgetBytes ?? 0) > 0;
+  const denom = knownBudget ? (budgetBytes as number) : filled;
+  const over = knownBudget && filled > (budgetBytes as number);
+  const parts = segments.filter((s) => s.bytes > 0);
+  return (
+    <div className="cache">
+      <div className="cache-head">
+        <span className="cache-title">VRAM</span>
+        <span className={`cache-total ${over ? "warn" : ""}`}>
+          {bytes(filled)}{denom > 0 ? ` of ${bytes(denom)}` : ""}
+        </span>
+      </div>
+      <div className="cache-track">
+        {parts.map((s) => (
+          <div
+            key={s.label}
+            className={`cache-seg ${s.tone}`}
+            style={{ width: `${(s.bytes / denom) * 100}%` }}
+            title={`${s.label}: ${bytes(s.bytes)}`}
+          />
+        ))}
+      </div>
+      <div className="cache-legend">
+        {parts.map((s) => (
+          <span key={s.label} className="cache-legend-item">
+            <span className={`dot ${s.tone}`} aria-hidden="true" /> {s.label} · {bytes(s.bytes)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 // ---------------------------------------------------------------- misc
 

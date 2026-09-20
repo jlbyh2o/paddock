@@ -516,6 +516,157 @@ textarea {
   }
 }
 
+/*
+ * The dashboard stacks four bands: a KPI row, a hero chart, a three-column panel
+ * row, and an engine+activity row. Each band is its own grid so the bands never
+ * fight the pane grid used by every other tab.
+ */
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+/* KPI row: each cell keeps a floor and the row wraps as the window narrows. */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--gap);
+}
+
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.kpi-label {
+  color: var(--dim);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kpi-value {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tint the whole cell so a bad/warn status reads at a glance. */
+.kpi.good .kpi-value { color: var(--good); }
+.kpi.warn .kpi-value { color: var(--warn); }
+.kpi.bad .kpi-value { color: var(--bad); }
+
+/* Hero throughput chart, full width. */
+.hero {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 8px 10px 10px;
+}
+
+.hero-title {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: var(--text-md);
+  margin-bottom: 6px;
+}
+
+/* Three-panel row: GPU · cache · host. */
+.cols-three {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--gap);
+  align-items: start;
+}
+
+/* Cache broken bar: a stacked slice per pool, a total, and a legend. */
+.cache {
+  margin-bottom: 8px;
+}
+
+.cache-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: 6px;
+}
+
+.cache-title {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cache-total {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.cache-total.warn { color: var(--warn); }
+
+.cache-track {
+  display: flex;
+  align-items: center;
+  height: 14px;
+  background: var(--gauge-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  gap: 1px;
+}
+
+.cache-seg {
+  flex: none;
+  min-width: 2px;
+}
+
+.cache-seg.good { background: var(--good); }
+.cache-seg.warn { background: var(--warn); }
+.cache-seg.dim { background: var(--dim); }
+
+.cache-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  color: var(--dim);
+  font-size: var(--text-sm);
+}
+
+.cache-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* A GPU card's charts are spaced from the fields above them. */
+.gpu-card + .gpu-card { margin-top: 12px; }
+
+@media (max-width: 1100px) {
+  .kpis {
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  }
+}
+
 .pane {
   border: 1px solid var(--border);
   border-radius: var(--radius);
