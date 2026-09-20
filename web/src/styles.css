@@ -803,6 +803,46 @@ textarea {
   line-height: 1.45;
 }
 
+/*
+ * The compatibility verdict — the one line a person comes to the Hub to read.
+ * A tone dot and a colored rule on the left set it apart from the fields below so
+ * it reads as the page's headline, not one row in a table. (This also gives the
+ * bare `Dot` the styling it lacked, so the Dashboard's engine-status dot shows.)
+ */
+.dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex: none;
+  background: var(--dim);
+}
+.dot.good { background: var(--good); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+.dot.dim { background: var(--dim); }
+
+.compat-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--dim);
+  border-radius: var(--radius);
+  background: var(--panel-alt);
+}
+.compat-verdict .dot { width: 11px; height: 11px; }
+.compat-verdict.good { border-left-color: var(--good); }
+.compat-verdict.warn { border-left-color: var(--warn); }
+.compat-verdict.bad { border-left-color: var(--bad); }
+.compat-verdict.dim { border-left-color: var(--dim); }
+.compat-verdict-label {
+  font-weight: 600;
+  color: var(--fg);
+}
+
 /* ---------------------------------------------------------------- fields */
 
 .field {

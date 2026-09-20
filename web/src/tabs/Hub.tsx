@@ -15,7 +15,7 @@ import { api } from "../api/client.ts";
 import { run } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
-import { Empty, Field, Pane } from "../ui/primitives.tsx";
+import { Dot, Empty, Field, Meter, Pane } from "../ui/primitives.tsx";
 import { SearchField, useFilterField } from "../ui/SearchField.tsx";
 import { DASH, bytes, count, dateOnly, shortSha, tokens } from "../format.ts";
 
@@ -206,9 +206,10 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
           <Pane title={compatTitle}>
             {compat ? (
               <>
-                <Field label="Verdict" tone={VERDICT_TONE[compat.verdict]}>
-                  {compat.verdict_label}
-                </Field>
+                <div className={`compat-verdict ${VERDICT_TONE[compat.verdict]}`}>
+                  <Dot tone={VERDICT_TONE[compat.verdict]} />
+                  <span className="compat-verdict-label">{compat.verdict_label}</span>
+                </div>
                 <Field label="Summary">{compat.summary}</Field>
                 {compat.kv ? (
                   <Field label="KV cache">
@@ -216,12 +217,15 @@ export function Hub(props: { snapshot: Snapshot }): ReactNode {
                     {compat.kv_row_shape ? ` · ${compat.kv_row_shape}` : ""}
                   </Field>
                 ) : null}
-                {compat.max_servable_context !== null ? (
-                  <Field label="Context here">
-                    {compat.context_is_upper_bound ? "at most " : ""}
-                    {tokens(compat.max_servable_context)}
-                    {compat.context !== null ? ` of ${tokens(compat.context)} advertised` : ""}
-                  </Field>
+                {compat.max_servable_context !== null && compat.context ? (
+                  <Meter
+                    label="Servable context"
+                    ratio={compat.max_servable_context / compat.context}
+                    figure={
+                      `${compat.context_is_upper_bound ? "at most " : ""}${tokens(compat.max_servable_context)} of ${tokens(compat.context)} advertised`
+                    }
+                    tone={VERDICT_TONE[compat.verdict]}
+                  />
                 ) : null}
                 {compat.notes.length === 0 ? (
                   <p className="dim">nothing known stands in the way</p>
