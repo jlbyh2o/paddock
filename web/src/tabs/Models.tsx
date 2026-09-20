@@ -13,7 +13,7 @@ import { api } from "../api/client.ts";
 import { run } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
-import { Bullets, Empty, Field, Pane } from "../ui/primitives.tsx";
+import { Bullets, Empty, Field, Meter, Pane } from "../ui/primitives.tsx";
 import { SearchField, useFilterField } from "../ui/SearchField.tsx";
 import { SamplingEditor } from "./SamplingEditor.tsx";
 import { DASH, bytes, count, text, timestampMs, tokens } from "../format.ts";
@@ -77,6 +77,9 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
   );
 
   const total = s.models.items.length;
+  // The largest advertised context in the library — the denominator each model's
+  // context bar is drawn against, so it reads as a share rather than a bare number.
+  const maxContext = Math.max(1, ...s.models.items.map((m) => m.max_position ?? 0));
   const title = s.models.scanning ? "Library (scanning…)" : "Library";
   const note = needle === "" ? `${count(total)}` : `${count(items.length)} of ${count(total)}`;
 
@@ -196,7 +199,13 @@ export function Models(props: { snapshot: Snapshot }): ReactNode {
             <Field label="Quant">{model.quant ? model.quant.toUpperCase() : DASH}</Field>
             <Field label="Layers">{count(model.num_layers)}</Field>
             {model.is_moe ? <Field label="Experts">{count(model.num_experts)}</Field> : null}
-            <Field label="Max position">{tokens(model.max_position)}</Field>
+            {model.max_position ? (
+              <Meter
+                label="Context"
+                ratio={model.max_position / maxContext}
+                figure={tokens(model.max_position)}
+              />
+            ) : null}
             <Field label="FTW fingerprint" mono>
               {text(model.ftw_fingerprint)}
             </Field>
