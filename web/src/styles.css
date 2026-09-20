@@ -298,6 +298,7 @@ textarea {
   cursor: pointer;
   text-align: left;
   font: inherit;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .nav-item:hover {
@@ -366,6 +367,7 @@ textarea {
   cursor: pointer;
   text-align: left;
   font: inherit;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .foot-btn:hover {
@@ -1281,6 +1283,7 @@ table.grid tr.row.selected td {
   padding: 3px 10px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .btn:hover:not(:disabled) {
