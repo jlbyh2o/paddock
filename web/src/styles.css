@@ -739,6 +739,74 @@ textarea {
   padding: 2px 0;
 }
 
+/* ---------------------------------------------------------------- charts */
+
+/*
+ * The uPlot wrapper. uPlot fills its parent, so the wrapper carries the height
+ * (Chart.tsx sets it inline) and the plot fills it; the empty shell matches so a
+ * card keeps its shape before the first sample lands.
+ */
+.chart {
+  position: relative;
+  height: 180px;
+}
+
+.chart-empty {
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: var(--text-sm);
+}
+
+/*
+ * uPlot colours its grid, axes, ticks, and cursor inline at runtime, so a plain
+ * rule cannot reach them — these carry `!important` to win over that and pull the
+ * whole chart into the current theme instead of leaving the stock slate gray.
+ * The cursor lines are `border`, not `stroke`, so they are matched separately.
+ */
+.chart .u-axis,
+.chart .u-grid,
+.chart .u-ticks {
+  stroke: var(--border) !important;
+}
+
+.chart .u-cursor-x,
+.chart .u-cursor-y {
+  border-color: var(--border) !important;
+}
+
+.chart .u-axis .u-label,
+.chart .u-ticks .u-label {
+  fill: var(--dim) !important;
+  font-size: 11px !important;
+}
+
+/*
+ * The readout: a bordered card uPlot floats at the cursor, listing each series'
+ * label and value. Restyled to the panel so it reads as paddock on light and dark
+ * alike; the value column stays tabular so the numbers never shift.
+ */
+.chart .u-legend {
+  background: var(--panel) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow) !important;
+  font-size: 11px !important;
+  color: var(--fg) !important;
+  margin: auto !important;
+}
+
+.chart .u-legend .u-label {
+  color: var(--fg) !important;
+}
+
+.chart .u-legend .u-value {
+  color: var(--fg) !important;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------------------------------------------------------------- tables */
 
 .table-wrap {

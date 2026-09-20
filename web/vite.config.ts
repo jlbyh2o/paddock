@@ -57,6 +57,9 @@ export default defineConfig(({ mode }) => {
       environment: "jsdom",
       globals: false,
       include: ["src/**/*.test.{ts,tsx}"],
+      // Run before each test file's imports, so uPlot's import-time
+      // window.matchMedia call finds a jsdom-safe implementation.
+      setupFiles: ["./test/setup.ts"],
       css: false,
       // The render tests drive the fixture rather than a daemon, exactly as
       // `VITE_MOCK=1 npm run dev` does.
