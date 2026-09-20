@@ -1120,6 +1120,41 @@ table.grid tr.row.selected td {
   color: var(--selection-fg);
 }
 
+/*
+ * The Requests tab's latency trend: a line per request, each segment colored by the
+ * status of the request it leads to (green through 2xx, amber through 4xx, red through
+ * 5xx), so an error streak or a slow-down reads at a glance above the table. It sits in
+ * the flush pane body, full width like the table beneath it.
+ */
+.trend {
+  margin: 0 0 6px;
+}
+
+.trend-empty {
+  color: var(--dim);
+  font-size: var(--text-xs);
+  padding: 8px 0;
+}
+
+.trend-chart {
+  display: block;
+  width: 100%;
+}
+
+.trend-legend {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: var(--text-xs);
+}
+
+.trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .rows {
   list-style: none;
   margin: 0;

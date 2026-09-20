@@ -31,6 +31,104 @@ function statusTone(status: number): Severity {
   return "good";
 }
 
+/** A status mapped to its palette color, so the trend line can carry status itself. */
+function toneColor(tone: Severity): string {
+  switch (tone) {
+    case "good":
+      return "var(--good)";
+    case "warn":
+      return "var(--warn)";
+    case "bad":
+      return "var(--bad)";
+    default:
+      return "var(--dim)";
+  }
+}
+
+/**
+ * A latency trend over the request ring: one point per request, joined by a segment
+ * colored by the status of the request it leads to — green through 2xx, amber through
+ * 4xx, red through 5xx — so an error streak or a slow-down reads at a glance above the
+ * table. Points are laid out evenly by ring position, scaled to the slowest request.
+ */
+function LatencyTrend(props: { items: RequestRecord[] }): ReactNode {
+  const width = 600;
+  const height = 64;
+  const pad = 6;
+  const items = props.items;
+
+  if (items.length === 0) {
+    return <div className="trend"><div className="trend-empty">… no requests yet</div></div>;
+  }
+
+  const values = items.map((r) => r.duration_ms);
+  const max = values.reduce((m, v) => (v > m ? v : m), 0);
+  if (max <= 0) {
+    return <div className="trend"><div className="trend-empty">… no latency yet</div></div>;
+  }
+
+  const n = values.length;
+  const span = n > 1 ? width - 2 * pad : 0;
+  const y = (v: number) => height - pad - (v / max) * (height - 2 * pad);
+
+  const segments: ReactNode[] = [];
+  let prev: { x: number; y: number } | null = null;
+  items.forEach((r, i) => {
+    const v = r.duration_ms;
+    const px = n === 1 ? width / 2 : pad + (i / (n - 1)) * span;
+    const py = y(v);
+    if (prev) {
+      segments.push(
+        <line
+          key={i}
+          x1={prev.x}
+          y1={prev.y}
+          x2={px}
+          y2={py}
+          stroke={toneColor(statusTone(r.status))}
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+        />,
+      );
+    }
+    prev = { x: px, y: py };
+  });
+
+  return (
+    <div className="trend">
+      <svg
+        className="trend-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        style={{ height }}
+        role="img"
+        aria-label={`Latency trend · peak ${ms(max)}`}
+      >
+        <line
+          x1={pad}
+          y1={height - pad}
+          x2={width - pad}
+          y2={height - pad}
+          stroke="var(--gauge-bg)"
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+        {segments}
+      </svg>
+      <div className="trend-legend">
+        <span className="trend-legend-item">
+          <span className="dot good" aria-hidden /> ok
+        </span>
+        <span className="trend-legend-item">
+          <span className="dot warn" aria-hidden /> 4xx
+        </span>
+        <span className="trend-legend-item">
+          <span className="dot bad" aria-hidden /> 5xx
+        </span>
+      </div>
+    </div>
+  );
+}
 export function Requests(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
   const feed = useRequestFeed(true, s.requests);
@@ -138,43 +236,46 @@ export function Requests(props: { snapshot: Snapshot }): ReactNode {
             )}
           </Empty>
         ) : (
-          <div className="table-wrap scroll h-560" ref={bodyRef}>
-            <table className="grid">
-              <thead>
-                <tr>
-                  <th>time</th>
-                  <th>method</th>
-                  <th>path</th>
-                  <th className="r">status</th>
-                  <th className="r">latency</th>
-                  <th className="r">TTFT</th>
-                  <th className="r">in</th>
-                  <th className="r">out</th>
-                </tr>
-              </thead>
-              <tbody>
-                {feed.items.map((item) => (
-                  <tr
-                    key={item.seq}
-                    className={`row ${String(item.seq) === selectedSeq ? "selected" : ""}`}
-                    onClick={() => {
-                      setFollow(false);
-                      selection.select(String(item.seq));
-                    }}
-                  >
-                    <td className="mono">{clock(item.ts)}</td>
-                    <td className="mono">{item.method}</td>
-                    <td className="mono truncate">{item.path}</td>
-                    <td className={`r ${statusTone(item.status)}`}>{item.status}</td>
-                    <td className="r">{ms(item.duration_ms)}</td>
-                    <td className="r">{ms(item.ttft_ms)}</td>
-                    <td className="r">{count(item.prompt_tokens)}</td>
-                    <td className="r">{count(item.completion_tokens)}</td>
+          <>
+            <LatencyTrend items={feed.items} />
+            <div className="table-wrap scroll h-560" ref={bodyRef}>
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th>time</th>
+                    <th>method</th>
+                    <th>path</th>
+                    <th className="r">status</th>
+                    <th className="r">latency</th>
+                    <th className="r">TTFT</th>
+                    <th className="r">in</th>
+                    <th className="r">out</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {feed.items.map((item) => (
+                    <tr
+                      key={item.seq}
+                      className={`row ${String(item.seq) === selectedSeq ? "selected" : ""}`}
+                      onClick={() => {
+                        setFollow(false);
+                        selection.select(String(item.seq));
+                      }}
+                    >
+                      <td className="mono">{clock(item.ts)}</td>
+                      <td className="mono">{item.method}</td>
+                      <td className="mono truncate">{item.path}</td>
+                      <td className={`r ${statusTone(item.status)}`}>{item.status}</td>
+                      <td className="r">{ms(item.duration_ms)}</td>
+                      <td className="r">{ms(item.ttft_ms)}</td>
+                      <td className="r">{count(item.prompt_tokens)}</td>
+                      <td className="r">{count(item.completion_tokens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Pane>
 

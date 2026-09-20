@@ -183,6 +183,32 @@ describe("the Requests detail pane", () => {
 });
 
 /**
+ * The trend sits above the ring and colors each segment by the status of the request
+ * it leads to, so a 4xx/5xx streak reads at a glance. N requests make N-1 segments.
+ */
+describe("the Requests latency trend", () => {
+  it("colors each segment by the status of the request it leads to", () => {
+    const items = [
+      record(1, "m1"),
+      { ...record(2, "m2"), status: 499 },
+      record(3, "m3"),
+    ];
+    requestFeed.store.set({ items, heldSeq: 3, dropped: 0, gapDropped: 0 });
+    const view = render(<Requests snapshot={withRequests([1, 2, 3])} />);
+
+    const trend = view.container.querySelector(".trend");
+    if (!trend) throw new Error("no latency trend");
+    // Three requests make two segments: the first leads to the 499, the second to the 200.
+    const segments = [...trend.querySelectorAll("line")].filter(
+      (l) => l.getAttribute("stroke") !== "var(--gauge-bg)",
+    );
+    expect(segments).toHaveLength(2);
+    expect(segments[0]?.getAttribute("stroke")).toBe("var(--warn)");
+    expect(segments[1]?.getAttribute("stroke")).toBe("var(--good)");
+  });
+});
+
+/**
  * B3. The filter was trimmed for the "is anything being filtered" test but *not* for
  * the match, so a trailing space turned a full library into "Nothing matches".
  */
