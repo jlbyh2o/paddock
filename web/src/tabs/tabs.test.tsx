@@ -121,10 +121,12 @@ describe("serve errors", () => {
 });
 
 describe("the chrome", () => {
-  it("renders every tab button, the status pill and the version", async () => {
+  it("renders the sidebar, the status pill and the version", async () => {
     render(<App />);
     for (const tab of TABS) {
-      expect(await screen.findByText(tab.title)).toBeTruthy();
+      // The active tab's title sits in both the header and the nav, so it can appear
+      // twice; the point is that every view is named and reachable from the sidebar.
+      expect((await screen.findAllByText(tab.title)).length).toBeGreaterThan(0);
     }
     expect((await screen.findAllByText(/serving/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(`v${fixture.version}`)).toBeTruthy();

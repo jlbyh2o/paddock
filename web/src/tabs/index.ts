@@ -1,13 +1,25 @@
 /**
- * The nine tabs, in the order the tab bar and the `1`–`9` keys use.
+ * The nine tabs, in the order the `1`–`9` keys and the sidebar use.
  *
- * `hints` is the footer line: the TUI's context-sensitive hints, kept as the same
- * words, with a visible control for each one somewhere on the tab.
+ * Each tab belongs to a `group`; the sidebar renders them under the group's header so
+ * nine reads as four. The per-tab `hints` that once fed the terminal's footer line live
+ * now in the help overlay (`ui/HelpOverlay.tsx`), so they are gone from here.
  */
 
 import { lazy } from "react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { Snapshot } from "../api/types.ts";
+import {
+  IconCache,
+  IconDashboard,
+  IconHub,
+  IconJobs,
+  IconLogs,
+  IconModels,
+  IconRequests,
+  IconServe,
+  IconTemplates,
+} from "../ui/icons.tsx";
 
 /**
  * Each tab is split out, so first paint parses the chrome and the one screen being
@@ -43,16 +55,27 @@ export type TabId =
   | "requests"
   | "logs";
 
-export interface TabHint {
-  k: string;
-  what: string;
+/** The sidebar's four sections. Order here is the order the groups appear. */
+export type TabGroup = "overview" | "library" | "serving" | "monitoring";
+
+export interface GroupDef {
+  id: TabGroup;
+  title: string;
 }
+
+export const GROUPS: GroupDef[] = [
+  { id: "overview", title: "Overview" },
+  { id: "library", title: "Library" },
+  { id: "serving", title: "Serving" },
+  { id: "monitoring", title: "Monitoring" },
+];
 
 export interface TabDef {
   id: TabId;
   title: string;
   Component: TabComponent;
-  hints: TabHint[];
+  group: TabGroup;
+  icon: () => ReactNode;
 }
 
 export const TABS: TabDef[] = [
@@ -60,111 +83,64 @@ export const TABS: TabDef[] = [
     id: "dashboard",
     title: "Dashboard",
     Component: Dashboard,
-    hints: [
-      { k: "e", what: "start" },
-      { k: "s", what: "stop" },
-      { k: "S", what: "force-stop" },
-      { k: "t", what: "smoke test" },
-      { k: "r", what: "rescan" },
-    ],
+    group: "overview",
+    icon: IconDashboard,
   },
   {
     id: "models",
     title: "Models",
     Component: Models,
-    hints: [
-      { k: "/", what: "filter" },
-      { k: "Enter", what: "use" },
-      { k: "s", what: "serve now" },
-      { k: "c", what: "convert" },
-      { k: "D", what: "delete" },
-      { k: "r", what: "rescan" },
-    ],
+    group: "library",
+    icon: IconModels,
   },
   {
     id: "hub",
     title: "Hub",
     Component: Hub,
-    hints: [
-      { k: "/", what: "search" },
-      { k: "Enter", what: "list files" },
-      { k: "Space", what: "toggle file" },
-      { k: "a / n", what: "all / none" },
-      { k: "d", what: "download" },
-      { k: "i", what: "install hf" },
-    ],
+    group: "library",
+    icon: IconHub,
   },
   {
     id: "templates",
     title: "Templates",
     Component: Templates,
-    hints: [
-      { k: "r", what: "repo" },
-      { k: "f", what: "fetch" },
-      { k: "a", what: "apply" },
-      { k: "u", what: "restore built-in" },
-      { k: "v", what: "verify" },
-      { k: "D", what: "delete" },
-    ],
+    group: "library",
+    icon: IconTemplates,
   },
   {
     id: "serve",
     title: "Serve",
     Component: Serve,
-    hints: [
-      { k: "← →", what: "group" },
-      { k: "Enter", what: "edit" },
-      { k: "Space", what: "cycle" },
-      { k: "x", what: "unset" },
-      { k: "a", what: "plan" },
-      { k: "S / P", what: "save / load profile" },
-      { k: "g", what: "start" },
-    ],
+    group: "serving",
+    icon: IconServe,
   },
   {
     id: "cache",
     title: "Cache",
     Component: Cache,
-    hints: [
-      { k: "← →", what: "±1%" },
-      { k: "⇧← →", what: "±10%" },
-      { k: "r", what: "reset pool" },
-      { k: "R", what: "reset all" },
-      { k: "a", what: "apply" },
-    ],
+    group: "serving",
+    icon: IconCache,
   },
   {
     id: "jobs",
     title: "Jobs",
     Component: Jobs,
-    hints: [
-      { k: "b", what: "run bench" },
-      { k: "x", what: "cancel" },
-      { k: "X", what: "clear finished" },
-    ],
+    group: "monitoring",
+    icon: IconJobs,
   },
   {
     id: "requests",
     title: "Requests",
     Component: Requests,
-    hints: [
-      { k: "Enter", what: "detail" },
-      { k: "f", what: "follow" },
-      { k: "p", what: "pause" },
-      { k: "c", what: "clear" },
-    ],
+    group: "monitoring",
+    icon: IconRequests,
   },
   {
     id: "logs",
     title: "Logs",
     Component: Logs,
-    hints: [
-      { k: "/", what: "filter" },
-      { k: "e", what: "errors only" },
-      { k: "w", what: "wrap" },
-      { k: "f", what: "follow" },
-      { k: "c", what: "clear" },
-    ],
+    group: "monitoring",
+    icon: IconLogs,
   },
 ];
 

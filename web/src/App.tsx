@@ -1,6 +1,8 @@
 /**
- * The chrome: tab bar, status pill, footer hints, toasts, the confirmation modal,
- * the plan overlay, the help overlay, and the connection banner.
+ * The chrome: the sidebar, the slim header with the engine status pill, toasts, the
+ * confirmation modal, the plan overlay, the help overlay, and the connection banner.
+ * The nine tabs render into the content area unchanged; only the shell around them is
+ * here, so the shell can ship on its own and each tab can be rewritten afterward.
  *
  * State arrives one way — a `Snapshot` per SSE frame — and leaves one way, as a
  * POST. There is no client-side model of the engine: the status text, the badges,
@@ -22,18 +24,32 @@ import {
   useSnapshot,
 } from "./api/store.ts";
 import { loadKnobs } from "./api/knobs.ts";
-import { TABS, tabFromHash } from "./tabs/index.ts";
-import type { TabId } from "./tabs/index.ts";
+import { GROUPS, TABS, tabFromHash } from "./tabs/index.ts";
+import type { TabDef, TabId } from "./tabs/index.ts";
+import type { Snapshot } from "./api/types.ts";
 import { ConfirmModal } from "./ui/ConfirmModal.tsx";
 import { HelpOverlay } from "./ui/HelpOverlay.tsx";
 import { Login } from "./ui/Login.tsx";
 import { PlanOverlay } from "./ui/PlanOverlay.tsx";
 import { Toasts } from "./ui/Toasts.tsx";
+import { IconChevronLeft, IconChevronRight, IconHelp, ThemeGlyph } from "./ui/icons.tsx";
 import { dispatchTabKey, isPlain, isTypingTarget } from "./ui/keys.ts";
 import { THEME_LABEL, useTheme } from "./ui/theme.ts";
 import { count } from "./format.ts";
 
 type AuthState = "checking" | "required" | "ok";
+
+/**
+ * The badge a nav item carries, when it has one: active jobs, the library size, or the
+ * stored-template count. All three are the daemon's numbers, already in the snapshot.
+ */
+function badgeFor(def: TabDef, s: Snapshot | null, activeWork: number): number | null {
+  if (!s) return null;
+  if (def.id === "jobs" && activeWork > 0) return activeWork;
+  if (def.id === "models" && s.models.items.length > 0) return s.models.items.length;
+  if (def.id === "templates" && s.templates.stored.length > 0) return s.templates.stored.length;
+  return null;
+}
 
 function useHashTab(): [TabId, (id: TabId) => void] {
   const [tab, setTab] = useState<TabId>(() => tabFromHash(window.location.hash));
@@ -60,6 +76,7 @@ export function App(): ReactNode {
   const [auth, setAuth] = useState<AuthState>("checking");
   const [tab, goTab] = useHashTab();
   const [helpOpen, setHelpOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const snapshot = useSnapshot();
   const connection = useConnection();
   const theme = useTheme();
@@ -250,86 +267,120 @@ export function App(): ReactNode {
 
   return (
     <div className="app">
-      <header className="topbar">
-        <span className="brand">paddock</span>
-        <nav className="tabs" aria-label="Views">
-          {TABS.map((def, i) => {
-            let badge: number | null = null;
-            if (snapshot) {
-              if (def.id === "jobs" && activeWork > 0) badge = activeWork;
-              if (def.id === "models" && snapshot.models.items.length > 0)
-                badge = snapshot.models.items.length;
-              if (def.id === "templates" && snapshot.templates.stored.length > 0)
-                badge = snapshot.templates.stored.length;
-            }
+      <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+        <div className="sidebar-head">
+          <span className="brand">paddock</span>
+          <button
+            type="button"
+            className="sidebar-collapse"
+            onClick={() => setCollapsed((c) => !c)}
+            aria-label={collapsed ? "Expand the menu" : "Collapse the menu"}
+            title={collapsed ? "Expand the menu" : "Collapse the menu"}
+          >
+            {collapsed ? <IconChevronRight /> : <IconChevronLeft />}
+          </button>
+        </div>
+
+        <nav className="nav" aria-label="Views">
+          {GROUPS.map((group) => {
+            const tabs = TABS.filter((def) => def.group === group.id);
+            if (tabs.length === 0) return null;
             return (
-              <button
-                key={def.id}
-                type="button"
-                className="tab"
-                aria-current={def.id === tab ? "page" : undefined}
-                onClick={() => goTab(def.id)}
-              >
-                <span className="key">{i + 1}</span>
-                <span>{def.title}</span>
-                {badge === null ? null : (
-                  <span className={`badge ${def.id === "jobs" ? "active" : ""}`}>
-                    {count(badge)}
-                  </span>
-                )}
-              </button>
+              <div className="nav-group" key={group.id}>
+                {!collapsed && <div className="nav-group-title">{group.title}</div>}
+                {tabs.map((def) => {
+                  const badge = badgeFor(def, snapshot, activeWork);
+                  const activeTab = def.id === tab;
+                  return (
+                    <button
+                      key={def.id}
+                      type="button"
+                      className={`nav-item${activeTab ? " active" : ""}`}
+                      aria-current={activeTab ? "page" : undefined}
+                      aria-label={def.title}
+                      onClick={() => goTab(def.id)}
+                      title={collapsed ? def.title : undefined}
+                    >
+                      <span className="nav-icon"><def.icon /></span>
+                      {badge !== null ? (
+                        <span className={`nav-badge${def.id === "jobs" ? "active" : ""}`}>
+                          {count(badge)}
+                        </span>
+                      ) : null}
+                      {!collapsed && <span className="nav-label">{def.title}</span>}
+                    </button>
+                  );
+                })}
+              </div>
             );
           })}
         </nav>
-        <span className="status-pill" title={engine?.command_line ?? undefined}>
-          <span className={`dot ${engine?.status_class ?? "dim"}`} />
-          <span className="truncate">
-            {engine?.status_text ?? "connecting…"} · {engine?.model ?? "no model"}
-          </span>
-        </span>
-        <button type="button" className="theme-toggle" onClick={theme.cycle}>
-          {THEME_LABEL[theme.choice]}
-        </button>
-        <button type="button" className="theme-toggle" onClick={() => setHelpOpen(true)}>
-          ? keys
-        </button>
-      </header>
 
-      {connection.everConnected && !connection.connected ? (
-        <div className="disconnected" role="alert">
-          Disconnected from paddock — retrying. The numbers below are the last state seen.
+        <div className="sidebar-foot">
+          <button
+            type="button"
+            className="foot-btn theme-toggle"
+            onClick={theme.cycle}
+            title={`Switch theme — now ${theme.choice}`}
+          >
+            <ThemeGlyph choice={theme.choice} />
+            {!collapsed && <span>{THEME_LABEL[theme.choice]}</span>}
+          </button>
+          <button
+            type="button"
+            className="foot-btn help-toggle"
+            onClick={() => setHelpOpen(true)}
+            title="Keys (?)"
+          >
+            <IconHelp />
+            {!collapsed && <span>keys</span>}
+          </button>
+          <button
+            type="button"
+            className="foot-btn collapse-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            aria-label={collapsed ? "Expand the menu" : "Collapse the menu"}
+            title={collapsed ? "Expand the menu" : "Collapse the menu"}
+          >
+            {collapsed ? <IconChevronRight /> : <IconChevronLeft />}
+          </button>
+          {snapshot?.version ? <span className="version">v{snapshot.version}</span> : null}
         </div>
-      ) : null}
-      {MOCK ? (
-        <div className="disconnected" style={{ background: "var(--warn)" }}>
-          Mock mode: this page is driven by a fixture, not by a running daemon.
-        </div>
-      ) : null}
+      </aside>
 
-      <main className="main">
-        {snapshot ? (
-          <Suspense fallback={<div className="empty">Loading {active.title}…</div>}>
-            <Body snapshot={snapshot} />
-          </Suspense>
-        ) : (
-          <div className="empty">Waiting for the first snapshot…</div>
-        )}
-      </main>
-
-      <footer className="footer">
-        <div className="hints">
-          {active.hints.map((hint) => (
-            <span className="hint" key={hint.k}>
-              <kbd>{hint.k}</kbd>
-              {hint.what}
+      <div className="app-body">
+        <header className="topbar">
+          <span className="page-title">{active.title}</span>
+          <span className="grow" />
+          <span className="status-pill" title={engine?.command_line ?? undefined}>
+            <span className={`dot ${engine?.status_class ?? "dim"}`} />
+            <span className="truncate">
+              {engine?.status_text ?? "connecting…"} · {engine?.model ?? "no model"}
             </span>
-          ))}
-          <span className="hint">
-            <kbd>?</kbd>keys
           </span>
-        </div>
-        <span className="version">{snapshot?.version ? `v${snapshot.version}` : ""}</span>
-      </footer>
+        </header>
+
+        {connection.everConnected && !connection.connected ? (
+          <div className="disconnected" role="alert">
+            Disconnected from paddock — retrying. The numbers below are the last state seen.
+          </div>
+        ) : null}
+        {MOCK ? (
+          <div className="disconnected" style={{ background: "var(--warn)" }}>
+            Mock mode: this page is driven by a fixture, not by a running daemon.
+          </div>
+        ) : null}
+
+        <main className="main">
+          {snapshot ? (
+            <Suspense fallback={<div className="empty">Loading {active.title}…</div>}>
+              <Body snapshot={snapshot} />
+            </Suspense>
+          ) : (
+            <div className="empty">Waiting for the first snapshot…</div>
+          )}
+        </main>
+      </div>
 
       <Toasts toasts={snapshot?.toasts ?? []} />
       {confirm ? <ConfirmModal confirm={confirm} onAnswer={answerConfirm} /> : null}
