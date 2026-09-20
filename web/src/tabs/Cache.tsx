@@ -15,8 +15,8 @@ import { api } from "../api/client.ts";
 import { run } from "../api/store.ts";
 import { useTabKeys } from "../ui/keys.ts";
 import { useSelection } from "../ui/useSelection.ts";
-import { Bar, Empty, Field, Meter, Pane } from "../ui/primitives.tsx";
-import { bytes, count, percent, signedBytes, signedCount } from "../format.ts";
+import { Bar, CacheBar, Empty, Field, Pane } from "../ui/primitives.tsx";
+import { bytes, count, signedBytes, signedCount } from "../format.ts";
 
 export function Cache(props: { snapshot: Snapshot }): ReactNode {
   const s = props.snapshot;
@@ -90,6 +90,13 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
 
   const title = cache.state === "rebuilding" ? "Pools (rebuilding…)" : cache.applying ? "Pools (applying…)" : "Pools";
   const disabled = cache.applying || cache.state === "rebuilding";
+
+  // The model's resident weights are the slice of the total the resizable pools do
+  // not claim; the broken bar shows them as the fixed floor under the pools.
+  const cur = cache.current_bytes;
+  const weights = cur
+    ? Math.max(0, cur.total - cur.kv - cur.moe - cur.mamba - cur.swa)
+    : 0;
 
   return (
     <div className="panes wide">
@@ -219,13 +226,19 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
       </Pane>
 
       <Pane title="VRAM budget">
-        <Field label="Current">{bytes(cache.current_bytes?.total)}</Field>
-        <div className="facts">
-          <span>KV {bytes(cache.current_bytes?.kv)}</span>
-          <span>MoE {bytes(cache.current_bytes?.moe)}</span>
-          <span>GDN {bytes(cache.current_bytes?.mamba)}</span>
-          <span>SWA {bytes(cache.current_bytes?.swa)}</span>
-        </div>
+        {cur ? (
+          <CacheBar
+            segments={[
+              { label: "weights", bytes: weights, tone: "good" },
+              { label: "KV", bytes: cur.kv, tone: "good" },
+              { label: "MoE", bytes: cur.moe, tone: "warn" },
+              { label: "GDN state", bytes: cur.mamba, tone: "warn" },
+              { label: "SWA", bytes: cur.swa, tone: "dim" },
+            ]}
+            totalBytes={cur.total}
+            budgetBytes={cache.budget_bytes ?? null}
+          />
+        ) : null}
         {cache.proposed_bytes !== null ? (
           <>
             <Field label="Proposed" tone={cache.over_budget ? "bad" : undefined}>
@@ -235,14 +248,6 @@ export function Cache(props: { snapshot: Snapshot }): ReactNode {
               <p className="bad">This exceeds the engine's cache budget and would be rejected.</p>
             ) : null}
           </>
-        ) : null}
-        {cache.budget_bytes ? (
-          <Meter
-            label="Budget"
-            ratio={cache.budget_ratio}
-            figure={`${percent(cache.budget_ratio)} of ${bytes(cache.budget_bytes)}`}
-            tone={cache.over_budget ? "bad" : undefined}
-          />
         ) : null}
         <div className="facts">
           {cache.facts.map((fact) => (
