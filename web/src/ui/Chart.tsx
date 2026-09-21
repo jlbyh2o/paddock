@@ -151,5 +151,5 @@ export function Chart(props: ChartProps): ReactNode {
     if (plot) plot.setData([x, ...yData]);
   }, [x, series]);
 
-  return <div className="chart" ref={ref} aria-label={label} style={{ height }} />;
+  return <div className="chart" ref={ref} aria-label={label} />;
 }

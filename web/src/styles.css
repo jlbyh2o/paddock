@@ -1014,7 +1014,11 @@ textarea {
  */
 .chart {
   position: relative;
-  height: 180px;
+  /*
+   * No fixed height: the plot is the uPlot option height, and the inline legend
+   * sits below it in flow. Letting the card grow keeps the legend inside the card
+   * rather than spilling past a fixed box over the fields beneath the chart.
+   */
 }
 
 .chart-empty {
