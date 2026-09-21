@@ -9,7 +9,8 @@
  * simple enough to hand-draw); this is for the charts that should be big.
  *
  * The instance is created once and its data is replaced in place on every frame —
- * recreating a canvas chart each snapshot would flicker and waste work.
+ * recreating a canvas chart each snapshot would flicker and waste work. The legend
+ * is pinned to the newest sample so it reads a value, not "--", until you hover.
  */
 
 import { useEffect, useRef } from "react";
@@ -45,7 +46,7 @@ export interface ChartProps {
   series: ChartSeries[];
   /** Formats an x tick. Defaults to the rounded value. */
   xFormat?: (value: number) => string;
-  /** Formats a y tick for a given axis. Defaults to the value as-is. */
+  /** Formats a y-axis tick for the axis it is given; omitted uses the default. */
   yFormat?: (value: number, axis: ChartAxis) => string;
 }
 
@@ -90,7 +91,7 @@ function buildOpts(
       side: 3, // left (y)
       scale: "y",
       stroke: "var(--dim)",
-      values: (_, splits) => splits.map(fmtTick),
+      values: (_, splits) => splits.map((v) => (yFormat ? yFormat(v, "left") : fmtTick(v))),
       grid: { stroke: "var(--border)", width: 1 },
     },
   ];
@@ -120,6 +121,9 @@ export function Chart(props: ChartProps): ReactNode {
   const { label, height = 180, x, series, xFormat, yFormat } = props;
   const ref = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
+  // Newest sample index, refreshed each frame so the legend can be pinned to it
+  // even after the data advances or the cursor leaves the plot.
+  const latestIdx = useRef(0);
 
   // Nothing to draw without at least one series.
   if (series.length === 0) {
@@ -131,12 +135,26 @@ export function Chart(props: ChartProps): ReactNode {
   // Create once; recreate only if the height or formatters change.
   useEffect(() => {
     const targ = ref.current!;
-    const self = new uPlot(
-      buildOpts(series, targ.clientWidth, height, xFormat, yFormat),
-      [x, ...yData],
-      targ,
-    );
+    latestIdx.current = Math.max(0, x.length - 1);
+    const opts: uPlot.Options = {
+      ...buildOpts(series, targ.clientWidth, height, xFormat, yFormat),
+      // uPlot only draws the legend values while the cursor hovers the plot, so the
+      // legend otherwise reads "--". Pin it to the newest sample so it shows a
+      // value: on the first frame, after every data swap, and whenever the cursor
+      // leaves. Hovering still overrides this, so the crosshair readout stays live.
+      hooks: {
+        setData: [(self: uPlot) => self.setLegend({ idx: latestIdx.current })],
+        setCursor: [(self: uPlot) => {
+          const left = self.cursor.left;
+          // A missing or off-plot cursor means the user is not hovering, so restore
+          // the pinned legend; a real x position means a hover, which stays.
+          if (left == null || left < 0) self.setLegend({ idx: latestIdx.current });
+        }],
+      },
+    };
+    const self = new uPlot(opts, [x, ...yData], targ);
     plotRef.current = self;
+    self.setLegend({ idx: latestIdx.current });
     return () => {
       self.destroy();
       plotRef.current = null;
@@ -148,7 +166,9 @@ export function Chart(props: ChartProps): ReactNode {
   // Replace data in place (new frame) without recreating the instance.
   useEffect(() => {
     const plot = plotRef.current;
-    if (plot) plot.setData([x, ...yData]);
+    if (!plot) return;
+    latestIdx.current = Math.max(0, x.length - 1);
+    plot.setData([x, ...yData]);
   }, [x, series]);
 
   return <div className="chart" ref={ref} aria-label={label} />;
