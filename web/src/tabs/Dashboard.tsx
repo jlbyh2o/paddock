@@ -120,6 +120,14 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
   const summary = s.environment.origin_summary;
   const gpus = hardware.gpus;
   const bench = hardware.bench_profile;
+  // `series.vram` is MiB and `gpu.memory_total` is bytes; express the series as a
+  // percentage of the card's total so utilization and VRAM share one 0–100 axis.
+  const vramPctOf = (memoryTotalBytes: number) => {
+    const totalMiB = memoryTotalBytes / (1 << 20);
+    return totalMiB > 0
+      ? series.vram.map((mib) => (mib * 100) / totalMiB)
+      : series.vram.map(() => 0);
+  };
 
   // Cache pools as a single stacked bar against the budget. Weights are the model
   // resident and are the remainder of the total after the named pools.
@@ -188,13 +196,11 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
                   label="GPU utilization"
                   height={110}
                   x={x}
-                  series={[{ label: "Util %", values: series.gpu_util, stroke: "#1e7a45", axis: "left" }]}
-                />
-                <Chart
-                  label="VRAM"
-                  height={110}
-                  x={x}
-                  series={[{ label: "VRAM", values: series.vram, stroke: "#9a6a10", axis: "left" }]}
+                  yFormat={(v) => `${Math.round(v)}%`}
+                  series={[
+                    { label: "Util %", values: series.gpu_util, stroke: "#1e7a45", axis: "left" },
+                    { label: "VRAM %", values: vramPctOf(gpu.memory_total), stroke: "#9a6a10", axis: "left" },
+                  ]}
                 />
                 <div className="facts">
                   <span>{gpu.utilization === null ? DASH : `${gpu.utilization}%`}</span>
