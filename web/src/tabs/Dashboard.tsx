@@ -145,6 +145,56 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
     { label: "SWA", bytes: pool?.swa ?? 0, tone: "dim" },
   ];
 
+  // Cache pools: one utilization meter per pool, then the VRAM breakdown below. The
+  // meters read the pool sizes the engine reports while serving — used vs total pages,
+  // slots, and experts — so they move the moment a request lands; the byte breakdown
+  // needs the per-unit costs, which the engine publishes only once it is serving.
+  const kv = telemetry.stats?.kv;
+  const mamba = telemetry.stats?.mamba;
+  const swa = telemetry.stats?.swa;
+  const moeSize = geo?.moe_cache_size ?? 0;
+  const moeTotal = telemetry.total_experts ?? 0;
+
+  const poolMeters: {
+    label: string;
+    ratio: number;
+    figure: ReactNode;
+    tone?: Severity;
+  }[] = [
+      {
+        label: "KV",
+        ratio: telemetry.kv_ratio ?? 0,
+        figure: kv && kv.total_pages > 0
+          ? `${count(telemetry.kv_used_tokens)} / ${count(telemetry.kv_total_tokens)} tok`
+          : DASH,
+        ...(kv && kv.total_pages > 0 ? {} : { tone: "dim" }),
+      },
+      {
+        label: "MoE",
+        ratio: moeTotal > 0 ? moeSize / moeTotal : 0,
+        figure: moeTotal > 0
+          ? `${count(moeSize)} / ${count(moeTotal)} exp.`
+          : DASH,
+        ...(moeTotal > 0 ? {} : { tone: "dim" }),
+      },
+      {
+        label: "GDN state",
+        ratio: telemetry.mamba_ratio ?? 0,
+        figure: mamba && mamba.total_slots > 0
+          ? `${count(mamba.used_slots)} / ${count(mamba.total_slots)} slots`
+          : DASH,
+        ...(mamba && mamba.total_slots > 0 ? {} : { tone: "dim" }),
+      },
+      {
+        label: "SWA",
+        ratio: telemetry.swa_ratio ?? 0,
+        figure: swa && swa.total_pages > 0
+          ? `${count(telemetry.swa_used_tokens)} / ${count(telemetry.swa_total_tokens)} tok`
+          : DASH,
+        ...(swa && swa.total_pages > 0 ? {} : { tone: "dim" }),
+      },
+    ];
+
   return (
     <div className="dashboard">
       {/* KPI row */}
@@ -258,15 +308,13 @@ export function Dashboard(props: { snapshot: Snapshot }): ReactNode {
             </>
           )}
         </Pane>
-
         <Pane title="Cache pools">
-          <CacheBar segments={cacheSegments} totalBytes={pool?.total ?? null} budgetBytes={budget} />
-          <div className="facts">
-            <span>KV {bytes(telemetry.pool_bytes?.kv)}</span>
-            <span>MoE {bytes(telemetry.pool_bytes?.moe)}</span>
-            <span>GDN {bytes(telemetry.pool_bytes?.mamba)}</span>
-            <span>SWA {bytes(telemetry.pool_bytes?.swa)}</span>
+          <div className="pool-meters">
+            {poolMeters.map((m) => (
+              <Meter key={m.label} label={m.label} ratio={m.ratio} figure={m.figure} tone={m.tone} />
+            ))}
           </div>
+          <CacheBar segments={cacheSegments} totalBytes={pool?.total ?? null} budgetBytes={budget} />
         </Pane>
 
         <Pane title={`Host — ${hardware.host.hostname}`} note={`up ${duration(hardware.host.uptime_s)}`}>

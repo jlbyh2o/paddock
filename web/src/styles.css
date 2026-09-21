@@ -911,6 +911,26 @@ textarea {
   align-items: center;
   padding: 2px 0;
 }
+/*
+ * The Cache pools card's four meters share one container so their bars line up.
+ * The label and figure columns are pinned to fixed widths, so the middle bar
+ * column is always the same width. The pool sizes vary far more than the labels
+ * (a "12 / 64 slots" figure versus a long "16,384 / 65,536 tok" one), so a
+ * figure column sized to its content would make each bar a different length;
+ * pinning it keeps every bar the same length regardless of the text behind it.
+ */
+.pool-meters .meter {
+  grid-template-columns: 10ch minmax(60px, 1fr) 16ch;
+}
+/*
+ * Keep the figures flush against the bar's right edge rather than pinned to the
+ * column's far edge. Pinned right, a short figure (or the idle "—") floats far
+ * from the bar while a long one sits against it; left-aligned, every figure
+ * starts at the same place beside the bar, so the row reads as one line.
+ */
+.pool-meters .meter > .figure {
+  text-align: left;
+}
 
 .meter > .label {
   color: var(--dim);
