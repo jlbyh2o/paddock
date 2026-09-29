@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 /** The token/expert/slot figures only the pool meters print — the CacheBar shows bytes. */
-const LIVE = ["16,384 / 65,536 tok", "2,403 / 6,144 experts", "12 / 64 slots", "8,192 / 32,768 tok"];
+const LIVE = ["16,384 / 65,536 tok", "2,403 / 6,144 exp.", "12 / 64 slots", "8,192 / 32,768 tok"];
 
 describe("dashboard cache pools meters", () => {
   it("renders one live meter per pool with the engine's figures", () => {
