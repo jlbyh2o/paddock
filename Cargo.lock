@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "paddock"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "axum",

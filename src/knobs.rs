@@ -145,6 +145,9 @@ pub static KNOBS: &[Knob] = &[
     knob!("model_source", "--model-source", "Download source", Group::Model,
         Kind::Choice(&["huggingface", "modelscope"]), "huggingface",
         "Where a bare repo id is fetched from when --model is not a local path."),
+    knob!("hf_overrides", "--hf-overrides", "Hugging Face config overrides", Group::Model,
+        Kind::Text, "none",
+        "JSON object applied to the checkpoint config the model is built from, as vLLM's --hf-overrides: a nested config section updates key by key, any other value is replaced whole. A YaRN rope_parameters override extends the servable context to original_max_position_embeddings * factor."),
 
     // ---- Server ----------------------------------------------------------
     knob!("host", "--host", "Bind address", Group::Server, Kind::Text, "127.0.0.1",
@@ -598,9 +601,9 @@ pub fn validate_value(k: &Knob, value: &str) -> Option<String> {
     if k.key == "quant_backend" {
         return validate_quant_backend(v);
     }
-    // FreeToken parses this one with json.loads and refuses to start on anything that is
-    // not an object, so it is worth catching here rather than in a failed launch.
-    if k.key == "mm_processor_kwargs" {
+    // FreeToken parses these with json.loads and requires an object, so catching
+    // here turns a failed launch into a red field.
+    if matches!(k.key, "mm_processor_kwargs" | "hf_overrides") {
         return match serde_json::from_str::<serde_json::Value>(v) {
             Ok(serde_json::Value::Object(_)) => None,
             Ok(_) => Some("must be a JSON object".into()),
