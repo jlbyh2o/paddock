@@ -73,7 +73,8 @@ pub struct Model {
     /// Quantization as declared by `quantization_config.quant_method`, or FTW's
     /// `quant_format`.
     pub quant: Option<String>,
-    /// `max_position_embeddings`, the ceiling on context length.
+    /// The ceiling on context length: `max_position_embeddings`, or a YaRN rope's
+    /// `original_max_position_embeddings * factor` when that is longer.
     pub max_position: Option<u64>,
     /// For an FTW directory: what it was converted from, if recorded.
     pub ftw_fingerprint: Option<String>,
@@ -530,6 +531,11 @@ struct HfConfig {
     num_hidden_layers: Option<u64>,
     #[serde(default)]
     max_position_embeddings: Option<u64>,
+    /// The rope, under its transformers 5 name and the legacy one it replaced.
+    #[serde(default)]
+    rope_parameters: Option<serde_json::Value>,
+    #[serde(default)]
+    rope_scaling: Option<serde_json::Value>,
     #[serde(default)]
     num_experts: Option<u64>,
     #[serde(default)]
@@ -573,8 +579,18 @@ impl HfConfig {
         self.num_hidden_layers.or(self.text().num_hidden_layers)
     }
 
+    /// The longest sequence FreeToken serves: `max_position_embeddings`, or a YaRN rope's
+    /// `original_max_position_embeddings * factor` when that is longer — the rows FreeToken
+    /// sizes its rope table to (`rope_table_positions`).
     fn max_position(&self) -> Option<u64> {
-        self.max_position_embeddings.or(self.text().max_position_embeddings)
+        let configured = self.max_position_embeddings.or(self.text().max_position_embeddings);
+        let pick = |c: &HfConfig| c.rope_parameters.clone().or_else(|| c.rope_scaling.clone());
+        let extended =
+            pick(self).or_else(|| pick(self.text())).and_then(|rope| yarn_positions(&rope));
+        match (configured, extended) {
+            (Some(c), Some(e)) => Some(c.max(e)),
+            (c, e) => c.or(e),
+        }
     }
 
     fn quant_method(&self) -> Option<String> {
@@ -583,13 +599,59 @@ impl HfConfig {
     }
 }
 
-fn read_config(dir: &Path) -> Option<HfConfig> {
+/// `original_max_position_embeddings * factor` for a YaRN rope, the context it extends to.
+fn yarn_positions(rope: &serde_json::Value) -> Option<u64> {
+    let kind = rope.get("rope_type").or_else(|| rope.get("type"))?.as_str()?;
+    if kind != "yarn" {
+        return None;
+    }
+    let original = rope.get("original_max_position_embeddings")?.as_f64()?;
+    let factor = rope.get("factor")?.as_f64()?;
+    Some((original * factor) as u64)
+}
+
+/// The context a serve of `dir` reaches once `--hf-overrides` is applied to its config,
+/// or `None` when the config cannot be read or the overrides are not a JSON object.
+pub fn served_context(dir: &Path, hf_overrides: &str) -> Option<u64> {
+    let serde_json::Value::Object(overrides) = serde_json::from_str(hf_overrides).ok()? else {
+        return None;
+    };
+    let mut config = read_config_json(dir)?;
+    apply_overrides(&mut config, &overrides);
+    serde_json::from_value::<HfConfig>(config).ok()?.max_position()
+}
+
+/// FreeToken's `--hf-overrides` merge, after vLLM's: a nested config section (`text_config`,
+/// `vision_config`, ...) is updated key by key, any other value — a plain dict such as
+/// `rope_parameters` included — is replaced whole.
+fn apply_overrides(
+    config: &mut serde_json::Value,
+    overrides: &serde_json::Map<String, serde_json::Value>,
+) {
+    let Some(config) = config.as_object_mut() else { return };
+    for (key, value) in overrides {
+        let section = key.ends_with("_config") && key != "quantization_config";
+        match (config.get_mut(key), value) {
+            (Some(existing @ serde_json::Value::Object(_)), serde_json::Value::Object(nested))
+                if section =>
+            {
+                apply_overrides(existing, nested)
+            }
+            _ => {
+                config.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn read_config_json(dir: &Path) -> Option<serde_json::Value> {
     // DeepSeek-V4 keeps the authoritative args in inference/config.json; the top-level
     // one is still the HF-shaped file, so prefer it and fall back.
-    let raw = std::fs::read_to_string(dir.join("config.json"))
-        .or_else(|_| std::fs::read_to_string(dir.join("inference/config.json")))
-        .ok()?;
-    serde_json::from_str(&raw).ok()
+    read_json(&dir.join("config.json")).or_else(|| read_json(&dir.join("inference/config.json")))
+}
+
+fn read_config(dir: &Path) -> Option<HfConfig> {
+    serde_json::from_value(read_config_json(dir)?).ok()
 }
 
 fn read_json(path: &Path) -> Option<serde_json::Value> {
@@ -712,6 +774,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_yarn_rope_extends_the_context_past_max_position_embeddings() {
+        let dir = tmpdir("yarn");
+        let model = dir.join("Qwen3-8B");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(
+            model.join("config.json"),
+            r#"{"architectures":["Qwen3ForCausalLM"],"max_position_embeddings":40960,
+                "rope_scaling":{"type":"yarn","factor":4.0,"original_max_position_embeddings":32768}}"#,
+        )
+        .unwrap();
+        std::fs::write(model.join("model-00001.safetensors"), vec![0u8; 16]).unwrap();
+
+        let m = inspect(&model).expect("should be recognized");
+        assert_eq!(m.max_position, Some(131072));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hf_overrides_replace_the_rope_and_merge_into_config_sections() {
+        let dir = tmpdir("overrides");
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"text_config":{"max_position_embeddings":262144,"num_hidden_layers":40,
+                "rope_parameters":{"rope_type":"default","rope_theta":1e7}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(served_context(&dir, "{}"), Some(262144));
+        let yarn = r#"{"text_config":{"rope_parameters":{"rope_type":"yarn","factor":4.0,
+            "original_max_position_embeddings":262144,"rope_theta":1e7}}}"#;
+        assert_eq!(served_context(&dir, yarn), Some(1048576));
+        // A shorter YaRN target never cuts below max_position_embeddings.
+        let short = r#"{"text_config":{"rope_parameters":{"rope_type":"yarn","factor":2.0,
+            "original_max_position_embeddings":32768}}}"#;
+        assert_eq!(served_context(&dir, short), Some(262144));
+        assert_eq!(served_context(&dir, "[1]"), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

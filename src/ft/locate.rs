@@ -115,6 +115,10 @@ fn candidate_venvs() -> Vec<PathBuf> {
     if let Ok(v) = std::env::var("VIRTUAL_ENV") {
         out.push(PathBuf::from(v));
     }
+    // install.sh records its install root in environment.d; the venv sits under it.
+    if let Ok(root) = std::env::var("FREETOKEN_HOME") {
+        out.push(PathBuf::from(root).join("venv"));
+    }
     if let Some(home) = dirs::home_dir() {
         for name in [
             ".venv",

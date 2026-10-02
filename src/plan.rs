@@ -458,7 +458,8 @@ pub struct Machine {
 #[derive(Debug, Clone, Default)]
 pub struct Target {
     pub name: String,
-    /// `max_position_embeddings`: the context the checkpoint claims.
+    /// The context the checkpoint serves: `max_position_embeddings`, or the YaRN-extended
+    /// length when the rope (or an `--hf-overrides` of it) reaches further.
     pub ceiling: Option<u64>,
     pub is_moe: bool,
     /// The expert format, as the checkpoint declares it — the key the bench profile joins on.

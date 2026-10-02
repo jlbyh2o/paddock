@@ -171,6 +171,12 @@ pub fn build(app: &App) -> Result<Plan, String> {
             .serve
             .get("max_seq_len_override")
             .and_then(|v| v.parse::<u64>().ok())
+            .or_else(|| {
+                // A YaRN rope_parameters override moves the context FreeToken serves.
+                let overrides =
+                    app.serve.get("hf_overrides").map(str::trim).filter(|o| !o.is_empty())?;
+                crate::models::served_context(std::path::Path::new(model), overrides)
+            })
             .or_else(|| library.and_then(|m| m.max_position)),
         is_moe: library.is_some_and(|m| m.num_experts.is_some_and(|n| n > 0)),
         quant: library.and_then(|m| m.quant.clone()),
