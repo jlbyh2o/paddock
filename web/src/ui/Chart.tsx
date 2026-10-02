@@ -109,8 +109,14 @@ function buildOpts(
   return {
     width,
     height,
-    series: [{}, ...yOpts],
-    scales: hasRight ? { y2: {} } : undefined,
+    // The x-series carries only the shared x values, so it draws nothing and would
+    // otherwise show a useless sample-index column in the legend. Hide it (and its
+    // legend row) with `show: false`.
+    series: [{ show: false }, ...yOpts],
+    // The x axis is a plain sample index, not a Unix timestamp, so disable uPlot's
+    // default `time` scale. Left on, it formats the index as a date (index 0 → 1969
+    // in a UTC-negative timezone) instead of a sample number.
+    scales: { x: { time: false }, ...(hasRight ? { y2: {} } : {}) },
     padding: [height * 0.08, 0, 0, 0],
     axes,
     cursor: { x: true, y: false, points: { show: false } },

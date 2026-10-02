@@ -70,6 +70,25 @@ describe("Chart", () => {
     expect(legend?.textContent).toContain("prefill");
   });
 
+  it("hides the sample-index row and never shows a Unix-epoch date", () => {
+    render(<Chart label="throughput" x={xIdx} series={throughput()} />);
+    // The x axis is a plain sample index, so uPlot would otherwise render it as a
+    // legend row (the x-series). Disable that row's plot + legend with `show: false`,
+    // which marks it `.u-off` (display:none). The pinned legend still reads the newest
+    // sample for the y-series, and a time scale would instead format the index as a
+    // Unix date ("1969-12-31 …"), which is what this pins against.
+    const legend = document.querySelector(".u-legend");
+    // The y-series rows are the only visible legend rows.
+    const visible = legend!.querySelectorAll(".u-series:not(.u-off)");
+    expect(visible).toHaveLength(2);
+    expect(visible[0]!.textContent).toContain("decode");
+    expect(visible[1]!.textContent).toContain("prefill");
+    // The hidden x-series row carries the sample index, never a date.
+    const xRow = legend!.querySelector(".u-series.u-off");
+    expect(xRow?.textContent).toContain("119");
+    expect(legend!.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
   it("destroys the instance on unmount", () => {
     const { unmount } = render(<Chart label="throughput" x={xIdx} series={throughput()} />);
     expect(document.querySelector(".uplot")).toBeTruthy();
